@@ -1,0 +1,117 @@
+
+```{r}
+cambridge_shp <- st_read("E:/MIT/Redistricting Model/redist/data/cambridge.shp")
+head(cambridge_shp)
+```
+
+
+```{r}
+cambridge_shp <- st_set_crs(cambridge_shp, 26986)
+invalid_geoms <- !st_is_valid(cambridge_shp) # = 0
+
+# dist = 15 -> sum(empty_adj) = 4
+# remove precints with no neighbors
+cambridge_buffered <- st_buffer(cambridge_shp, dist = 15)
+adj_list <- redist.adjacency(cambridge_buffered)
+
+empty_adj <- sapply(adj_list, length) == 0
+cambridge_shp <- cambridge_shp[-which(empty_adj), ]
+cambridge_buffered <- st_buffer(cambridge_shp, dist = 15)
+adj_list <- redist.adjacency(cambridge_buffered)
+
+redist.plot.adj(shp = cambridge_buffered, adj = adj_list)
+
+cambridge_map <- redist_map(
+    cambridge_shp,
+    pop_tol = 0.05,
+    ndists = 13,
+    total_pop = SQFT,
+    adj = adj_list,
+    crs=26986)
+
+
+disconnected_indices <- c(12708, 12772)
+cambridge_shp_clean <- cambridge_shp[-disconnected_indices, ]
+cambridge_buffered_clean <- st_buffer(cambridge_shp_clean, dist = 15)
+adj_list_clean <- redist.adjacency(cambridge_buffered_clean)
+```
+```{r}
+cambridge_map <- redist_map(
+    cambridge_shp_clean,
+    pop_tol = 0.05,
+    ndists = 13,
+    total_pop = SQFT,
+    adj = adj_list_clean,
+    crs=26986)
+cambridge_plans = redist_smc(cambridge_map, nsims=500)
+```
+```{r}
+print(cambridge_plans)
+redist.plot.plans(cambridge_plans, draws=c("3"), shp=cambridge_map)
+```
+
+```{r}
+
+plot_cumulative_districts <- function(map_obj, plan_obj, max_districts = 3, colors = NULL) {
+  
+  # Extract the plan matrix
+  plan_matrix <- get_plans_matrix(plan_obj)
+  
+  # Set custom colors with your specified colors
+  if (is.null(colors)) {
+    colors <- c("#6D9537", "#364B7F", "#DCAD35", "#9A9BB9", "#2A4E45", "#7F4E28")
+  }
+  
+  # Plot cumulative districts
+  plots <- list()
+  
+  for(i in 1:max_districts) {
+    # Create cumulative assignment showing districts 1 through i
+    temp_assignment <- ifelse(plan_matrix[,1] <= i & plan_matrix[,1] >= 1, 
+                             plan_matrix[,1], 
+                             0)
+    
+    # Create title showing which districts are included
+    title_text <- paste0("Iteration ", i)
+    
+    # Create color mapping - white for 0 (unselected), custom colors for districts
+    color_values <- c("0" = "#9A9BB9")
+    for(j in 1:i) {
+      color_values[as.character(j)] <- colors[j]
+    }
+    
+    plots[[i]] <- redist.plot.map(map_obj,
+                                 fill = as.factor(temp_assignment),
+                                 title = title_text) +
+      ggplot2::scale_fill_manual(values = color_values, name = "District") +
+      ggplot2::theme(legend.position = "bottom")
+  }
+  
+  return(plots)
+}
+
+# Use the function with your specified colors
+custom_colors <- c("#364B7F", "#6D9537", "#364B7F")  # District 1: DCAD35, 2: black, 3: blue
+cumulative_plots <- plot_cumulative_districts(cambridge_map, cambridge_plans, 3, colors=custom_colors)
+
+cumulative_plots[[1]]
+cumulative_plots[[2]]
+cumulative_plots[[3]]
+```
+
+```{r}
+plot_blank_map_uniform <- function(map_obj, title = "Base Geography", fill_color = "#9A9BB9") {
+  # Create a uniform assignment (all precincts get the same value)
+  uniform_assignment <- rep(0, nrow(map_obj))
+  
+  redist.plot.map(map_obj,
+                  fill = uniform_assignment,
+                  title = title) +
+    ggplot2::scale_fill_gradient(low = fill_color, high = fill_color, guide = "none") +
+    ggplot2::theme(legend.position = "none")
+}
+
+# Create the blank map with uniform light gray
+blank_map_uniform <- plot_blank_map_uniform(cambridge_map, "Initial Map")
+blank_map_uniform
+```

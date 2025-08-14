@@ -1,0 +1,58 @@
+---
+title: "Zoning SMC Example"
+output: html_document
+---
+```{r}
+library(redist)
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(geomander)
+source("simulation/shapefile_utils.R")
+source("simulation/zoning_compliance_wrapper.R")
+source("R/redist_constr.R")
+source("simulation/excel_model.R")
+source("simulation/compliance_utils.R")
+```
+
+
+```{r}
+cambridge_shp <- st_read("E:/MIT/Redistricting Model/redist/data/cambridge.shp")
+cambridge_shp <- st_set_crs(cambridge_shp, 26986)
+
+cambridge_buffered <- st_buffer(cambridge_shp, dist = 15)
+adj_list <- redist.adjacency(cambridge_buffered)
+
+empty_adj <- sapply(adj_list, length) == 0
+cambridge_shp <- cambridge_shp[-which(empty_adj), ]
+cambridge_buffered <- st_buffer(cambridge_shp, dist = 15)
+adj_list <- redist.adjacency(cambridge_buffered)
+
+# cambridge_map <- redist_map(
+#     cambridge_shp,
+#     pop_tol = 0.05,
+#     ndists = 13,
+#     total_pop = SQFT,
+#     adj = adj_list)
+
+disconnected_indices <- c(12708, 12772)
+cambridge_shp_contiguous <- cambridge_shp[-disconnected_indices, ]
+cambridge_buffered_contiguous <- st_buffer(cambridge_shp_contiguous, dist = 15)
+adj_list_contiguous <- redist.adjacency(cambridge_buffered_contiguous)
+```
+
+```{r}
+cambridge_map <- redist_map(
+    cambridge_shp_contiguous,
+    pop_tol = 0.9,
+    ndists = 2,
+    total_pop = SQFT,
+    adj = adj_list_contiguous)
+
+constr <- redist_constr(cambridge_map)
+cambridge_plans <- redist_smc(cambridge_map, nsims = 50, constraints = constr)
+```
+
+```{r}
+redist.plot.plans(cambridge_plans, draws=c("7"), shp=cambridge_map)
+```
