@@ -13,9 +13,12 @@ NULL
 #' (Excel column N) that feeds into all subsequent unit capacity calculations.
 #'
 #' @param lot_area Numeric vector of total lot areas in square feet
-#' @param excluded_area Numeric vector of excluded areas in square feet (water, 
+#' @param excluded_area Numeric vector of excluded areas in square feet (water,
 #'   wetlands, etc.)
-#' @param min_lot_size Minimum allowable lot size in square feet for development
+#' @param min_lot_size Minimum allowable lot size in square feet for development.
+#'   This is a district-specific zoning parameter that should be extracted using
+#'   \code{\link{extract_zoning_parameters}} or specified manually via
+#'   \code{\link{create_zoning_parameters}}.
 #'
 #' @return Numeric vector of developable areas in square feet. Returns 0 for
 #'   lots below minimum size or where exclusions exceed total area. Returns NA
@@ -26,26 +29,39 @@ NULL
 #' - If lot_area or excluded_area is NA, return NA (preserve uncertainty)
 #' - If lot_area < min_lot_size, return 0 (undevelopable)
 #' - Otherwise, return max(0, lot_area - excluded_area)
-#' 
+#'
 #' This corresponds to Excel column N in the MBTA Communities compliance model.
 #'
+#' Note that min_lot_size varies by community and district. Use
+#' \code{extract_zoning_parameters()} to extract the correct value from Excel
+#' compliance models.
+#'
 #' @examples
+#' # Extract zoning parameters first
+#' \dontrun{
+#' params <- extract_zoning_parameters("Chelsea_Model.xlsx", district = 1)
+#' }
+#'
+#' # Or create manually
+#' params <- create_zoning_parameters(min_lot_size = 5000)
+#'
 #' # Single parcel calculation
 #' calculate_developable_area(
-#'   lot_area = 10000, 
-#'   excluded_area = 1000, 
-#'   min_lot_size = 5000
+#'   lot_area = 10000,
+#'   excluded_area = 1000,
+#'   min_lot_size = params$min_lot_size
 #' )
 #' # Returns: 9000
-#' 
+#'
 #' # Multiple parcels with missing data
 #' calculate_developable_area(
 #'   lot_area = c(10000, NA, 8000),
-#'   excluded_area = c(1000, 500, 2000), 
-#'   min_lot_size = 5000
+#'   excluded_area = c(1000, 500, 2000),
+#'   min_lot_size = params$min_lot_size
 #' )
 #' # Returns: c(9000, NA, 6000)
 #'
+#' @seealso \code{\link{extract_zoning_parameters}}, \code{\link{create_zoning_parameters}}
 #' @export
 calculate_developable_area <- function(lot_area, excluded_area, min_lot_size) {
   

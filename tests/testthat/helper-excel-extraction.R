@@ -180,12 +180,13 @@ extract_calculation_columns <- function(district_data) {
 #' Load Community Reference Data
 #'
 #' Loads cached reference data for a community and district, extracting from
-#' Excel if cache doesn't exist.
+#' Excel if cache doesn't exist. Includes both calculation columns and zoning
+#' parameters.
 #'
 #' @param community Community name (e.g., "Chelsea")
 #' @param district District number (e.g., 1)
 #' @param force_refresh Force re-extraction from Excel (default FALSE)
-#' @return list with extracted calculation columns
+#' @return list with extracted calculation columns and zoning parameters
 #' @export
 load_community_reference <- function(community, district, force_refresh = FALSE) {
   cache_file <- testthat::test_path(
@@ -219,6 +220,9 @@ load_community_reference <- function(community, district, force_refresh = FALSE)
   district_data <- read_district_data(excel_path, sheet_name)
   calc_columns <- extract_calculation_columns(district_data)
 
+  # Extract zoning parameters
+  zoning_params <- extract_zoning_parameters(excel_path, district)
+
   # Add metadata
   reference_data <- list(
     community = community,
@@ -226,7 +230,8 @@ load_community_reference <- function(community, district, force_refresh = FALSE)
     excel_file = basename(excel_path),
     extracted_date = Sys.Date(),
     n_parcels = nrow(district_data),
-    calculations = calc_columns
+    calculations = calc_columns,
+    zoning_parameters = zoning_params
   )
 
   # Save to cache
