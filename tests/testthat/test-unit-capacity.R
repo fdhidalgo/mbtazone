@@ -78,55 +78,23 @@ test_that("calculate_developable_area preserves NA values", {
   expect_equal(result, c(9000, NA_real_))
 })
 
-test_that("calculate_developable_area validates inputs correctly", {
-  # Non-numeric inputs
-  expect_error(
-    calculate_developable_area(
-      lot_area = "invalid",
-      excluded_area = 1000,
-      min_lot_size = 5000
-    ),
-    "All inputs must be numeric"
-  )
-  
-  # Negative area values
-  expect_error(
-    calculate_developable_area(
-      lot_area = c(10000, -500),
-      excluded_area = c(1000, 500),
-      min_lot_size = 5000
-    ),
-    "Area values cannot be negative"
-  )
-  
-  # Negative minimum lot size
-  expect_error(
-    calculate_developable_area(
-      lot_area = 10000,
-      excluded_area = 1000,
-      min_lot_size = -1000
-    ),
-    "min_lot_size cannot be negative"
-  )
-  
+test_that("calculate_developable_area validates critical assumptions", {
   # Vector length mismatch
   expect_error(
     calculate_developable_area(
       lot_area = c(10000, 8000),
       excluded_area = c(1000),
       min_lot_size = 5000
-    ),
-    "lot_area and excluded_area must have the same length"
+    )
   )
-  
+
   # Multiple min_lot_size values
   expect_error(
     calculate_developable_area(
       lot_area = 10000,
       excluded_area = 1000,
       min_lot_size = c(5000, 6000)
-    ),
-    "min_lot_size must be a single numeric value"
+    )
   )
 })
 
@@ -218,34 +186,4 @@ test_that("calculate_final_unit_capacity handles NA values correctly", {
     units_graduated_lots = c(4.5, NA, 3.2)
   )
   expect_equal(result, c(4, NA_real_, 3))
-})
-
-test_that("calculate_final_unit_capacity validates inputs correctly", {
-  # Non-numeric inputs
-  expect_error(
-    calculate_final_unit_capacity(
-      units_building_capacity = "invalid",
-      units_density_limits = 4.8,
-      units_lot_coverage = 6.1,
-      units_lot_area_req = 3.9,
-      units_far_limits = 4.2,
-      units_max_cap = 5.0,
-      units_graduated_lots = 4.5
-    ),
-    "All unit capacity inputs must be numeric vectors"
-  )
-  
-  # Vector length mismatch
-  expect_error(
-    calculate_final_unit_capacity(
-      units_building_capacity = c(5.2, 8.1),
-      units_density_limits = c(4.8),  # Different length
-      units_lot_coverage = c(6.1, 9.0),
-      units_lot_area_req = c(3.9, 6.8),
-      units_far_limits = c(4.2, 8.2),
-      units_max_cap = c(5.0, 8.0),
-      units_graduated_lots = c(4.5, 7.8)
-    ),
-    "All input vectors must have the same length"
-  )
 })

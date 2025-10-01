@@ -11,27 +11,17 @@
 #' @return Character path to Excel models directory
 #' @export
 get_excel_reference_path <- function() {
-  # Check environment variable first
   env_path <- Sys.getenv("MBTA_EXCEL_MODELS", unset = "")
+  path <- if (env_path != "") env_path else testthat::test_path("excel_reference")
 
-  if (env_path != "" && dir.exists(env_path)) {
-    return(env_path)
+  if (!dir.exists(path)) {
+    testthat::skip(sprintf(
+      "Excel models not found at: %s\nSet MBTA_EXCEL_MODELS or create symlink",
+      path
+    ))
   }
 
-  # Fall back to symlink in test directory
-  default_path <- testthat::test_path("excel_reference")
-
-  if (!dir.exists(default_path)) {
-    testthat::skip(
-      paste0(
-        "Excel reference models not found. ",
-        "Set MBTA_EXCEL_MODELS environment variable or create symlink at: ",
-        default_path
-      )
-    )
-  }
-
-  return(default_path)
+  path
 }
 
 #' List Available Communities in Excel Reference
@@ -57,10 +47,6 @@ list_community_excel_files <- function(community) {
   excel_path <- get_excel_reference_path()
   community_path <- file.path(excel_path, community)
 
-  if (!dir.exists(community_path)) {
-    stop(paste0("Community directory not found: ", community))
-  }
-
   files <- list.files(
     community_path,
     pattern = "\\.xlsx?$",
@@ -69,9 +55,9 @@ list_community_excel_files <- function(community) {
     ignore.case = TRUE
   )
 
-  if (length(files) == 0) {
-    stop(paste0("No Excel files found for community: ", community))
-  }
+  stopifnot(
+    "Community not found or no Excel files" = length(files) > 0
+  )
 
   files
 }
@@ -82,10 +68,6 @@ list_community_excel_files <- function(community) {
 #' @return Character vector of district sheet names (e.g., "District 1", "District 2")
 #' @export
 get_district_sheets <- function(excel_path) {
-  if (!requireNamespace("readxl", quietly = TRUE)) {
-    stop("Package 'readxl' required for Excel extraction")
-  }
-
   all_sheets <- readxl::excel_sheets(excel_path)
 
   # Filter for District sheets
@@ -105,10 +87,6 @@ get_district_sheets <- function(excel_path) {
 #' @return data.frame with parcel data including all calculation columns
 #' @export
 read_district_data <- function(excel_path, sheet) {
-  if (!requireNamespace("readxl", quietly = TRUE)) {
-    stop("Package 'readxl' required for Excel extraction")
-  }
-
   # Read data starting at row 19 (skip 18 header rows)
   data <- readxl::read_excel(
     excel_path,

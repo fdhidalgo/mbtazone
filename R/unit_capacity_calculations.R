@@ -64,39 +64,21 @@ NULL
 #' @seealso \code{\link{extract_zoning_parameters}}, \code{\link{create_zoning_parameters}}
 #' @export
 calculate_developable_area <- function(lot_area, excluded_area, min_lot_size) {
-  
-  # Input validation
-  if (!is.numeric(lot_area) || !is.numeric(excluded_area) || !is.numeric(min_lot_size)) {
-    stop("All inputs must be numeric")
-  }
-  
-  if (length(min_lot_size) != 1) {
-    stop("min_lot_size must be a single numeric value")
-  }
-  
-  if (length(lot_area) != length(excluded_area)) {
-    stop("lot_area and excluded_area must have the same length")
-  }
-  
-  if (any(lot_area < 0, na.rm = TRUE) || any(excluded_area < 0, na.rm = TRUE)) {
-    stop("Area values cannot be negative")
-  }
-  
-  if (min_lot_size < 0) {
-    stop("min_lot_size cannot be negative")
-  }
-  
-  # Calculate developable area, preserving NA values
-  developable_area <- ifelse(
-    is.na(lot_area) | is.na(excluded_area),
-    NA_real_,
-    ifelse(
-      lot_area < min_lot_size,
-      0,
-      ifelse((lot_area - excluded_area) < 0, 0, lot_area - excluded_area)
-    )
+
+  # Validate critical assumptions
+  stopifnot(
+    length(min_lot_size) == 1,
+    length(lot_area) == length(excluded_area)
   )
-  
+
+  # Calculate developable area using fcase for clarity
+  developable_area <- data.table::fcase(
+    is.na(lot_area) | is.na(excluded_area), NA_real_,
+    lot_area < min_lot_size, 0,
+    (lot_area - excluded_area) < 0, 0,
+    default = lot_area - excluded_area
+  )
+
   return(developable_area)
 }
 
@@ -165,28 +147,13 @@ calculate_developable_area <- function(lot_area, excluded_area, min_lot_size) {
 #' @export
 calculate_final_unit_capacity <- function(units_building_capacity,
                                         units_density_limits,
-                                        units_lot_coverage, 
+                                        units_lot_coverage,
                                         units_lot_area_req,
                                         units_far_limits,
                                         units_max_cap,
                                         units_graduated_lots) {
-  
-  # Input validation
-  all_inputs <- list(units_building_capacity, units_density_limits, units_lot_coverage,
-                    units_lot_area_req, units_far_limits, units_max_cap, units_graduated_lots)
-  
-  # Check if inputs are numeric or single NA values using purrr
-  is_valid <- purrr::map_lgl(all_inputs, ~ is.numeric(.x) || (length(.x) == 1 && is.na(.x)))
-  if (!all(is_valid)) {
-    stop("All unit capacity inputs must be numeric vectors")
-  }
-  
-  lengths <- purrr::map_int(all_inputs, length)
-  if (!all(lengths == lengths[1])) {
-    stop("All input vectors must have the same length")
-  }
-  
-  # Create data frame for minimum calculation
+
+  # Create data frame for minimum calculation (will fail naturally if lengths differ)
   unit_methods <- data.frame(
     building_capacity = units_building_capacity,
     density_limits = units_density_limits,
@@ -196,25 +163,24 @@ calculate_final_unit_capacity <- function(units_building_capacity,
     max_cap = units_max_cap,
     graduated_lots = units_graduated_lots
   )
-  
-  # Calculate minimum across all methods
-  min_values <- apply(unit_methods, 1, function(row) {
-    # If all values are NA, return NA
-    if (all(is.na(row))) {
+
+  # Calculate minimum across all methods using purrr for consistency
+  min_values <- purrr::pmap_dbl(unit_methods, function(...) {
+    values <- c(...)
+    if (all(is.na(values))) {
       return(NA_real_)
     }
-    # Otherwise, treat NA as Inf and find minimum
-    row[is.na(row)] <- Inf
-    min(row)
+    values[is.na(values)] <- Inf
+    min(values)
   })
-  
+
   # Apply final rounding rules per MBTA Communities model
   final_capacity <- data.table::fcase(
-    is.na(min_values), NA_real_,           # Preserve missing data
-    min_values < 2.5, 0,                   # Below minimum threshold
-    min_values >= 2.5 & min_values < 3, 3, # Minimum viable units
-    default = round(min_values)             # Round to nearest integer
+    is.na(min_values), NA_real_,
+    min_values < 2.5, 0,
+    min_values >= 2.5 & min_values < 3, 3,
+    default = round(min_values)
   )
-  
+
   return(final_capacity)
 }

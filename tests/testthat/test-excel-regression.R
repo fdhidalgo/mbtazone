@@ -7,14 +7,15 @@
 # missing inputs to 0. These tests filter out rows with missing input data to
 # focus on validating the calculation logic for complete data.
 
-test_that("Chelsea District 1: calculate_developable_area matches Excel", {
-  # Load cached reference data (includes zoning parameters)
-  ref_data <- readRDS(test_path("fixtures/chelsea_district1.rds"))
+# Helper function for developable area regression testing
+test_developable_area_regression <- function(community, district) {
+  ref_data <- readRDS(test_path(
+    "fixtures",
+    paste0(tolower(community), "_district", district, ".rds")
+  ))
 
   calc <- ref_data$calculations
 
-  # Run R package calculation using extracted min_lot_size from Excel
-  # Chelsea District 1: min_lot_size = 5000 sq ft (from Checklist Parameters)
   r_result <- calculate_developable_area(
     lot_area = calc$parcel_sf,
     excluded_area = calc$total_excluded_land,
@@ -25,61 +26,22 @@ test_that("Chelsea District 1: calculate_developable_area matches Excel", {
   # (Excel treats NA as 0, R preserves NA - both are valid design choices)
   complete_data <- !is.na(calc$parcel_sf) & !is.na(calc$total_excluded_land)
 
-  # Compare with Excel column "Developable Parcel sf"
-  # Use tolerance for floating point comparison
-  expect_equal(
-    r_result[complete_data],
-    calc$developable_parcel_sf[complete_data],
-    tolerance = 1,  # Within 1 sq ft due to rounding
-    info = "Chelsea District 1 developable area calculation"
-  )
-})
-
-test_that("Somerville District 1: calculate_developable_area matches Excel", {
-  # Load cached reference data (includes zoning parameters)
-  ref_data <- readRDS(test_path("fixtures/somerville_district1.rds"))
-  calc <- ref_data$calculations
-
-  # Run R package calculation using extracted min_lot_size from Excel
-  # Somerville District 1: min_lot_size = 2244 sq ft (from Checklist Parameters)
-  r_result <- calculate_developable_area(
-    lot_area = calc$parcel_sf,
-    excluded_area = calc$total_excluded_land,
-    min_lot_size = ref_data$zoning_parameters$min_lot_size
-  )
-
-  # Filter to parcels with complete input data for comparison
-  complete_data <- !is.na(calc$parcel_sf) & !is.na(calc$total_excluded_land)
-
   expect_equal(
     r_result[complete_data],
     calc$developable_parcel_sf[complete_data],
     tolerance = 1,
-    info = "Somerville District 1 developable area calculation"
+    info = paste(community, "District", district, "developable area")
   )
-})
+}
 
-test_that("Cambridge District 1: calculate_developable_area matches Excel", {
-  # Load cached reference data (includes zoning parameters)
-  ref_data <- readRDS(test_path("fixtures/cambridge_district1.rds"))
-  calc <- ref_data$calculations
-
-  # Run R package calculation using extracted min_lot_size from Excel
-  # Cambridge District 1: min_lot_size from Checklist Parameters
-  r_result <- calculate_developable_area(
-    lot_area = calc$parcel_sf,
-    excluded_area = calc$total_excluded_land,
-    min_lot_size = ref_data$zoning_parameters$min_lot_size
-  )
-
-  # Filter to parcels with complete input data for comparison
-  complete_data <- !is.na(calc$parcel_sf) & !is.na(calc$total_excluded_land)
-
-  expect_equal(
-    r_result[complete_data],
-    calc$developable_parcel_sf[complete_data],
-    tolerance = 1,
-    info = "Cambridge District 1 developable area calculation"
+test_that("calculate_developable_area matches Excel across communities", {
+  purrr::walk(
+    list(
+      list("Chelsea", 1),
+      list("Somerville", 1),
+      list("Cambridge", 1)
+    ),
+    ~ test_developable_area_regression(.x[[1]], .x[[2]])
   )
 })
 

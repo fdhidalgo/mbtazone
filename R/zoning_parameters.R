@@ -70,16 +70,8 @@ NULL
 extract_zoning_parameters <- function(excel_path, district = 1) {
 
   # Input validation
-  if (!file.exists(excel_path)) {
-    stop("Excel file not found: ", excel_path)
-  }
-
   if (!is.numeric(district) || district < 1 || district > 5) {
     stop("district must be an integer between 1 and 5")
-  }
-
-  if (!requireNamespace("readxl", quietly = TRUE)) {
-    stop("Package 'readxl' required for Excel extraction")
   }
 
   # Determine column index for district (1=col 5, 2=col 8, 3=col 11, etc.)
@@ -201,33 +193,28 @@ create_zoning_parameters <- function(
     water_included = "N") {
 
   # Validate required parameter
-  if (missing(min_lot_size) || is.na(min_lot_size)) {
-    stop("min_lot_size is required and cannot be NA")
-  }
-
-  if (!is.numeric(min_lot_size) || min_lot_size < 0) {
-    stop("min_lot_size must be a non-negative numeric value")
-  }
-
-  # Validate water_included
-  if (!is.na(water_included) && !water_included %in% c("Y", "N")) {
-    stop("water_included must be 'Y' or 'N'")
-  }
+  stopifnot(
+    !missing(min_lot_size),
+    !is.na(min_lot_size),
+    is.numeric(min_lot_size),
+    min_lot_size >= 0,
+    water_included %in% c("Y", "N")
+  )
 
   # Create parameter list
   params <- list(
-    min_lot_size = as.numeric(min_lot_size),
-    base_min_lot_size = as.numeric(base_min_lot_size),
-    additional_lot_SF = as.numeric(additional_lot_SF),
-    building_height = as.numeric(building_height),
-    FAR = as.numeric(FAR),
-    max_lot_coverage = as.numeric(max_lot_coverage),
-    min_required_open_space = as.numeric(min_required_open_space),
-    parking_spaces_per_dwelling_unit = as.numeric(parking_spaces_per_dwelling_unit),
-    lot_area_per_dwelling_unit = as.numeric(lot_area_per_dwelling_unit),
-    max_dwelling_units_per_acre = as.numeric(max_dwelling_units_per_acre),
-    max_units_per_lot = as.numeric(max_units_per_lot),
-    water_included = as.character(water_included)
+    min_lot_size = min_lot_size,
+    base_min_lot_size = base_min_lot_size,
+    additional_lot_SF = additional_lot_SF,
+    building_height = building_height,
+    FAR = FAR,
+    max_lot_coverage = max_lot_coverage,
+    min_required_open_space = min_required_open_space,
+    parking_spaces_per_dwelling_unit = parking_spaces_per_dwelling_unit,
+    lot_area_per_dwelling_unit = lot_area_per_dwelling_unit,
+    max_dwelling_units_per_acre = max_dwelling_units_per_acre,
+    max_units_per_lot = max_units_per_lot,
+    water_included = water_included
   )
 
   # Add metadata
