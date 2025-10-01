@@ -33,6 +33,28 @@ devtools::test()
 - Follow tidyverse style guide
 - Use data.table for all data manipulation
 
+### Function Naming Patterns
+- **Calculation Functions**: Use descriptive `calculate_*()` pattern instead of cryptic abbreviations
+  - ✅ `calculate_developable_area()` vs ❌ `apply_N_func()`
+  - ✅ `calculate_final_unit_capacity()` vs ❌ `apply_AF_func()`
+- **Parameter Names**: Use full descriptive names over abbreviations
+  - ✅ `lot_area, excluded_area, min_lot_size` vs ❌ `I, L, min_size`
+- **Return Values**: Use descriptive variable names in calculations
+  - ✅ `developable_area, final_capacity` vs ❌ `result, output`
+
+### Data Handling Philosophy
+- **NA Preservation**: Always preserve uncertainty rather than silent conversion
+  - ✅ Return `NA_real_` for missing input data
+  - ❌ Convert `NA` to `0` or other default values
+  - Document NA handling behavior in function documentation
+
+
+### Preferred Code Patterns
+- **Conditional Logic**: Use `data.table::fcase()` over nested `ifelse()` or `case_when()`
+- **Iteration**: Use `purrr` functions over explicit loops
+- **Vector Operations**: Leverage vectorized operations over element-wise processing
+
+
 ### Spatial Data Conventions
 - Always use EPSG:26986 (NAD83 Massachusetts State Plane) for calculations
 - Validate CRS before processing: `sf::st_crs(data)$epsg == 26986`

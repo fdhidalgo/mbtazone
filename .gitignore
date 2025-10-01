@@ -4,3 +4,13 @@
 .httr-oauth
 .DS_Store
 .quarto
+
+# Excel reference data (symlinked from Dropbox)
+tests/testthat/excel_reference
+
+# Cached test fixtures
+tests/testthat/fixtures/*.rds
+
+# Excel files (precaution)
+*.xlsx
+*.xls
