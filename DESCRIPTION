@@ -14,9 +14,14 @@ RoxygenNote: 7.3.3
 URL: https://github.com/fdhidalgo/mbtazone
 BugReports: https://github.com/fdhidalgo/mbtazone/issues
 Imports:
+    cli,
     data.table,
     purrr,
-    readxl
+    readxl,
+    rlang,
+    sf,
+    tools,
+    utils
 Suggests: 
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

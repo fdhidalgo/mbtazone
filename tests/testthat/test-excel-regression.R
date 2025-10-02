@@ -28,7 +28,6 @@ TEST_COMMUNITIES <- list(
   list("Cambridge", 1),
   list("Wellesley", 1),
   list("Newton", 1),
-  list("Fall River", 1),
   list("Lincoln", 1),
   list("Maynard", 1)
 )
