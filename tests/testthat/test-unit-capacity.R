@@ -449,3 +449,297 @@ test_that("calculate_building_floor_area works correctly", {
   result <- calculate_building_floor_area(c(4400, 0, 3520), 7)
   expect_equal(result, c(30800, 0, 24640))
 })
+
+# Tests for Column X: calculate_units_from_building_capacity()
+
+test_that("calculate_units_from_building_capacity handles normal cases correctly", {
+  # Above 3 units - should floor
+  result <- calculate_units_from_building_capacity(5200)
+  expect_equal(result, 5)
+
+  # Exactly 3 units
+  result <- calculate_units_from_building_capacity(3000)
+  expect_equal(result, 3)
+
+  # Multiple parcels
+  result <- calculate_units_from_building_capacity(c(5200, 4100, 8900))
+  expect_equal(result, c(5, 4, 8))
+})
+
+test_that("calculate_units_from_building_capacity handles threshold rules", {
+  # Below 2.5 threshold
+  result <- calculate_units_from_building_capacity(2100)
+  expect_equal(result, 0)
+
+  # At 2.5 - returns 3
+  result <- calculate_units_from_building_capacity(2500)
+  expect_equal(result, 3)
+
+  # Between 2.5 and 3
+  result <- calculate_units_from_building_capacity(2700)
+  expect_equal(result, 3)
+
+  # Just above 3
+  result <- calculate_units_from_building_capacity(3100)
+  expect_equal(result, 3)
+
+  # Zero floor area
+  result <- calculate_units_from_building_capacity(0)
+  expect_equal(result, 0)
+})
+
+test_that("calculate_units_from_building_capacity handles NA correctly", {
+  result <- calculate_units_from_building_capacity(c(5200, NA, 2100))
+  expect_equal(result, c(5, NA_real_, 0))
+})
+
+# Tests for Column Y: calculate_units_from_density_limits()
+
+test_that("calculate_units_from_density_limits works correctly", {
+  # Normal case - 10,000 sq ft with 20 units/acre
+  result <- calculate_units_from_density_limits(10000, 20)
+  expect_equal(result, (10000 / 43560) * 20, tolerance = 1e-6)
+
+  # Multiple parcels
+  result <- calculate_units_from_density_limits(c(10000, 8000, 12000), 20)
+  expect_equal(result, c((10000/43560)*20, (8000/43560)*20, (12000/43560)*20), tolerance = 1e-6)
+})
+
+test_that("calculate_units_from_density_limits handles unlimited density", {
+  # NA max_dwelling_units_per_acre means unlimited
+  result <- calculate_units_from_density_limits(10000, NA)
+  expect_equal(result, NA_real_)
+
+  # Multiple parcels with NA
+  result <- calculate_units_from_density_limits(c(10000, 8000), NA)
+  expect_equal(result, c(NA_real_, NA_real_))
+})
+
+test_that("calculate_units_from_density_limits handles NA lot_area", {
+  result <- calculate_units_from_density_limits(c(10000, NA, 8000), 20)
+  expect_equal(result[1], (10000/43560)*20, tolerance = 1e-6)
+  expect_equal(result[2], NA_real_)
+  expect_equal(result[3], (8000/43560)*20, tolerance = 1e-6)
+})
+
+# Tests for Column Z: calculate_units_from_lot_coverage()
+
+test_that("calculate_units_from_lot_coverage works correctly", {
+  # 10,000 sq ft, 70% coverage, 7 stories
+  result <- calculate_units_from_lot_coverage(10000, 0.7, 7)
+  expect_equal(result, (10000 * 0.7 * 7) / 1000)
+
+  # Multiple parcels
+  result <- calculate_units_from_lot_coverage(c(10000, 8000, 12000), 0.7, 7)
+  expect_equal(result, c(49, 39.2, 58.8))
+})
+
+test_that("calculate_units_from_lot_coverage handles no coverage limit", {
+  result <- calculate_units_from_lot_coverage(10000, NA, 7)
+  expect_equal(result, NA_real_)
+})
+
+test_that("calculate_units_from_lot_coverage handles NA lot_area", {
+  result <- calculate_units_from_lot_coverage(c(10000, NA, 8000), 0.7, 7)
+  expect_equal(result, c(49, NA_real_, 39.2))
+})
+
+# Tests for Column AA: calculate_units_from_lot_area_requirement()
+
+test_that("calculate_units_from_lot_area_requirement works correctly", {
+  # 10,000 sq ft with 2,000 sq ft per unit
+  result <- calculate_units_from_lot_area_requirement(10000, 2000)
+  expect_equal(result, 5)
+
+  # Multiple parcels
+  result <- calculate_units_from_lot_area_requirement(c(10000, 8000, 12000), 2000)
+  expect_equal(result, c(5, 4, 6))
+})
+
+test_that("calculate_units_from_lot_area_requirement handles no requirement", {
+  # NA means no lot area requirement
+  result <- calculate_units_from_lot_area_requirement(10000, NA)
+  expect_equal(result, NA_real_)
+
+  # Zero or negative also means no requirement
+  result <- calculate_units_from_lot_area_requirement(10000, 0)
+  expect_equal(result, NA_real_)
+
+  result <- calculate_units_from_lot_area_requirement(10000, -100)
+  expect_equal(result, NA_real_)
+})
+
+test_that("calculate_units_from_lot_area_requirement handles NA lot_area", {
+  result <- calculate_units_from_lot_area_requirement(c(10000, NA, 8000), 2000)
+  expect_equal(result, c(5, NA_real_, 4))
+})
+
+# Tests for Column AB: calculate_units_from_far_limits()
+
+test_that("calculate_units_from_far_limits works correctly", {
+  # 10,000 sq ft with FAR of 2.0
+  result <- calculate_units_from_far_limits(10000, 2.0)
+  expect_equal(result, 20)
+
+  # Multiple parcels
+  result <- calculate_units_from_far_limits(c(10000, 8000, 12000), 2.0)
+  expect_equal(result, c(20, 16, 24))
+})
+
+test_that("calculate_units_from_far_limits handles no FAR limit", {
+  result <- calculate_units_from_far_limits(10000, NA)
+  expect_equal(result, NA_real_)
+})
+
+test_that("calculate_units_from_far_limits handles NA lot_area", {
+  result <- calculate_units_from_far_limits(c(10000, NA, 8000), 2.0)
+  expect_equal(result, c(20, NA_real_, 16))
+})
+
+# Tests for Column AC: calculate_units_with_max_cap()
+
+test_that("calculate_units_with_max_cap applies cap correctly", {
+  # Building capacity 8, cap at 6
+  result <- calculate_units_with_max_cap(8, 6)
+  expect_equal(result, 6)
+
+  # Building capacity 5, cap at 6 (no effect)
+  result <- calculate_units_with_max_cap(5, 6)
+  expect_equal(result, 5)
+
+  # Multiple parcels
+  result <- calculate_units_with_max_cap(c(8, 5, 10), 6)
+  expect_equal(result, c(6, 5, 6))
+})
+
+test_that("calculate_units_with_max_cap handles below threshold cap", {
+  # Cap of 2 (below threshold of 3) with building capacity of 8
+  result <- calculate_units_with_max_cap(8, 2)
+  expect_equal(result, 0)
+
+  # Cap of 1 with building capacity of 5
+  result <- calculate_units_with_max_cap(5, 1)
+  expect_equal(result, 0)
+})
+
+test_that("calculate_units_with_max_cap handles no cap", {
+  # NA means no cap - should floor building capacity
+  result <- calculate_units_with_max_cap(8.7, NA)
+  expect_equal(result, 8)
+
+  result <- calculate_units_with_max_cap(c(8.7, 5.2, 3.8), NA)
+  expect_equal(result, c(8, 5, 3))
+})
+
+test_that("calculate_units_with_max_cap handles NA building capacity", {
+  result <- calculate_units_with_max_cap(c(8, NA, 5), 6)
+  expect_equal(result, c(6, NA_real_, 5))
+})
+
+# Tests for Column AD: calculate_below_minimum_lot_flag()
+
+test_that("calculate_below_minimum_lot_flag identifies parcels correctly", {
+  # Mix of below and above minimum
+  result <- calculate_below_minimum_lot_flag(c(3000, 8000, 4500), 5000)
+  expect_equal(result, c("Y", NA_character_, "Y"))
+
+  # All above minimum
+  result <- calculate_below_minimum_lot_flag(c(6000, 8000, 10000), 5000)
+  expect_equal(result, c(NA_character_, NA_character_, NA_character_))
+
+  # All below minimum
+  result <- calculate_below_minimum_lot_flag(c(3000, 4000, 2000), 5000)
+  expect_equal(result, c("Y", "Y", "Y"))
+})
+
+test_that("calculate_below_minimum_lot_flag handles zero and NA lot_area", {
+  # Zero lot area is not below minimum
+  result <- calculate_below_minimum_lot_flag(c(0, 8000), 5000)
+  expect_equal(result, c(NA_character_, NA_character_))
+
+  # NA lot area
+  result <- calculate_below_minimum_lot_flag(c(3000, NA, 8000), 5000)
+  expect_equal(result, c("Y", NA_character_, NA_character_))
+})
+
+test_that("calculate_below_minimum_lot_flag handles exactly at minimum", {
+  # Exactly at minimum is not below
+  result <- calculate_below_minimum_lot_flag(c(4999, 5000, 5001), 5000)
+  expect_equal(result, c("Y", NA_character_, NA_character_))
+})
+
+# Tests for Column AE: calculate_units_from_graduated_lots()
+
+test_that("calculate_units_from_graduated_lots calculates correctly", {
+  # 10,000 sq ft: base 5000, additional 2000 per unit
+  # (10000 - 5000) / 2000 + 1 = 2.5 + 1 = floor(2.5) + 1 = 3
+  result <- calculate_units_from_graduated_lots(10000, NA_character_, 5000, 2000)
+  expect_equal(result, 3)
+
+  # 15,000 sq ft: (15000 - 5000) / 2000 + 1 = 5 + 1 = 6
+  result <- calculate_units_from_graduated_lots(15000, NA_character_, 5000, 2000)
+  expect_equal(result, 6)
+
+  # Multiple parcels
+  result <- calculate_units_from_graduated_lots(c(10000, 15000, 8000), c(NA_character_, NA_character_, NA_character_), 5000, 2000)
+  expect_equal(result, c(3, 6, 2))
+})
+
+test_that("calculate_units_from_graduated_lots handles below minimum", {
+  # Below minimum lot size returns 0
+  result <- calculate_units_from_graduated_lots(3000, "Y", 5000, 2000)
+  expect_equal(result, 0)
+
+  # Mixed
+  result <- calculate_units_from_graduated_lots(c(3000, 10000, 4000), c("Y", NA_character_, "Y"), 5000, 2000)
+  expect_equal(result, c(0, 3, 0))
+})
+
+test_that("calculate_units_from_graduated_lots handles no graduated lot sizing", {
+  # NA additional_lot_SF means no graduated lot sizing
+  result <- calculate_units_from_graduated_lots(10000, NA_character_, 5000, NA)
+  expect_equal(result, NA_real_)
+})
+
+test_that("calculate_units_from_graduated_lots handles NA lot_area", {
+  result <- calculate_units_from_graduated_lots(c(10000, NA, 8000), c(NA_character_, NA_character_, NA_character_), 5000, 2000)
+  expect_equal(result, c(3, NA_real_, 2))
+})
+
+# Tests for Column AG: calculate_units_per_acre()
+
+test_that("calculate_units_per_acre calculates correctly", {
+  # 10,000 sq ft with 5 units
+  # (43560 / 10000) * 5 = 21.78
+  result <- calculate_units_per_acre(10000, 5)
+  expect_equal(result, (43560 / 10000) * 5, tolerance = 1e-6)
+
+  # Multiple parcels
+  result <- calculate_units_per_acre(c(10000, 8000, 12000), c(5, 4, 6))
+  expected <- c((43560/10000)*5, (43560/8000)*4, (43560/12000)*6)
+  expect_equal(result, expected, tolerance = 1e-6)
+})
+
+test_that("calculate_units_per_acre handles zero and NA lot_area", {
+  # Zero lot area
+  result <- calculate_units_per_acre(0, 5)
+  expect_equal(result, 0)
+
+  # NA lot area
+  result <- calculate_units_per_acre(c(10000, NA, 8000), c(5, 4, 3))
+  expect_equal(result[1], (43560/10000)*5, tolerance = 1e-6)
+  expect_equal(result[2], 0)
+  expect_equal(result[3], (43560/8000)*3, tolerance = 1e-6)
+})
+
+test_that("calculate_units_per_acre handles NA final_unit_capacity", {
+  result <- calculate_units_per_acre(c(10000, 8000, 12000), c(5, NA, 6))
+  expect_equal(result[1], (43560/10000)*5, tolerance = 1e-6)
+  expect_equal(result[2], NA_real_)
+  expect_equal(result[3], (43560/12000)*6, tolerance = 1e-6)
+})
+
+test_that("calculate_units_per_acre handles zero units", {
+  result <- calculate_units_per_acre(10000, 0)
+  expect_equal(result, 0)
+})

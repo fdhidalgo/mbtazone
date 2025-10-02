@@ -99,7 +99,8 @@ read_district_data <- function(excel_path, sheet) {
 #' Extract Calculation Columns from District Data
 #'
 #' Extracts the key calculation columns from district data for comparison with
-#' R package calculations.
+#' R package calculations. Automatically converts numeric columns and handles
+#' Excel special values like "N/A" and "<no limit>".
 #'
 #' @param district_data data.frame from read_district_data()
 #' @return list with named calculation vectors
@@ -133,13 +134,47 @@ extract_calculation_columns <- function(district_data) {
     du_per_ac = "DU per AC"
   )
 
+  # Columns that should always be numeric (not character or logical)
+  numeric_cols <- c(
+    "parcel_sf", "excluded_public", "excluded_nonpublic", "total_excluded_land",
+    "total_sensitive_land", "developable_parcel_sf", "override_developable_sf",
+    "developable_sf_for_unit_calc", "excluded_land_pct", "open_space_pct",
+    "open_space_removed", "parking_area_removed", "building_footprint",
+    "building_envelope", "modeled_unit_capacity", "dwelling_units_per_acre_limit",
+    "max_lot_coverage_limit", "lot_area_per_dwelling_unit_limit", "far_limit",
+    "max_units_per_lot_limit", "max_units_graduated_lots", "final_unit_capacity",
+    "du_per_ac"
+  )
+
+  # Columns that should be logical
+  logical_cols <- c("non_conforming_lot")
+
   result <- list()
 
   for (r_name in names(col_map)) {
     excel_name <- col_map[[r_name]]
 
     if (excel_name %in% names(district_data)) {
-      result[[r_name]] <- district_data[[excel_name]]
+      value <- district_data[[excel_name]]
+
+      # Convert to appropriate type
+      if (r_name %in% numeric_cols) {
+        # Convert Excel text strings to numeric NA
+        if (is.character(value)) {
+          value[value %in% c("N/A", "<no limit>", "")] <- NA
+          value <- suppressWarnings(as.numeric(value))
+        } else if (is.logical(value)) {
+          # All NA logical becomes NA numeric
+          value <- as.numeric(value)
+        }
+      } else if (r_name %in% logical_cols) {
+        # Convert to logical
+        if (is.character(value)) {
+          value <- as.logical(value)
+        }
+      }
+
+      result[[r_name]] <- value
     } else {
       warning(paste0("Column not found in Excel data: ", excel_name))
       result[[r_name]] <- NA

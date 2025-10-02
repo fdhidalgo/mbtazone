@@ -440,9 +440,16 @@ calculate_required_open_space_area <- function(lot_area,
     length(lot_area) == length(net_developable_area),
     length(lot_area) == length(override_developable_sf),
     length(open_space_requirement) == 1,
-    length(water_included) == 1,
-    water_included %in% c("Y", "N")
+    length(water_included) == 1
   )
+
+  # Treat NA water_included as "N" (water not included)
+  if (is.na(water_included)) {
+    water_included <- "N"
+  }
+
+  # Validate water_included value
+  stopifnot(water_included %in% c("Y", "N"))
 
   # Calculate required open space using Excel column T logic
   # Replicate water_included for vectorized comparison
@@ -650,4 +657,529 @@ calculate_building_floor_area <- function(building_footprint, building_height) {
   )
 
   return(building_floor_area)
+}
+
+#' Calculate Units from Building Capacity
+#'
+#' Determines the number of housing units supportable by total building floor area,
+#' using 1000 sq ft per unit as the standard. This is Excel column X.
+#'
+#' @param building_floor_area Numeric vector of building floor areas in square feet
+#'   (typically from \code{\link{calculate_building_floor_area}})
+#'
+#' @return Numeric vector of unit counts. Values are calculated as floor_area / 1000
+#'   with threshold rules applied: >3 units are floored, 2.5-3 units return 3,
+#'   <2.5 units return 0.
+#'
+#' @details
+#' The MBTA Communities model uses 1000 sq ft per unit as the standard for converting
+#' building envelope to unit capacity.
+#'
+#' Threshold rules:
+#' - Greater than 3 units: floor to nearest integer (e.g., 5.8 → 5)
+#' - Between 2.5 and 3 units: return 3 (minimum viable)
+#' - Less than 2.5 units: return 0 (below threshold)
+#'
+#' This corresponds to Excel column X.
+#'
+#' @examples
+#' # Normal case - 5.2 units
+#' calculate_units_from_building_capacity(5200)
+#' # Returns: 5
+#'
+#' # Below threshold - 2.1 units
+#' calculate_units_from_building_capacity(2100)
+#' # Returns: 0
+#'
+#' # Minimum viable - 2.7 units
+#' calculate_units_from_building_capacity(2700)
+#' # Returns: 3
+#'
+#' # Multiple parcels
+#' calculate_units_from_building_capacity(c(5200, 2100, 2700, 0))
+#' # Returns: c(5, 0, 3, 0)
+#'
+#' @seealso \code{\link{calculate_building_floor_area}}
+#' @export
+calculate_units_from_building_capacity <- function(building_floor_area) {
+
+  # Calculate units from building capacity
+  units_per_1000sf <- building_floor_area / 1000
+
+  # Apply threshold rules
+  units <- data.table::fcase(
+    is.na(units_per_1000sf), NA_real_,
+    units_per_1000sf > 3, floor(units_per_1000sf),
+    units_per_1000sf >= 2.5, 3,
+    default = 0
+  )
+
+  return(units)
+}
+
+#' Calculate Units from Density Limits
+#'
+#' Determines the maximum units allowed based on maximum dwelling units per acre
+#' zoning parameter. This is Excel column Y.
+#'
+#' @param lot_area Numeric vector of total lot areas in square feet
+#' @param max_dwelling_units_per_acre Numeric value of maximum dwelling units per
+#'   acre from zoning parameters. Single value applied to all parcels in the district.
+#'
+#' @return Numeric vector of unit counts. Returns NA when max_dwelling_units_per_acre
+#'   is NA or not specified (unlimited density).
+#'
+#' @details
+#' Formula: units = (lot_area / 43560) * max_dwelling_units_per_acre
+#'
+#' Where 43560 sq ft = 1 acre.
+#'
+#' When max_dwelling_units_per_acre is NA or empty, density is unlimited and the
+#' function returns NA (treated as Inf in final capacity calculation).
+#'
+#' This corresponds to Excel column Y.
+#'
+#' @examples
+#' # 10,000 sq ft lot with 20 units/acre max
+#' calculate_units_from_density_limits(10000, 20)
+#' # Returns: (10000 / 43560) * 20 = 4.59
+#'
+#' # Unlimited density
+#' calculate_units_from_density_limits(10000, NA)
+#' # Returns: NA
+#'
+#' # Multiple parcels
+#' calculate_units_from_density_limits(c(10000, 8000, 12000), 20)
+#' # Returns: c(4.59, 3.67, 5.50)
+#'
+#' @export
+calculate_units_from_density_limits <- function(lot_area,
+                                                max_dwelling_units_per_acre) {
+
+  # Validate inputs
+  stopifnot(
+    length(max_dwelling_units_per_acre) == 1
+  )
+
+  # Check scalar parameter first (unlimited density)
+  if (is.na(max_dwelling_units_per_acre)) {
+    return(rep(NA_real_, length(lot_area)))
+  }
+
+  # Calculate units from density limits (vectorized over lot_area)
+  units <- data.table::fcase(
+    is.na(lot_area), NA_real_,
+    default = (lot_area / 43560) * max_dwelling_units_per_acre
+  )
+
+  return(units)
+}
+
+#' Calculate Units from Lot Coverage Limits
+#'
+#' Determines the maximum units allowed based on lot coverage limits. This is
+#' Excel column Z.
+#'
+#' @param lot_area Numeric vector of total lot areas in square feet
+#' @param max_lot_coverage Numeric value of maximum lot coverage as decimal
+#'   (e.g., 0.7 for 70%) from zoning parameters
+#' @param building_height Numeric value of maximum building height in stories
+#'
+#' @return Numeric vector of unit counts. Returns NA when max_lot_coverage is NA
+#'   (no coverage limit).
+#'
+#' @details
+#' Formula: units = (lot_area * max_lot_coverage * building_height) / 1000
+#'
+#' Uses 1000 sq ft per unit standard. When max_lot_coverage is NA, there is no
+#' coverage restriction and NA is returned (treated as Inf in final capacity).
+#'
+#' This corresponds to Excel column Z.
+#'
+#' @examples
+#' # 10,000 sq ft lot, 70% coverage, 7 stories
+#' calculate_units_from_lot_coverage(10000, 0.7, 7)
+#' # Returns: (10000 * 0.7 * 7) / 1000 = 49
+#'
+#' # No coverage limit
+#' calculate_units_from_lot_coverage(10000, NA, 7)
+#' # Returns: NA
+#'
+#' @export
+calculate_units_from_lot_coverage <- function(lot_area,
+                                              max_lot_coverage,
+                                              building_height) {
+
+  # Validate inputs
+  stopifnot(
+    length(max_lot_coverage) == 1,
+    length(building_height) == 1
+  )
+
+  # Check scalar parameters first (no coverage limit)
+  if (is.na(max_lot_coverage)) {
+    return(rep(NA_real_, length(lot_area)))
+  }
+
+  # Calculate units from lot coverage (vectorized over lot_area)
+  units <- data.table::fcase(
+    is.na(lot_area), NA_real_,
+    default = (lot_area * max_lot_coverage * building_height) / 1000
+  )
+
+  return(units)
+}
+
+#' Calculate Units from Lot Area Requirements
+#'
+#' Determines the maximum units allowed based on minimum lot area per dwelling unit.
+#' This is Excel column AA.
+#'
+#' @param lot_area Numeric vector of total lot areas in square feet
+#' @param lot_area_per_dwelling_unit Numeric value of minimum lot area per dwelling
+#'   unit from zoning parameters (in square feet)
+#'
+#' @return Numeric vector of unit counts. Returns NA when lot_area_per_dwelling_unit
+#'   is NA, zero, or negative (no lot area requirement).
+#'
+#' @details
+#' Formula: units = lot_area / lot_area_per_dwelling_unit
+#'
+#' When lot_area_per_dwelling_unit is NA or <= 0, there is no lot area restriction
+#' and NA is returned (treated as Inf in final capacity calculation).
+#'
+#' This corresponds to Excel column AA.
+#'
+#' @examples
+#' # 10,000 sq ft lot requiring 2,000 sq ft per unit
+#' calculate_units_from_lot_area_requirement(10000, 2000)
+#' # Returns: 10000 / 2000 = 5
+#'
+#' # No lot area requirement
+#' calculate_units_from_lot_area_requirement(10000, NA)
+#' # Returns: NA
+#'
+#' @export
+calculate_units_from_lot_area_requirement <- function(lot_area,
+                                                      lot_area_per_dwelling_unit) {
+
+  # Validate inputs
+  stopifnot(
+    length(lot_area_per_dwelling_unit) == 1
+  )
+
+  # Check scalar parameter first (no lot area requirement)
+  if (is.na(lot_area_per_dwelling_unit) || lot_area_per_dwelling_unit <= 0) {
+    return(rep(NA_real_, length(lot_area)))
+  }
+
+  # Calculate units from lot area requirement (vectorized over lot_area)
+  units <- data.table::fcase(
+    is.na(lot_area), NA_real_,
+    default = lot_area / lot_area_per_dwelling_unit
+  )
+
+  return(units)
+}
+
+#' Calculate Units from FAR Limits
+#'
+#' Determines the maximum units allowed based on Floor Area Ratio (FAR) limits.
+#' This is Excel column AB.
+#'
+#' @param lot_area Numeric vector of total lot areas in square feet
+#' @param FAR Numeric value of maximum Floor Area Ratio from zoning parameters
+#'
+#' @return Numeric vector of unit counts. Returns NA when FAR is NA (no FAR limit).
+#'
+#' @details
+#' Formula: units = (lot_area * FAR) / 1000
+#'
+#' Uses 1000 sq ft per unit standard. FAR is the ratio of total building floor area
+#' to lot area. When FAR is NA, there is no FAR restriction and NA is returned
+#' (treated as Inf in final capacity calculation).
+#'
+#' This corresponds to Excel column AB.
+#'
+#' @examples
+#' # 10,000 sq ft lot with FAR of 2.0
+#' calculate_units_from_far_limits(10000, 2.0)
+#' # Returns: (10000 * 2.0) / 1000 = 20
+#'
+#' # No FAR limit
+#' calculate_units_from_far_limits(10000, NA)
+#' # Returns: NA
+#'
+#' @export
+calculate_units_from_far_limits <- function(lot_area, FAR) {
+
+  # Validate inputs
+  stopifnot(
+    length(FAR) == 1
+  )
+
+  # Check scalar parameter first (no FAR limit)
+  if (is.na(FAR)) {
+    return(rep(NA_real_, length(lot_area)))
+  }
+
+  # Calculate units from FAR (vectorized over lot_area)
+  units <- data.table::fcase(
+    is.na(lot_area), NA_real_,
+    default = (lot_area * FAR) / 1000
+  )
+
+  return(units)
+}
+
+#' Calculate Units with Maximum Units Per Lot Cap
+#'
+#' Applies the maximum units per lot cap to building capacity units. This is
+#' Excel column AC.
+#'
+#' @param units_building_capacity Numeric vector of units from building capacity
+#'   (from \code{\link{calculate_units_from_building_capacity}})
+#' @param max_units_per_lot Numeric value of maximum units per lot from zoning
+#'   parameters. Use NA for no cap.
+#'
+#' @return Numeric vector of adjusted unit counts floored to integers. When
+#'   max_units_per_lot is NA or not applicable, returns floored building capacity.
+#'
+#' @details
+#' Logic:
+#' - If max_units_per_lot is NA: return floor(units_building_capacity)
+#' - If max_units_per_lot >= 3 and < building capacity: return max_units_per_lot
+#' - If max_units_per_lot < 3 and < building capacity: return 0 (below threshold)
+#' - Otherwise: return floor(units_building_capacity)
+#'
+#' This corresponds to Excel column AC.
+#'
+#' @examples
+#' # Building capacity 8 units, capped at 6
+#' calculate_units_with_max_cap(8, 6)
+#' # Returns: 6
+#'
+#' # Building capacity 8 units, cap of 2 (below threshold)
+#' calculate_units_with_max_cap(8, 2)
+#' # Returns: 0
+#'
+#' # No cap
+#' calculate_units_with_max_cap(8, NA)
+#' # Returns: 8
+#'
+#' @seealso \code{\link{calculate_units_from_building_capacity}}
+#' @export
+calculate_units_with_max_cap <- function(units_building_capacity,
+                                         max_units_per_lot) {
+
+  # Validate inputs
+  stopifnot(
+    length(max_units_per_lot) == 1
+  )
+
+  # Apply max cap logic
+  if (is.na(max_units_per_lot)) {
+    return(floor(units_building_capacity))
+  }
+
+  adjusted_units <- data.table::fcase(
+    is.na(units_building_capacity), NA_real_,
+    max_units_per_lot >= 3 & max_units_per_lot < units_building_capacity,
+    max_units_per_lot,
+    max_units_per_lot < units_building_capacity & max_units_per_lot < 3,
+    0,
+    default = units_building_capacity
+  )
+
+  return(floor(adjusted_units))
+}
+
+#' Calculate Below Minimum Lot Flag
+#'
+#' Identifies parcels below minimum lot size for development. This is Excel
+#' column AD.
+#'
+#' @param lot_area Numeric vector of total lot areas in square feet
+#' @param min_lot_size Numeric value of minimum lot size from zoning parameters
+#'
+#' @return Logical vector with TRUE for parcels below minimum, NA otherwise.
+#'
+#' @details
+#' Returns TRUE when lot_area > 0 and lot_area < min_lot_size, indicating the
+#' parcel is non-conforming (below minimum lot size).
+#'
+#' This flag is used by \code{\link{calculate_units_from_graduated_lots}} to
+#' determine whether graduated lot sizing applies.
+#'
+#' This corresponds to Excel column AD.
+#'
+#' @examples
+#' # Parcel below 5000 sq ft minimum
+#' calculate_below_minimum_lot_flag(c(3000, 8000, 4500), 5000)
+#' # Returns: c(TRUE, NA, TRUE)
+#'
+#' # Zero lot area (not below minimum)
+#' calculate_below_minimum_lot_flag(c(0, 8000), 5000)
+#' # Returns: c(NA, NA)
+#'
+#' @seealso \code{\link{calculate_units_from_graduated_lots}}
+#' @export
+calculate_below_minimum_lot_flag <- function(lot_area, min_lot_size) {
+
+  # Validate inputs
+  stopifnot(
+    length(min_lot_size) == 1
+  )
+
+  # If min_lot_size is NA or 0, return all NA (no minimum lot requirement)
+  # Excel only populates this column when there's a meaningful minimum lot size
+  if (is.na(min_lot_size) || min_lot_size == 0) {
+    return(rep(NA, length(lot_area)))
+  }
+
+  # Calculate flag (NA represents empty cells in Excel)
+  flag <- data.table::fcase(
+    is.na(lot_area), NA,
+    lot_area > 0 & lot_area < min_lot_size, TRUE,
+    default = NA
+  )
+
+  return(flag)
+}
+
+#' Calculate Units from Graduated Lot Sizing
+#'
+#' Determines the maximum units allowed using graduated lot sizing (e.g., first
+#' unit requires base lot size, each additional unit requires additional area).
+#' This is Excel column AE.
+#'
+#' @param lot_area Numeric vector of total lot areas in square feet
+#' @param below_minimum_lot_flag Logical vector indicating parcels below minimum
+#'   lot size (from \code{\link{calculate_below_minimum_lot_flag}})
+#' @param base_min_lot_size Numeric value of base minimum lot size for first unit
+#' @param additional_lot_SF Numeric value of additional lot area required per
+#'   additional unit. Use NA for no graduated lot sizing.
+#'
+#' @return Numeric vector of unit counts. Returns 0 for parcels below minimum lot
+#'   size, NA when graduated lot sizing is not applicable, or calculated units
+#'   using: floor((lot_area - base_min_lot_size) / additional_lot_SF) + 1
+#'
+#' @details
+#' Logic:
+#' - If below_minimum_lot_flag == TRUE: return 0
+#' - If additional_lot_SF is NA: return NA (no graduated lot sizing)
+#' - Otherwise: return floor((lot_area - base_min_lot_size) / additional_lot_SF) + 1
+#'
+#' This corresponds to Excel column AE and represents the "graduated lot" method
+#' where the first unit requires a base lot size and each additional unit requires
+#' additional area.
+#'
+#' @examples
+#' # 10,000 sq ft lot: base 5000, additional 2000 per unit
+#' calculate_units_from_graduated_lots(
+#'   lot_area = 10000,
+#'   below_minimum_lot_flag = FALSE,
+#'   base_min_lot_size = 5000,
+#'   additional_lot_SF = 2000
+#' )
+#' # Returns: floor((10000 - 5000) / 2000) + 1 = 3
+#'
+#' # Below minimum lot size
+#' calculate_units_from_graduated_lots(
+#'   lot_area = 3000,
+#'   below_minimum_lot_flag = TRUE,
+#'   base_min_lot_size = 5000,
+#'   additional_lot_SF = 2000
+#' )
+#' # Returns: 0
+#'
+#' @seealso \code{\link{calculate_below_minimum_lot_flag}}
+#' @export
+calculate_units_from_graduated_lots <- function(lot_area,
+                                                below_minimum_lot_flag,
+                                                base_min_lot_size,
+                                                additional_lot_SF) {
+
+  # Validate inputs
+  stopifnot(
+    length(lot_area) == length(below_minimum_lot_flag),
+    length(base_min_lot_size) == 1,
+    length(additional_lot_SF) == 1
+  )
+
+  # Initialize result vector
+  units <- rep(NA_real_, length(lot_area))
+
+  # Parcels below minimum get 0 units regardless of graduated lot rules
+  # Use vectorized logical check (NA values are treated as FALSE)
+  below_min <- !is.na(below_minimum_lot_flag) & below_minimum_lot_flag == TRUE
+  units[below_min] <- 0
+
+  # For parcels not below minimum, check if graduated lot sizing exists
+  if (is.na(additional_lot_SF)) {
+    # No graduated lot rules: below-minimum get 0, others get NA (no constraint)
+    return(units)
+  }
+
+  # Calculate graduated lot units for parcels not below minimum
+  not_below_min <- !below_min & !is.na(lot_area)
+  if (any(not_below_min)) {
+    units[not_below_min] <- floor((lot_area[not_below_min] - base_min_lot_size) / additional_lot_SF) + 1
+  }
+
+  return(units)
+}
+
+#' Calculate Units Per Acre
+#'
+#' Computes the density of final unit capacity in units per acre. This is Excel
+#' column AG.
+#'
+#' @param lot_area Numeric vector of total lot areas in square feet
+#' @param final_unit_capacity Numeric vector of final unit capacities (from
+#'   \code{\link{calculate_final_unit_capacity}})
+#'
+#' @return Numeric vector of units per acre. Returns 0 when lot_area is zero, NA,
+#'   or when final_unit_capacity is NA.
+#'
+#' @details
+#' Formula: units_per_acre = (43560 / lot_area) * final_unit_capacity
+#'
+#' Where 43560 sq ft = 1 acre.
+#'
+#' This density metric is useful for compliance reporting and understanding the
+#' effective density achieved under zoning constraints.
+#'
+#' This corresponds to Excel column AG.
+#'
+#' @examples
+#' # 10,000 sq ft lot with 5 units
+#' calculate_units_per_acre(10000, 5)
+#' # Returns: (43560 / 10000) * 5 = 21.78 units/acre
+#'
+#' # Zero lot area
+#' calculate_units_per_acre(0, 5)
+#' # Returns: 0
+#'
+#' # Multiple parcels
+#' calculate_units_per_acre(c(10000, 8000, 12000), c(5, 4, 6))
+#' # Returns: c(21.78, 21.78, 21.78)
+#'
+#' @seealso \code{\link{calculate_final_unit_capacity}}
+#' @export
+calculate_units_per_acre <- function(lot_area, final_unit_capacity) {
+
+  # Validate inputs
+  stopifnot(
+    length(lot_area) == length(final_unit_capacity)
+  )
+
+  # Calculate units per acre
+  units_per_acre <- data.table::fcase(
+    is.na(lot_area) | lot_area == 0, 0,
+    is.na(final_unit_capacity), NA_real_,
+    default = (43560 / lot_area) * final_unit_capacity
+  )
+
+  return(units_per_acre)
 }
