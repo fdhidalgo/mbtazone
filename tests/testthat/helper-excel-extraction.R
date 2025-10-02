@@ -9,7 +9,6 @@
 #' first, then falling back to default symlink location.
 #'
 #' @return Character path to Excel models directory
-#' @export
 get_excel_reference_path <- function() {
   env_path <- Sys.getenv("MBTA_EXCEL_MODELS", unset = "")
   path <- if (env_path != "") env_path else testthat::test_path("excel_reference")
@@ -27,7 +26,6 @@ get_excel_reference_path <- function() {
 #' List Available Communities in Excel Reference
 #'
 #' @return Character vector of community names
-#' @export
 list_available_communities <- function() {
   excel_path <- get_excel_reference_path()
 
@@ -42,7 +40,6 @@ list_available_communities <- function() {
 #'
 #' @param community Community name (e.g., "Chelsea", "Cambridge")
 #' @return Character vector of Excel file paths
-#' @export
 list_community_excel_files <- function(community) {
   excel_path <- get_excel_reference_path()
   community_path <- file.path(excel_path, community)
@@ -66,7 +63,6 @@ list_community_excel_files <- function(community) {
 #'
 #' @param excel_path Path to Excel compliance model file
 #' @return Character vector of district sheet names (e.g., "District 1", "District 2")
-#' @export
 get_district_sheets <- function(excel_path) {
   all_sheets <- readxl::excel_sheets(excel_path)
 
@@ -85,7 +81,6 @@ get_district_sheets <- function(excel_path) {
 #' @param excel_path Path to Excel compliance model file
 #' @param sheet Sheet name (e.g., "District 1")
 #' @return data.frame with parcel data including all calculation columns
-#' @export
 read_district_data <- function(excel_path, sheet) {
   # Read data starting at row 19 (skip 18 header rows)
   data <- readxl::read_excel(
@@ -108,7 +103,6 @@ read_district_data <- function(excel_path, sheet) {
 #'
 #' @param district_data data.frame from read_district_data()
 #' @return list with named calculation vectors
-#' @export
 extract_calculation_columns <- function(district_data) {
   # Map Excel column names to R-friendly names
   col_map <- list(
@@ -165,7 +159,6 @@ extract_calculation_columns <- function(district_data) {
 #' @param district District number (e.g., 1)
 #' @param force_refresh Force re-extraction from Excel (default FALSE)
 #' @return list with extracted calculation columns and zoning parameters
-#' @export
 load_community_reference <- function(community, district, force_refresh = FALSE) {
   cache_file <- testthat::test_path(
     "fixtures",

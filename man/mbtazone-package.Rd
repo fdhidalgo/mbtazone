@@ -6,7 +6,7 @@
 \alias{mbtazone-package}
 \title{mbtazone: Implements the MBTA Communities Compliance Model in R}
 \description{
-What the package does (one paragraph).
+Implements the Massachusetts MBTA Communities Act compliance model in R, providing automated zoning compliance assessment tools. Replaces manual Excel-based workflows with robust calculation functions for housing unit capacity and interactive planning capabilities.
 }
 \seealso{
 Useful links:
@@ -17,7 +17,7 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: First Last \email{first.last@example.com}
+\strong{Maintainer}: Fernando Hidalgo \email{dhidalgo@mit.edu}
 
 }
 \keyword{internal}

@@ -115,9 +115,9 @@ calculate_developable_area <- function(lot_area, excluded_area, min_lot_size) {
 #' all methods are NA, in which case NA is returned.
 #' 
 #' Final rounding rules:
-#' - < 2.5 units → 0 (below threshold)  
-#' - 2.5 to 3.0 units → 3 (minimum viable)
-#' - > 3.0 units → rounded to nearest integer
+#' - Less than 2.5 units: return 0 (below threshold)
+#' - Between 2.5 and 3.0 units: return 3 (minimum viable)
+#' - Greater than 3.0 units: rounded to nearest integer
 #'
 #' @examples
 #' # Single parcel with all methods applicable

@@ -55,9 +55,9 @@ all methods are NA, in which case NA is returned.
 
 Final rounding rules:
 \itemize{
-\item < 2.5 units → 0 (below threshold)
-\item 2.5 to 3.0 units → 3 (minimum viable)
-\item 3.0 units → rounded to nearest integer
+\item Less than 2.5 units: return 0 (below threshold)
+\item Between 2.5 and 3.0 units: return 3 (minimum viable)
+\item Greater than 3.0 units: rounded to nearest integer
 }
 }
 \examples{

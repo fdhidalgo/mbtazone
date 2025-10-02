@@ -1,3 +1,5 @@
 ^mbta\.comply\.Rproj$
 ^\.Rproj\.user$
 ^dev$
+^LICENSE\.md$
+^tests/testthat/excel_reference$
