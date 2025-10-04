@@ -99,7 +99,7 @@ assign_parcels_to_districts <- function(municipality, districts) {
     # Find which district each parcel centroid falls within
     intersection <- sf::st_intersects(parcel_centroids, districts, sparse = TRUE)
 
-    # Extract district assignments
+    # Extract district assignments (row indices)
     district_assignment <- sapply(intersection, function(x) {
       if (length(x) == 0) return(NA_character_)
       if (length(x) > 1) {
@@ -107,6 +107,19 @@ assign_parcels_to_districts <- function(municipality, districts) {
       }
       as.character(x[1])
     })
+
+    # Try to extract district IDs if available
+    district_id_col <- NULL
+    if ("district_id" %in% names(districts)) district_id_col <- "district_id"
+    else if ("DISTRICT_ID" %in% names(districts)) district_id_col <- "DISTRICT_ID"
+    else if ("id" %in% names(districts)) district_id_col <- "id"
+    else if ("ID" %in% names(districts)) district_id_col <- "ID"
+
+    if (!is.null(district_id_col)) {
+      district_ids <- districts[[district_id_col]][as.integer(district_assignment)]
+    } else {
+      district_ids <- district_assignment  # fallback to row index
+    }
 
     # Try to extract district names if available
     district_name_col <- NULL
@@ -122,7 +135,7 @@ assign_parcels_to_districts <- function(municipality, districts) {
 
     result <- data.frame(
       LOC_ID = municipality$LOC_ID,
-      district_id = district_assignment,
+      district_id = district_ids,
       district_name = district_names,
       stringsAsFactors = FALSE
     )
@@ -975,19 +988,97 @@ evaluate_compliance <- function(municipality,
     cli::cli_abort("zoning_params must be a list")
   }
 
-  # Check if this is a single param list or multiple
-  is_multi_district <- "min_lot_size" %in% names(zoning_params)
+  # Detect if this is single district or multi-district mode
+  # Single district: zoning_params has "min_lot_size" directly in names
+  # Multi-district: zoning_params is a list of lists (nested structure)
+  is_single_district <- "min_lot_size" %in% names(zoning_params)
 
-  if (is_multi_district) {
-    # Single district - apply to all
+  if (is_single_district) {
+    # Single district mode - apply same params to all parcels
     parcels_with_capacity <- calculate_district_capacity(
       parcels = municipality,
       zoning_params = zoning_params,
       station_areas = transit_stations
     )
   } else {
-    # Multiple districts - apply appropriate params to each
-    cli::cli_abort("Multiple district support not yet implemented. Use single zoning_params list.")
+    # Multi-district mode - check structure and apply district-specific params
+
+    # Check if all elements are lists (indicating multi-district)
+    # or if any are NOT lists (indicating malformed single-district params)
+    elements_are_lists <- sapply(zoning_params, is.list)
+
+    if (!any(elements_are_lists)) {
+      # No lists at all - this is a malformed single-district param list
+      # (missing min_lot_size, so it went down the wrong path)
+      # Pass through to calculate_district_capacity which will give proper error
+      parcels_with_capacity <- calculate_district_capacity(
+        parcels = municipality,
+        zoning_params = zoning_params,
+        station_areas = transit_stations
+      )
+    } else if (!all(elements_are_lists)) {
+      # Mixed structure - definitely malformed
+      cli::cli_abort(
+        "zoning_params must be either a single parameter list or a named list of parameter lists. Found mixed types."
+      )
+    } else {
+      # All elements are lists - proceed with multi-district mode
+
+      # Validate that zoning_params has names (district IDs)
+    if (is.null(names(zoning_params)) || any(names(zoning_params) == "")) {
+      cli::cli_abort(
+        "Multi-district zoning_params must have named elements matching district IDs"
+      )
+    }
+
+    # Check that all district names in zoning_params match actual districts
+    param_districts <- names(zoning_params)
+    missing_params <- setdiff(unique_districts, param_districts)
+    extra_params <- setdiff(param_districts, unique_districts)
+
+    if (length(missing_params) > 0) {
+      cli::cli_abort(
+        "zoning_params missing for district{?s}: {.field {missing_params}}"
+      )
+    }
+
+    if (length(extra_params) > 0) {
+      cli::cli_warn(
+        "zoning_params provided for unknown district{?s}: {.field {extra_params}} (will be ignored)"
+      )
+    }
+
+    # Process each district separately
+    if (verbose) cli::cli_alert("Processing {length(unique_districts)} district{?s} with district-specific zoning parameters...")
+
+    parcels_by_district <- lapply(unique_districts, function(dist_id) {
+      # Get parcels for this district
+      district_loc_ids <- district_assignments$LOC_ID[
+        !is.na(district_assignments$district_id) &
+          district_assignments$district_id == dist_id
+      ]
+
+      district_parcels <- municipality[municipality$LOC_ID %in% district_loc_ids, ]
+
+      # Get zoning params for this district
+      dist_params <- zoning_params[[dist_id]]
+
+      # Calculate capacity for this district
+      calculate_district_capacity(
+        parcels = district_parcels,
+        zoning_params = dist_params,
+        station_areas = transit_stations
+      )
+    })
+
+    # Combine results from all districts
+    parcels_with_capacity <- do.call(rbind, parcels_by_district)
+
+    # Ensure parcels are in same order as original municipality
+    parcels_with_capacity <- parcels_with_capacity[
+      match(municipality$LOC_ID, parcels_with_capacity$LOC_ID),
+    ]
+    }
   }
 
   # Merge district assignments
