@@ -1092,6 +1092,13 @@ evaluate_compliance <- function(municipality,
   # Step 3: Calculate district-level metrics
   if (verbose) cli::cli_alert("Calculating district-level metrics...")
 
+  # Warn once if density_deductions not provided (before looping over districts)
+  if (is.null(density_deductions) && verbose) {
+    cli::cli_warn(
+      "density_deductions not provided, using total area for gross density"
+    )
+  }
+
   district_metrics_list <- lapply(unique_districts, function(dist_id) {
     district_parcels <- parcels_with_capacity[
       !is.na(parcels_with_capacity$district_id) &
@@ -1130,11 +1137,6 @@ evaluate_compliance <- function(municipality,
     } else {
       # Use total area if deductions not provided
       gross_density_denominator <- total_acres
-      if (verbose) {
-        cli::cli_warn(
-          "density_deductions not provided, using total area for gross density"
-        )
-      }
     }
 
     # Calculate gross density
