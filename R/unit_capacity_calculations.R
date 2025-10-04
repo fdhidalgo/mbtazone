@@ -74,9 +74,9 @@ calculate_developable_area <- function(lot_area, excluded_area, min_lot_size) {
   # Calculate developable area using fcase for clarity
   developable_area <- data.table::fcase(
     is.na(lot_area) | is.na(excluded_area), NA_real_,
-    lot_area < min_lot_size, 0,
-    (lot_area - excluded_area) < 0, 0,
-    default = lot_area - excluded_area
+    lot_area < min_lot_size, 0.0,
+    (lot_area - excluded_area) < 0, 0.0,
+    default = as.numeric(lot_area - excluded_area)
   )
 
   return(developable_area)
@@ -1002,10 +1002,10 @@ calculate_units_with_max_cap <- function(units_building_capacity,
 #' @param lot_area Numeric vector of total lot areas in square feet
 #' @param min_lot_size Numeric value of minimum lot size from zoning parameters
 #'
-#' @return Logical vector with TRUE for parcels below minimum, NA otherwise.
+#' @return Character vector with "Y" for parcels below minimum, NA otherwise.
 #'
 #' @details
-#' Returns TRUE when lot_area > 0 and lot_area < min_lot_size, indicating the
+#' Returns "Y" when lot_area > 0 and lot_area < min_lot_size, indicating the
 #' parcel is non-conforming (below minimum lot size).
 #'
 #' This flag is used by \code{\link{calculate_units_from_graduated_lots}} to
@@ -1016,11 +1016,11 @@ calculate_units_with_max_cap <- function(units_building_capacity,
 #' @examples
 #' # Parcel below 5000 sq ft minimum
 #' calculate_below_minimum_lot_flag(c(3000, 8000, 4500), 5000)
-#' # Returns: c(TRUE, NA, TRUE)
+#' # Returns: c("Y", NA_character_, "Y")
 #'
 #' # Zero lot area (not below minimum)
 #' calculate_below_minimum_lot_flag(c(0, 8000), 5000)
-#' # Returns: c(NA, NA)
+#' # Returns: c(NA_character_, NA_character_)
 #'
 #' @seealso \code{\link{calculate_units_from_graduated_lots}}
 #' @export
@@ -1034,14 +1034,14 @@ calculate_below_minimum_lot_flag <- function(lot_area, min_lot_size) {
   # If min_lot_size is NA or 0, return all NA (no minimum lot requirement)
   # Excel only populates this column when there's a meaningful minimum lot size
   if (is.na(min_lot_size) || min_lot_size == 0) {
-    return(rep(NA, length(lot_area)))
+    return(rep(NA_character_, length(lot_area)))
   }
 
   # Calculate flag (NA represents empty cells in Excel)
   flag <- data.table::fcase(
-    is.na(lot_area), NA,
-    lot_area > 0 & lot_area < min_lot_size, TRUE,
-    default = NA
+    is.na(lot_area), NA_character_,
+    lot_area > 0 & lot_area < min_lot_size, "Y",
+    default = NA_character_
   )
 
   return(flag)
@@ -1054,8 +1054,8 @@ calculate_below_minimum_lot_flag <- function(lot_area, min_lot_size) {
 #' This is Excel column AE.
 #'
 #' @param lot_area Numeric vector of total lot areas in square feet
-#' @param below_minimum_lot_flag Logical vector indicating parcels below minimum
-#'   lot size (from \code{\link{calculate_below_minimum_lot_flag}})
+#' @param below_minimum_lot_flag Character vector indicating parcels below minimum
+#'   lot size (from \code{\link{calculate_below_minimum_lot_flag}}). "Y" for below minimum, NA otherwise.
 #' @param base_min_lot_size Numeric value of base minimum lot size for first unit
 #' @param additional_lot_SF Numeric value of additional lot area required per
 #'   additional unit. Use NA for no graduated lot sizing.
@@ -1066,7 +1066,7 @@ calculate_below_minimum_lot_flag <- function(lot_area, min_lot_size) {
 #'
 #' @details
 #' Logic:
-#' - If below_minimum_lot_flag == TRUE: return 0
+#' - If below_minimum_lot_flag == "Y": return 0
 #' - If additional_lot_SF is NA: return NA (no graduated lot sizing)
 #' - Otherwise: return floor((lot_area - base_min_lot_size) / additional_lot_SF) + 1
 #'
@@ -1078,7 +1078,7 @@ calculate_below_minimum_lot_flag <- function(lot_area, min_lot_size) {
 #' # 10,000 sq ft lot: base 5000, additional 2000 per unit
 #' calculate_units_from_graduated_lots(
 #'   lot_area = 10000,
-#'   below_minimum_lot_flag = FALSE,
+#'   below_minimum_lot_flag = NA_character_,
 #'   base_min_lot_size = 5000,
 #'   additional_lot_SF = 2000
 #' )
@@ -1087,7 +1087,7 @@ calculate_below_minimum_lot_flag <- function(lot_area, min_lot_size) {
 #' # Below minimum lot size
 #' calculate_units_from_graduated_lots(
 #'   lot_area = 3000,
-#'   below_minimum_lot_flag = TRUE,
+#'   below_minimum_lot_flag = "Y",
 #'   base_min_lot_size = 5000,
 #'   additional_lot_SF = 2000
 #' )
@@ -1111,8 +1111,8 @@ calculate_units_from_graduated_lots <- function(lot_area,
   units <- rep(NA_real_, length(lot_area))
 
   # Parcels below minimum get 0 units regardless of graduated lot rules
-  # Use vectorized logical check (NA values are treated as FALSE)
-  below_min <- !is.na(below_minimum_lot_flag) & below_minimum_lot_flag == TRUE
+  # Check for "Y" flag (NA values are treated as FALSE)
+  below_min <- !is.na(below_minimum_lot_flag) & below_minimum_lot_flag == "Y"
   units[below_min] <- 0
 
   # For parcels not below minimum, check if graduated lot sizing exists
