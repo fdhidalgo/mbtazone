@@ -712,9 +712,9 @@ test_that("identify_excluded_land aggregates excluded land by category", {
 
   expect_type(result, "double")
   expect_named(result, c("PublicInst", "NonPubExc", "Total"))
-  expect_equal(result["PublicInst"], 8000)   # 3000 + 5000
-  expect_equal(result["NonPubExc"], 22000)   # 7000 + 15000
-  expect_equal(result["Total"], 30000)       # 10000 + 20000
+  expect_equal(result[["PublicInst"]], 8000)   # 3000 + 5000
+  expect_equal(result[["NonPubExc"]], 22000)   # 7000 + 15000
+  expect_equal(result[["Total"]], 30000)       # 10000 + 20000
 })
 
 test_that("identify_excluded_land handles NA values", {
@@ -802,7 +802,7 @@ test_that("identify_excluded_land warns when category columns missing", {
 
   # Should return total only
   expect_named(result, "Total")
-  expect_equal(result["Total"], 5000)
+  expect_equal(result[["Total"]], 5000)
 })
 
 test_that("identify_excluded_land works with data.frame (not just sf)", {

@@ -350,14 +350,15 @@ calculate_station_intersection <- function(parcels,
     )
   }
 
-  # Initialize station_area_sf column with 0 (not NA)
-  parcels$station_area_sf <- 0
-
-  # Check for empty geometries
+  # Check for empty geometries FIRST (before initializing column)
   if (nrow(parcels) == 0 || all(sf::st_is_empty(parcels))) {
     cli::cli_warn("All parcels have empty geometry, returning with station_area_sf = 0")
+    parcels$station_area_sf <- numeric(0)  # Empty numeric vector for empty data
     return(parcels)
   }
+
+  # Initialize station_area_sf column with 0 (not NA)
+  parcels$station_area_sf <- 0
 
   if (nrow(station_areas) == 0 || all(sf::st_is_empty(station_areas))) {
     cli::cli_warn("Station areas are empty, returning parcels with station_area_sf = 0")
