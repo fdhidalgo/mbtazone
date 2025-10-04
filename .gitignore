@@ -14,3 +14,6 @@ tests/testthat/fixtures/*.rds
 # Excel files (precaution)
 *.xlsx
 *.xls
+
+# Large statewide data files (>100MB - store externally)
+inst/extdata/statewide/Density_Denominator_Deductions.zip
