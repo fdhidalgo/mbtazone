@@ -49,30 +49,44 @@ evaluation. Requirements vary by community type and individual municipality.
 }
 \details{
 Requirements are community-specific and loaded from internal package data when
-both community_name and community_type are provided. If community data is not
-available, generic requirements for the community type are returned.
+both community_name and community_type are provided. The package includes
+official requirements for all 177 MBTA communities as of January 14, 2025,
+sourced from 760 CMR 72.00 regulations.
+
+If community data is not available for the specified community, generic
+requirements for the community type are returned with a warning.
 
 All communities must meet the minimum gross density requirement of 15 units per acre.
 
 Rapid transit and commuter rail communities have additional location requirements
-for transit station areas.
+for transit station areas. Both \code{station_area_unit_pct} and
+\code{station_area_land_pct} use the same percentage value from official regulations
+(760 CMR 72.00), as both unit capacity and land area must meet the threshold.
 }
 \examples{
 \dontrun{
-# Get requirements with custom values
-reqs <- get_community_requirements(
-  community_type = "rapid_transit",
-  custom_requirements = list(
-    min_units = 6240,
-    min_acres = 50
-  )
-)
-
-# Get requirements for known community
-reqs <- get_community_requirements(
+# Get requirements for Cambridge (rapid transit)
+reqs_cambridge <- get_community_requirements(
   community_name = "Cambridge",
   community_type = "rapid_transit"
 )
+# Returns: min_units = 13477, min_acres = 32,
+#          station_area_unit_pct = 90, station_area_land_pct = 90
+
+# Get requirements for Arlington (adjacent)
+reqs_arlington <- get_community_requirements(
+  community_name = "Arlington",
+  community_type = "adjacent"
+)
+# Returns: min_units = 2046, min_acres = 32
+
+# Override with custom requirements
+reqs_custom <- get_community_requirements(
+  community_name = "Cambridge",
+  community_type = "rapid_transit",
+  custom_requirements = list(min_units = 20000)
+)
+# Custom values override CSV data
 }
 
 }

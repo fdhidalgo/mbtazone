@@ -542,30 +542,44 @@ calculate_district_capacity <- function(parcels,
 #'
 #' @details
 #' Requirements are community-specific and loaded from internal package data when
-#' both community_name and community_type are provided. If community data is not
-#' available, generic requirements for the community type are returned.
+#' both community_name and community_type are provided. The package includes
+#' official requirements for all 177 MBTA communities as of January 14, 2025,
+#' sourced from 760 CMR 72.00 regulations.
+#'
+#' If community data is not available for the specified community, generic
+#' requirements for the community type are returned with a warning.
 #'
 #' All communities must meet the minimum gross density requirement of 15 units per acre.
 #'
 #' Rapid transit and commuter rail communities have additional location requirements
-#' for transit station areas.
+#' for transit station areas. Both \code{station_area_unit_pct} and
+#' \code{station_area_land_pct} use the same percentage value from official regulations
+#' (760 CMR 72.00), as both unit capacity and land area must meet the threshold.
 #'
 #' @examples
 #' \dontrun{
-#' # Get requirements with custom values
-#' reqs <- get_community_requirements(
-#'   community_type = "rapid_transit",
-#'   custom_requirements = list(
-#'     min_units = 6240,
-#'     min_acres = 50
-#'   )
-#' )
-#'
-#' # Get requirements for known community
-#' reqs <- get_community_requirements(
+#' # Get requirements for Cambridge (rapid transit)
+#' reqs_cambridge <- get_community_requirements(
 #'   community_name = "Cambridge",
 #'   community_type = "rapid_transit"
 #' )
+#' # Returns: min_units = 13477, min_acres = 32,
+#' #          station_area_unit_pct = 90, station_area_land_pct = 90
+#'
+#' # Get requirements for Arlington (adjacent)
+#' reqs_arlington <- get_community_requirements(
+#'   community_name = "Arlington",
+#'   community_type = "adjacent"
+#' )
+#' # Returns: min_units = 2046, min_acres = 32
+#'
+#' # Override with custom requirements
+#' reqs_custom <- get_community_requirements(
+#'   community_name = "Cambridge",
+#'   community_type = "rapid_transit",
+#'   custom_requirements = list(min_units = 20000)
+#' )
+#' # Custom values override CSV data
 #' }
 #'
 #' @export
@@ -625,12 +639,43 @@ get_community_requirements <- function(community_name = NULL,
 
   requirements <- default_reqs[[community_type]]
 
-  # TODO: Load from community_info.csv if community_name provided
-  # This will be implemented when package data is added
+  # Load community-specific data if community_name provided
   if (!is.null(community_name)) {
-    cli::cli_inform(
-      "Community-specific data not yet implemented. Using default requirements for {community_type}. Provide custom_requirements to override."
-    )
+    # Load community info CSV
+    csv_path <- system.file("extdata", "community_info.csv", package = "mbtazone")
+
+    if (file.exists(csv_path)) {
+      community_data <- data.table::fread(csv_path, na.strings = "")
+
+      # Look up community by name and type (case-insensitive)
+      lookup_name <- tolower(community_name)
+      lookup_type <- community_type
+      community_row <- community_data[
+        tolower(community_name) == lookup_name &
+        community_type == lookup_type
+      ]
+
+      if (nrow(community_row) == 1) {
+        # Update requirements with community-specific values
+        requirements$min_units <- community_row$min_units
+        requirements$min_acres <- community_row$min_acres
+        requirements$min_station_area_acres <- community_row$min_station_area_acres
+        requirements$station_area_unit_pct <- community_row$station_area_unit_pct
+        requirements$station_area_land_pct <- community_row$station_area_land_pct
+      } else if (nrow(community_row) == 0) {
+        cli::cli_warn(
+          "Community {.val {community_name}} with type {.val {community_type}} not found in community data. Using default requirements."
+        )
+      } else {
+        cli::cli_warn(
+          "Multiple matches found for {.val {community_name}}. Using default requirements."
+        )
+      }
+    } else {
+      cli::cli_warn(
+        "Community data file not found. Using default requirements for {community_type}."
+      )
+    }
   }
 
   # Apply custom requirements

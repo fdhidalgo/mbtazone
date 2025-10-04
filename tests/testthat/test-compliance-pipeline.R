@@ -169,6 +169,99 @@ test_that("get_community_requirements validates community_type", {
   )
 })
 
+test_that("get_community_requirements loads data from CSV for known communities", {
+  # Test Cambridge (rapid transit)
+  reqs_cambridge <- get_community_requirements(
+    community_name = "Cambridge",
+    community_type = "rapid_transit"
+  )
+  expect_equal(reqs_cambridge$min_units, 13477)
+  expect_equal(reqs_cambridge$min_acres, 32)
+  expect_equal(reqs_cambridge$min_station_area_acres, 100)
+  expect_equal(reqs_cambridge$station_area_land_pct, 90)
+  expect_equal(reqs_cambridge$station_area_unit_pct, 90)
+  expect_equal(reqs_cambridge$community_name, "Cambridge")
+
+  # Test Somerville (rapid transit)
+  reqs_somerville <- get_community_requirements(
+    community_name = "Somerville",
+    community_type = "rapid_transit"
+  )
+  expect_equal(reqs_somerville$min_units, 9067)
+  expect_equal(reqs_somerville$min_acres, 24)
+  expect_equal(reqs_somerville$station_area_land_pct, 90)
+  expect_equal(reqs_somerville$station_area_unit_pct, 90)
+
+  # Test Arlington (adjacent community)
+  reqs_arlington <- get_community_requirements(
+    community_name = "Arlington",
+    community_type = "adjacent"
+  )
+  expect_equal(reqs_arlington$min_units, 2046)
+  expect_equal(reqs_arlington$min_acres, 32)
+  expect_true(is.na(reqs_arlington$min_station_area_acres))
+  expect_equal(reqs_arlington$station_area_land_pct, 0)
+  expect_equal(reqs_arlington$station_area_unit_pct, 0)
+
+  # Test Ashby (adjacent small town)
+  reqs_ashby <- get_community_requirements(
+    community_name = "Ashby",
+    community_type = "adjacent_small_town"
+  )
+  expect_equal(reqs_ashby$min_units, 62)
+  expect_true(is.na(reqs_ashby$min_acres))
+  expect_true(is.na(reqs_ashby$min_station_area_acres))
+})
+
+test_that("get_community_requirements handles unknown communities", {
+  expect_warning(
+    reqs <- get_community_requirements(
+      community_name = "Faketown",
+      community_type = "rapid_transit"
+    ),
+    "not found in community data"
+  )
+  # Should return default values for the community type
+  expect_true(is.na(reqs$min_units))
+  expect_equal(reqs$min_acres, 50)  # Default for rapid_transit
+  expect_equal(reqs$min_station_area_acres, 100)
+})
+
+test_that("get_community_requirements is case-insensitive", {
+  reqs_upper <- get_community_requirements(
+    community_name = "CAMBRIDGE",
+    community_type = "rapid_transit"
+  )
+  reqs_lower <- get_community_requirements(
+    community_name = "cambridge",
+    community_type = "rapid_transit"
+  )
+  reqs_mixed <- get_community_requirements(
+    community_name = "CaMbRiDgE",
+    community_type = "rapid_transit"
+  )
+
+  expect_equal(reqs_upper$min_units, 13477)
+  expect_equal(reqs_lower$min_units, 13477)
+  expect_equal(reqs_mixed$min_units, 13477)
+})
+
+test_that("get_community_requirements respects custom_requirements override", {
+  reqs <- get_community_requirements(
+    community_name = "Cambridge",
+    community_type = "rapid_transit",
+    custom_requirements = list(min_units = 20000, min_acres = 100)
+  )
+
+  # Custom values should override CSV values
+  expect_equal(reqs$min_units, 20000)
+  expect_equal(reqs$min_acres, 100)
+
+  # Other values should still come from CSV
+  expect_equal(reqs$station_area_land_pct, 90)
+  expect_equal(reqs$min_station_area_acres, 100)
+})
+
 test_that("check_compliance_requirements evaluates all requirements", {
   metrics <- list(
     total_units = 6500,
