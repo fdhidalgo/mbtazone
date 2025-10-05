@@ -473,3 +473,125 @@ test_that("evaluate_compliance generates accurate metadata", {
   expect_equal(result$metadata$evaluation_date, Sys.Date())
   expect_true("package_version" %in% names(result$metadata))
 })
+
+# Test 9: Logical district column integration (bug fix verification)
+test_that("evaluate_compliance correctly handles logical district columns in full workflow", {
+  skip_if_not_installed("sf")
+
+  # Create mock municipality with 6 parcels
+  # Only 2 parcels will be TRUE in the logical district column
+  municipality <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = sprintf("P%03d", 1:6),
+      SQFT = c(10000, 15000, 12000, 8000, 20000, 18000),
+      ACRES = c(10000/43560, 15000/43560, 12000/43560, 8000/43560, 20000/43560, 18000/43560),
+      Tot_Exclud = c(1000, 1500, 1200, 800, 2000, 1800),
+      # Logical column: only parcels 2 and 5 are in the district
+      in_compliance_district = c(FALSE, TRUE, FALSE, FALSE, TRUE, FALSE),
+      x = c(200000, 200100, 200200, 200300, 200400, 200500),
+      y = c(900000, 900100, 900200, 900300, 900400, 900500)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+
+  # Create realistic zoning parameters
+  zoning_params <- list(
+    min_lot_size = 5000,
+    base_min_lot_size = 5000,
+    additional_lot_SF = 2000,
+    building_height = 7,
+    FAR = 1.5,
+    max_lot_coverage = 0.5,
+    min_required_open_space = 0.2,
+    parking_spaces_per_dwelling_unit = 1,
+    lot_area_per_dwelling_unit = 2000,
+    max_dwelling_units_per_acre = 20,
+    max_units_per_lot = NA,
+    water_included = "Y"
+  )
+
+  # Run full compliance evaluation using logical column for districts
+  result <- suppressWarnings(evaluate_compliance(
+    municipality = municipality,
+    districts = "in_compliance_district",  # Logical column
+    zoning_params = zoning_params,
+    community_type = "adjacent",
+    custom_requirements = list(min_units = 5, min_acres = 0.5),
+    verbose = FALSE
+  ))
+
+  # CRITICAL ASSERTIONS: Verify logical column handled correctly
+
+  # 1. Summary n_parcels should reflect total municipality size (6 parcels)
+  expect_equal(result$summary$n_parcels, 6)
+
+  # 2. District-level n_parcels should only count TRUE parcels (2 parcels)
+  expect_equal(nrow(result$by_district), 1)  # Single district
+  expect_equal(result$by_district$n_parcels, 2)
+
+  # 3. District name should be the column name
+  expect_equal(result$by_district$district_id, "in_compliance_district")
+
+  # 4. Parcel detail should include all 6 parcels
+  expect_equal(nrow(result$parcel_detail), 6)
+
+  # 5. Only 2 parcels should have district_id (parcels 2 and 5)
+  n_assigned <- sum(!is.na(result$parcel_detail$district_id))
+  expect_equal(n_assigned, 2)
+
+  # 6. Verify which specific parcels are assigned (P002 and P005)
+  assigned_parcels <- result$parcel_detail$LOC_ID[!is.na(result$parcel_detail$district_id)]
+  expect_setequal(assigned_parcels, c("P002", "P005"))
+
+  # 7. FALSE parcels should have NA district_id
+  unassigned_parcels <- result$parcel_detail$LOC_ID[is.na(result$parcel_detail$district_id)]
+  expect_setequal(unassigned_parcels, c("P001", "P003", "P004", "P006"))
+
+  # 8. Unit capacity calculations should only include TRUE parcels
+  # Sum district-level units should only come from parcels 2 and 5
+  district_total_units <- result$by_district$total_units
+
+  # Calculate expected units from parcels 2 and 5 only
+  true_parcel_ids <- c("P002", "P005")
+  true_parcel_capacities <- result$parcel_detail$final_unit_capacity[
+    result$parcel_detail$LOC_ID %in% true_parcel_ids
+  ]
+  expected_units <- sum(true_parcel_capacities, na.rm = TRUE)
+
+  expect_equal(district_total_units, expected_units, tolerance = 0.01)
+
+  # 9. Overall summary units should match district units (not all 6 parcels)
+  expect_equal(result$summary$total_units, district_total_units, tolerance = 0.01)
+
+  # 10. Verify FALSE parcels don't contribute to capacity
+  # (This would catch the original bug where all parcels were included)
+  false_parcel_ids <- c("P001", "P003", "P004", "P006")
+  false_parcel_capacities <- result$parcel_detail$final_unit_capacity[
+    result$parcel_detail$LOC_ID %in% false_parcel_ids
+  ]
+
+  # FALSE parcels should still have capacity calculated (for reporting)
+  # but should NOT be included in district totals
+  expect_true(all(false_parcel_capacities >= 0 | is.na(false_parcel_capacities)))
+
+  # Verify FALSE parcel capacities are NOT in the district total
+  sum_false_capacities <- sum(false_parcel_capacities, na.rm = TRUE)
+  expect_false(
+    abs(district_total_units - (expected_units + sum_false_capacities)) < 0.01,
+    info = "FALSE parcels should not be included in district capacity"
+  )
+
+  # 11. Verify acres metrics also only include TRUE parcels
+  district_acres <- result$by_district$total_acres
+  true_parcel_acres <- sum(
+    result$parcel_detail$ACRES[result$parcel_detail$LOC_ID %in% true_parcel_ids],
+    na.rm = TRUE
+  )
+  expect_equal(district_acres, true_parcel_acres, tolerance = 0.01)
+
+  # 12. Verify compliance evaluation uses only TRUE parcels
+  # With 2 parcels (~15000 + 20000 = 35000 sqft total) we should have capacity > 5 units
+  expect_true(result$summary$total_units > 0)
+  expect_true(result$by_district$total_units > 0)
+})

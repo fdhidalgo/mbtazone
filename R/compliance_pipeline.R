@@ -162,12 +162,23 @@ assign_parcels_to_districts <- function(municipality, districts) {
 
     district_values <- municipality[[districts]]
 
-    result <- data.frame(
-      LOC_ID = municipality$LOC_ID,
-      district_id = as.character(district_values),
-      district_name = as.character(district_values),
-      stringsAsFactors = FALSE
-    )
+    # Handle logical columns specially: only TRUE values are in district
+    if (is.logical(district_values)) {
+      result <- data.frame(
+        LOC_ID = municipality$LOC_ID,
+        district_id = ifelse(district_values, districts, NA_character_),
+        district_name = ifelse(district_values, districts, NA_character_),
+        stringsAsFactors = FALSE
+      )
+    } else {
+      # For non-logical columns, use values as-is
+      result <- data.frame(
+        LOC_ID = municipality$LOC_ID,
+        district_id = as.character(district_values),
+        district_name = as.character(district_values),
+        stringsAsFactors = FALSE
+      )
+    }
 
     # Warn about missing assignments
     n_missing <- sum(is.na(result$district_id) | result$district_id == "")
@@ -1177,7 +1188,7 @@ evaluate_compliance <- function(municipality,
         sf::st_make_valid(district_geom),
         sf::st_make_valid(density_deductions)
       )
-      deduction_area_acres <- sum(sf::st_area(deductions_in_district)) / 43560
+      deduction_area_acres <- as.numeric(sum(sf::st_area(deductions_in_district)) / 43560)
       gross_density_denominator <- total_acres - deduction_area_acres
     } else {
       # Use total area if deductions not provided

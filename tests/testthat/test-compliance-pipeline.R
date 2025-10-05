@@ -60,6 +60,49 @@ test_that("assign_parcels_to_districts works with column name", {
   expect_equal(result$district_id, c("D1", "D1", "D2"))
 })
 
+test_that("assign_parcels_to_districts works with logical column (TRUE/FALSE filter)", {
+  skip_if_not_installed("sf")
+
+  # Create mock parcel data with logical district indicator column
+  # This tests the bug fix where logical columns should filter (not create two districts)
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = c("P001", "P002", "P003", "P004"),
+      SQFT = c(10000, 15000, 12000, 8000),
+      ACRES = c(0.23, 0.34, 0.28, 0.18),
+      Tot_Exclud = c(1000, 2000, 1500, 500),
+      in_district = c(TRUE, TRUE, FALSE, FALSE),  # Only first 2 parcels in district
+      x = c(1, 2, 3, 4),
+      y = c(1, 2, 3, 4)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+
+  result <- assign_parcels_to_districts(parcels, "in_district")
+
+  expect_s3_class(result, "data.frame")
+  expect_equal(nrow(result), 4)
+
+  # TRUE values should get the column name as district_id
+  expect_equal(result$district_id[1], "in_district")
+  expect_equal(result$district_id[2], "in_district")
+
+  # FALSE values should get NA (not "FALSE" as a district)
+  expect_true(is.na(result$district_id[3]))
+  expect_true(is.na(result$district_id[4]))
+
+  # Should warn about missing assignments
+  expect_warning(
+    assign_parcels_to_districts(parcels, "in_district"),
+    "2 parcels have missing or empty district assignments"
+  )
+
+  # Only 2 parcels should be in the district (not all 4)
+  n_in_district <- sum(!is.na(result$district_id))
+  expect_equal(n_in_district, 2)
+})
+
 test_that("assign_parcels_to_districts works with named list", {
   skip_if_not_installed("sf")
 
