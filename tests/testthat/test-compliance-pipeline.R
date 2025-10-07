@@ -405,3 +405,445 @@ test_that("evaluate_compliance validates inputs", {
     )
   )
 })
+
+# ===== Precomputed Mode Tests =====
+
+test_that("calculate_district_capacity produces identical results with precomputed mode", {
+  skip_if_not_installed("sf")
+
+  # Load real parcel data for Chelsea
+  chelsea_parcels <- load_municipality(
+    system.file("extdata/parcels/57_CHELSEA_basic.zip", package = "mbtazone"),
+    community_name = "Chelsea"
+  )
+
+  # Load Chelsea fixture for zoning parameters
+  chelsea_fixture <- readRDS(test_path("fixtures/chelsea_district1.rds"))
+  zoning_params <- chelsea_fixture$zoning_parameters
+
+  # Create mock station areas (polygons around coordinates)
+  station_areas <- sf::st_as_sf(
+    data.frame(
+      station_id = c("S1", "S2"),
+      x = c(750000, 755000),
+      y = c(950000, 955000)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+  station_areas <- sf::st_buffer(station_areas, dist = 2640)  # 0.5 mile radius
+
+  # Test with first 100 parcels for speed
+  test_parcels <- chelsea_parcels[1:100, ]
+
+  # Run standard mode (computes on the fly)
+  result_standard <- calculate_district_capacity(
+    parcels = test_parcels,
+    zoning_params = zoning_params,
+    station_areas = station_areas,
+    precomputed = FALSE
+  )
+
+  # Pre-compute spatial attributes
+  test_parcels_precomputed <- precompute_spatial_attributes(
+    parcels = test_parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # Run precomputed mode (uses pre-computed columns)
+  result_precomputed <- calculate_district_capacity(
+    parcels = test_parcels_precomputed,
+    zoning_params = zoning_params,
+    station_areas = NULL,  # Not needed in precomputed mode
+    precomputed = TRUE
+  )
+
+  # Verify identical results for all 18 calculation columns
+  calculation_cols <- c(
+    "developable_area", "net_developable_area", "exclusion_ratio",
+    "required_open_space_area", "parking_area", "building_footprint",
+    "building_floor_area", "units_building_capacity", "units_density_limits",
+    "units_lot_coverage", "units_lot_area_req", "units_far_limits",
+    "units_max_cap", "below_minimum_lot", "units_graduated_lots",
+    "final_unit_capacity", "units_per_acre", "in_station_area"
+  )
+
+  for (col in calculation_cols) {
+    expect_equal(
+      result_standard[[col]],
+      result_precomputed[[col]],
+      tolerance = 0.01,
+      label = paste("Column:", col)
+    )
+  }
+
+  # Verify in_station_area flag matches
+  expect_equal(
+    sum(result_standard$in_station_area, na.rm = TRUE),
+    sum(result_precomputed$in_station_area, na.rm = TRUE)
+  )
+})
+
+test_that("evaluate_compliance produces identical results with precomputed mode", {
+  skip_if_not_installed("sf")
+
+  # Load real parcel data for Chelsea
+  chelsea_parcels <- load_municipality(
+    system.file("extdata/parcels/57_CHELSEA_basic.zip", package = "mbtazone"),
+    community_name = "Chelsea"
+  )
+
+  # Load Chelsea fixture for zoning parameters
+  chelsea_fixture <- readRDS(test_path("fixtures/chelsea_district1.rds"))
+  zoning_params <- chelsea_fixture$zoning_parameters
+
+  # Create mock station areas
+  station_areas <- sf::st_as_sf(
+    data.frame(
+      station_id = c("S1", "S2"),
+      x = c(750000, 755000),
+      y = c(950000, 955000)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+  station_areas <- sf::st_buffer(station_areas, dist = 2640)
+
+  # Test with first 100 parcels for speed
+  test_parcels <- chelsea_parcels[1:100, ]
+
+  # Add district column
+  test_parcels$district_1 <- TRUE
+
+  # Run standard mode
+  result_standard <- evaluate_compliance(
+    municipality = test_parcels,
+    districts = "district_1",
+    zoning_params = zoning_params,
+    community_type = "rapid_transit",
+    transit_stations = station_areas,
+    custom_requirements = list(min_units = 50, min_acres = 2),
+    precomputed = FALSE,
+    verbose = FALSE
+  )
+
+  # Pre-compute spatial attributes
+  test_parcels_precomputed <- precompute_spatial_attributes(
+    parcels = test_parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # Add district column to precomputed parcels
+  test_parcels_precomputed$district_1 <- TRUE
+
+  # Run precomputed mode
+  result_precomputed <- evaluate_compliance(
+    municipality = test_parcels_precomputed,
+    districts = "district_1",
+    zoning_params = zoning_params,
+    community_type = "rapid_transit",
+    transit_stations = NULL,  # Not needed in precomputed mode
+    custom_requirements = list(min_units = 50, min_acres = 2),
+    precomputed = TRUE,
+    verbose = FALSE
+  )
+
+  # Verify identical compliance status
+  expect_equal(
+    result_standard$compliance$compliant,
+    result_precomputed$compliance$compliant
+  )
+
+  # Verify identical total units
+  expect_equal(
+    result_standard$summary$total_units,
+    result_precomputed$summary$total_units,
+    tolerance = 0.01
+  )
+
+  # Verify identical gross density
+  expect_equal(
+    result_standard$summary$gross_density,
+    result_precomputed$summary$gross_density,
+    tolerance = 0.01
+  )
+
+  # Verify identical station area metrics
+  expect_equal(
+    result_standard$summary$station_area_units,
+    result_precomputed$summary$station_area_units,
+    tolerance = 0.01
+  )
+
+  expect_equal(
+    result_standard$summary$station_area_acres,
+    result_precomputed$summary$station_area_acres,
+    tolerance = 0.01
+  )
+
+  # Verify by_district results match
+  expect_equal(
+    result_standard$by_district$total_units,
+    result_precomputed$by_district$total_units,
+    tolerance = 0.01
+  )
+
+  expect_equal(
+    result_standard$by_district$gross_density,
+    result_precomputed$by_district$gross_density,
+    tolerance = 0.01
+  )
+})
+
+test_that("calculate_district_capacity errors when precomputed = TRUE but missing in_station_area column", {
+  skip_if_not_installed("sf")
+
+  # Create parcels WITHOUT in_station_area column
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = c("P001", "P002"),
+      SQFT = c(10000, 15000),
+      ACRES = c(0.23, 0.34),
+      Tot_Exclud = c(1000, 2000),
+      x = c(1, 2),
+      y = c(1, 2)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+
+  zoning_params <- list(
+    min_lot_size = 5000,
+    base_min_lot_size = 5000,
+    additional_lot_SF = 2000,
+    building_height = 7,
+    FAR = 1.5,
+    max_lot_coverage = 0.5,
+    min_required_open_space = 0.2,
+    parking_spaces_per_dwelling_unit = 1,
+    lot_area_per_dwelling_unit = 2000,
+    max_dwelling_units_per_acre = 20,
+    max_units_per_lot = NA,
+    water_included = "Y"
+  )
+
+  # Should error with helpful message
+  expect_error(
+    calculate_district_capacity(
+      parcels = parcels,
+      zoning_params = zoning_params,
+      precomputed = TRUE
+    ),
+    "precomputed = TRUE requires 'in_station_area' column"
+  )
+
+  # Error message should suggest running precompute_spatial_attributes()
+  expect_error(
+    calculate_district_capacity(
+      parcels = parcels,
+      zoning_params = zoning_params,
+      precomputed = TRUE
+    ),
+    "precompute_spatial_attributes"
+  )
+})
+
+test_that("precomputed mode works with multiple districts", {
+  skip_if_not_installed("sf")
+
+  # Load real parcel data for Somerville (has multiple potential districts)
+  somerville_parcels <- load_municipality(
+    system.file("extdata/parcels/274_SOMERVILLE_basic.zip", package = "mbtazone"),
+    community_name = "Somerville"
+  )
+
+  # Load Somerville fixture for zoning parameters
+  somerville_fixture <- readRDS(test_path("fixtures/somerville_district1.rds"))
+  zoning_params <- somerville_fixture$zoning_parameters
+
+  # Test with first 200 parcels, assign to 2 districts
+  test_parcels <- somerville_parcels[1:200, ]
+  test_parcels$district_id <- ifelse(seq_len(nrow(test_parcels)) <= 100, "District_A", "District_B")
+
+  # Get actual parcel centroid to create realistic station areas
+  centroids <- sf::st_centroid(test_parcels[1:10, ])
+  centroid_coords <- sf::st_coordinates(centroids[1, ])
+
+  # Create mock station areas using actual parcel coordinates
+  station_areas <- sf::st_as_sf(
+    data.frame(
+      station_id = c("S1", "S2"),
+      x = c(centroid_coords[1, "X"], centroid_coords[1, "X"] + 5000),
+      y = c(centroid_coords[1, "Y"], centroid_coords[1, "Y"] + 5000)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+  station_areas <- sf::st_buffer(station_areas, dist = 2640)
+
+  # Pre-compute spatial attributes once
+  test_parcels_precomputed <- precompute_spatial_attributes(
+    parcels = test_parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # Verify in_station_area column was added
+  expect_true("in_station_area" %in% names(test_parcels_precomputed))
+
+  # Run evaluate_compliance with precomputed mode and multi-district zoning
+  zoning_params_multi <- list(
+    "District_A" = zoning_params,
+    "District_B" = zoning_params
+  )
+
+  result <- evaluate_compliance(
+    municipality = test_parcels_precomputed,
+    districts = "district_id",
+    zoning_params = zoning_params_multi,
+    community_type = "rapid_transit",
+    custom_requirements = list(min_units = 100, min_acres = 5),
+    precomputed = TRUE,
+    verbose = FALSE
+  )
+
+  # Verify multi-district results
+  expect_s3_class(result$by_district, "data.frame")
+  expect_equal(nrow(result$by_district), 2)
+  expect_true(all(c("District_A", "District_B") %in% result$by_district$district_id))
+
+  # Verify precomputed in_station_area column exists and was used
+  expect_true("in_station_area" %in% names(result$parcel_detail))
+
+  # If there are parcels in station areas, verify units were calculated
+  parcels_in_station <- sum(test_parcels_precomputed$in_station_area, na.rm = TRUE)
+  if (parcels_in_station > 0) {
+    units_in_station <- sum(
+      result$parcel_detail$final_unit_capacity[result$parcel_detail$in_station_area],
+      na.rm = TRUE
+    )
+    expect_gt(units_in_station, 0)  # Should have some units in station areas
+  }
+})
+
+test_that("precomputed mode skips spatial operations for performance", {
+  skip_if_not_installed("sf")
+
+  # Load Chelsea parcels
+  chelsea_parcels <- load_municipality(
+    system.file("extdata/parcels/57_CHELSEA_basic.zip", package = "mbtazone"),
+    community_name = "Chelsea"
+  )
+
+  chelsea_fixture <- readRDS(test_path("fixtures/chelsea_district1.rds"))
+  zoning_params <- chelsea_fixture$zoning_parameters
+
+  # Create station areas
+  station_areas <- sf::st_as_sf(
+    data.frame(
+      station_id = "S1",
+      x = 750000,
+      y = 950000
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+  station_areas <- sf::st_buffer(station_areas, dist = 2640)
+
+  # Test with 50 parcels
+  test_parcels <- chelsea_parcels[1:50, ]
+
+  # Pre-compute once
+  test_parcels_precomputed <- precompute_spatial_attributes(
+    parcels = test_parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # Precomputed mode should work WITHOUT station_areas argument
+  # (verifies it's using pre-computed values, not recomputing)
+  result <- calculate_district_capacity(
+    parcels = test_parcels_precomputed,
+    zoning_params = zoning_params,
+    station_areas = NULL,  # Explicitly NULL - would fail if not precomputed
+    precomputed = TRUE
+  )
+
+  expect_s3_class(result, "sf")
+  expect_true("in_station_area" %in% names(result))
+
+  # Should have preserved the pre-computed in_station_area values
+  expect_equal(
+    sum(result$in_station_area, na.rm = TRUE),
+    sum(test_parcels_precomputed$in_station_area, na.rm = TRUE)
+  )
+})
+
+test_that("precomputed mode handles density deductions correctly", {
+  skip_if_not_installed("sf")
+
+  # Load Chelsea parcels
+  chelsea_parcels <- load_municipality(
+    system.file("extdata/parcels/57_CHELSEA_basic.zip", package = "mbtazone"),
+    community_name = "Chelsea"
+  )
+
+  chelsea_fixture <- readRDS(test_path("fixtures/chelsea_district1.rds"))
+  zoning_params <- chelsea_fixture$zoning_parameters
+
+  # Test with first 50 parcels
+  test_parcels <- chelsea_parcels[1:50, ]
+
+  # Create mock station areas (needed for in_station_area column)
+  station_areas <- sf::st_as_sf(
+    data.frame(
+      station_id = "S1",
+      x = 750000,
+      y = 950000
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+  station_areas <- sf::st_buffer(station_areas, dist = 2640)
+
+  # Create mock density deduction areas
+  deduction_areas <- sf::st_as_sf(
+    data.frame(
+      deduction_id = c("D1", "D2"),
+      x = c(750000, 755000),
+      y = c(950000, 955000)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+  deduction_areas <- sf::st_buffer(deduction_areas, dist = 1000)
+
+  # Pre-compute with both station areas and density deductions
+  test_parcels_precomputed <- precompute_spatial_attributes(
+    parcels = test_parcels,
+    station_areas = station_areas,
+    density_deductions = deduction_areas,
+    verbose = FALSE
+  )
+
+  # Verify both columns were added
+  expect_true("in_station_area" %in% names(test_parcels_precomputed))
+  expect_true("density_deduction_area" %in% names(test_parcels_precomputed))
+
+  # Run calculate_district_capacity with precomputed mode
+  result <- calculate_district_capacity(
+    parcels = test_parcels_precomputed,
+    zoning_params = zoning_params,
+    precomputed = TRUE
+  )
+
+  expect_s3_class(result, "sf")
+
+  # Verify density deduction values were preserved
+  expect_equal(
+    result$density_deduction_area,
+    test_parcels_precomputed$density_deduction_area
+  )
+})

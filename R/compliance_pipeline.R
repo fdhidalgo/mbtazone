@@ -268,9 +268,13 @@ assign_parcels_to_districts <- function(municipality, districts) {
 #'   }
 #' @param station_areas Optional sf object with transit station buffers (from
 #'   \code{\link{load_transit_stations}}). If provided, adds station area flag
-#'   to parcels.
+#'   to parcels. Ignored if \code{precomputed = TRUE}.
 #' @param override_developable_sf Optional numeric vector of manual override
 #'   values for developable area. Use NA for parcels without overrides.
+#' @param precomputed Logical indicating whether spatial attributes have been
+#'   pre-computed via \code{\link{precompute_spatial_attributes}} (default: FALSE).
+#'   When TRUE, skips spatial intersection calculations and uses existing columns,
+#'   enabling high-performance batch simulation workflows.
 #'
 #' @return The input sf object with 18 additional columns representing each
 #'   calculation step:
@@ -340,7 +344,8 @@ assign_parcels_to_districts <- function(municipality, districts) {
 calculate_district_capacity <- function(parcels,
                                        zoning_params,
                                        station_areas = NULL,
-                                       override_developable_sf = NULL) {
+                                       override_developable_sf = NULL,
+                                       precomputed = FALSE) {
 
   # Input validation
   if (!inherits(parcels, "sf")) {
@@ -379,11 +384,24 @@ calculate_district_capacity <- function(parcels,
   }
 
   # Add station area flag if provided
-  if (!is.null(station_areas)) {
+  if (!precomputed && !is.null(station_areas)) {
+    # Standard mode: compute station area intersection
     parcel_centroids <- sf::st_centroid(parcels)
     in_station_area <- sf::st_intersects(parcel_centroids, station_areas, sparse = FALSE)
     parcels$in_station_area <- as.logical(rowSums(in_station_area) > 0)
+  } else if (precomputed) {
+    # Precomputed mode: validate required column exists
+    if (!"in_station_area" %in% names(parcels)) {
+      cli::cli_abort(
+        c(
+          "precomputed = TRUE requires 'in_station_area' column in parcels",
+          "i" = "Run {.code precompute_spatial_attributes()} first",
+          "i" = "Or set precomputed = FALSE to compute on the fly"
+        )
+      )
+    }
   } else {
+    # No station areas provided and not precomputed
     parcels$in_station_area <- FALSE
   }
 
@@ -949,6 +967,10 @@ check_compliance_requirements <- function(district_metrics,
 #'   density calculations.
 #' @param community_name Optional community name for loading specific requirements
 #' @param custom_requirements Optional list to override community requirements
+#' @param precomputed Logical indicating whether parcels have pre-computed spatial
+#'   attributes (default: FALSE). If TRUE, expects columns created by
+#'   \code{\link{precompute_spatial_attributes}} and skips spatial operations for
+#'   performance. See Details for simulation workflow.
 #' @param verbose Logical indicating whether to print progress messages (default: TRUE)
 #'
 #' @return Named list with complete compliance evaluation results:
@@ -1021,6 +1043,7 @@ evaluate_compliance <- function(municipality,
                                density_deductions = NULL,
                                community_name = NULL,
                                custom_requirements = NULL,
+                               precomputed = FALSE,
                                verbose = TRUE) {
 
   if (verbose) cli::cli_alert_info("Starting compliance evaluation...")
@@ -1054,7 +1077,8 @@ evaluate_compliance <- function(municipality,
     parcels_with_capacity <- calculate_district_capacity(
       parcels = municipality,
       zoning_params = zoning_params,
-      station_areas = transit_stations
+      station_areas = transit_stations,
+      precomputed = precomputed
     )
   } else {
     # Multi-district mode - check structure and apply district-specific params
@@ -1070,7 +1094,8 @@ evaluate_compliance <- function(municipality,
       parcels_with_capacity <- calculate_district_capacity(
         parcels = municipality,
         zoning_params = zoning_params,
-        station_areas = transit_stations
+        station_areas = transit_stations,
+        precomputed = precomputed
       )
     } else if (!all(elements_are_lists)) {
       # Mixed structure - definitely malformed
@@ -1123,7 +1148,8 @@ evaluate_compliance <- function(municipality,
       calculate_district_capacity(
         parcels = district_parcels,
         zoning_params = dist_params,
-        station_areas = transit_stations
+        station_areas = transit_stations,
+        precomputed = precomputed
       )
     })
 
@@ -1181,8 +1207,12 @@ evaluate_compliance <- function(municipality,
     )
 
     # Gross density denominator calculation
-    if (!is.null(density_deductions)) {
-      # Calculate area to deduct (intersection with deduction layer)
+    if (precomputed && "density_deduction_area" %in% names(district_parcels)) {
+      # Precomputed mode: use per-parcel deduction areas
+      deduction_area_acres <- sum(district_parcels$density_deduction_area / 43560, na.rm = TRUE)
+      gross_density_denominator <- total_acres - deduction_area_acres
+    } else if (!is.null(density_deductions)) {
+      # Standard mode: calculate spatial intersection
       district_geom <- sf::st_union(district_parcels)
       deductions_in_district <- sf::st_intersection(
         sf::st_make_valid(district_geom),

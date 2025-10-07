@@ -13,6 +13,7 @@ evaluate_compliance(
   density_deductions = NULL,
   community_name = NULL,
   custom_requirements = NULL,
+  precomputed = FALSE,
   verbose = TRUE
 )
 }
@@ -40,6 +41,11 @@ density calculations.}
 \item{community_name}{Optional community name for loading specific requirements}
 
 \item{custom_requirements}{Optional list to override community requirements}
+
+\item{precomputed}{Logical indicating whether parcels have pre-computed spatial
+attributes (default: FALSE). If TRUE, expects columns created by
+\code{\link{precompute_spatial_attributes}} and skips spatial operations for
+performance. See Details for simulation workflow.}
 
 \item{verbose}{Logical indicating whether to print progress messages (default: TRUE)}
 }

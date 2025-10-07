@@ -874,6 +874,470 @@ test_that("All GIS functions work on all test communities", {
 })
 
 # ============================================================================
+# precompute_spatial_attributes() Tests
+# ============================================================================
+
+test_that("precompute_spatial_attributes adds required columns with station_areas", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    density_deductions = NULL,
+    verbose = FALSE
+  )
+
+  # Check that required columns were added
+  expect_true("station_area_sf" %in% names(result))
+  expect_true("station_area_pct" %in% names(result))
+  expect_true("in_station_area" %in% names(result))
+
+  # Check column types
+  expect_type(result$station_area_sf, "double")
+  expect_type(result$station_area_pct, "double")
+  expect_type(result$in_station_area, "logical")
+
+  # Check that original data is preserved
+  expect_equal(nrow(result), nrow(parcels))
+  expect_true(all(names(parcels) %in% names(result)))
+})
+
+test_that("precompute_spatial_attributes adds required columns with density_deductions", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  density_deductions <- get_cached_density_deductions()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = NULL,
+    density_deductions = density_deductions,
+    verbose = FALSE
+  )
+
+  # Check that required column was added
+  expect_true("density_deduction_area" %in% names(result))
+
+  # Check column type
+  expect_type(result$density_deduction_area, "double")
+
+  # Check that original data is preserved
+  expect_equal(nrow(result), nrow(parcels))
+})
+
+test_that("precompute_spatial_attributes adds all columns with both inputs", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+  density_deductions <- get_cached_density_deductions()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    density_deductions = density_deductions,
+    verbose = FALSE
+  )
+
+  # Check that all columns were added
+  expect_true("station_area_sf" %in% names(result))
+  expect_true("station_area_pct" %in% names(result))
+  expect_true("in_station_area" %in% names(result))
+  expect_true("density_deduction_area" %in% names(result))
+})
+
+test_that("precompute_spatial_attributes validates station_area_pct range", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # station_area_pct should be between 0 and 1 (stored as proportion, not percentage)
+  expect_true(all(result$station_area_pct >= 0, na.rm = TRUE))
+  expect_true(all(result$station_area_pct <= 1, na.rm = TRUE))
+})
+
+test_that("precompute_spatial_attributes validates station_area_sf is non-negative", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # station_area_sf should be non-negative
+  expect_true(all(result$station_area_sf >= 0, na.rm = TRUE))
+})
+
+test_that("precompute_spatial_attributes validates density_deduction_area is non-negative", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  density_deductions <- get_cached_density_deductions()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    density_deductions = density_deductions,
+    verbose = FALSE
+  )
+
+  # density_deduction_area should be non-negative
+  expect_true(all(result$density_deduction_area >= 0, na.rm = TRUE))
+})
+
+test_that("precompute_spatial_attributes sets in_station_area correctly", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # in_station_area should be TRUE when station_area_sf > 0
+  has_station_overlap <- result$station_area_sf > 0
+  expect_equal(result$in_station_area, has_station_overlap)
+})
+
+test_that("precompute_spatial_attributes handles NULL station_areas", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+
+  # Pre-compute with NULL station_areas
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = NULL,
+    density_deductions = NULL,
+    verbose = FALSE
+  )
+
+  # Station area columns should NOT be added when station_areas is NULL
+  expect_false("station_area_sf" %in% names(result))
+  expect_false("station_area_pct" %in% names(result))
+  expect_false("in_station_area" %in% names(result))
+
+  # But metadata should still indicate precomputation occurred
+  expect_true(attr(result, "spatial_attributes_precomputed"))
+})
+
+test_that("precompute_spatial_attributes handles NULL density_deductions", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+
+  # Pre-compute with NULL density_deductions
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = NULL,
+    density_deductions = NULL,
+    verbose = FALSE
+  )
+
+  # Density deduction column should NOT be added when density_deductions is NULL
+  expect_false("density_deduction_area" %in% names(result))
+
+  # Metadata should still indicate precomputation occurred
+  expect_true(attr(result, "spatial_attributes_precomputed"))
+})
+
+test_that("precompute_spatial_attributes handles both NULL inputs", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+
+  # Pre-compute with both NULL
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = NULL,
+    density_deductions = NULL,
+    verbose = FALSE
+  )
+
+  # No spatial columns should be added
+  expect_false("station_area_sf" %in% names(result))
+  expect_false("station_area_pct" %in% names(result))
+  expect_false("in_station_area" %in% names(result))
+  expect_false("density_deduction_area" %in% names(result))
+
+  # But original data should be preserved
+  expect_equal(nrow(result), nrow(parcels))
+  expect_true(all(names(parcels) %in% names(result)))
+
+  # Metadata should indicate precomputation occurred (even if no ops were done)
+  expect_true(attr(result, "spatial_attributes_precomputed"))
+})
+
+test_that("precompute_spatial_attributes errors on wrong parcel CRS", {
+  # Load test data and transform to wrong CRS
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  parcels_wrong_crs <- sf::st_transform(parcels, 4326)  # WGS84
+
+  # Should error with CRS mismatch
+  expect_error(
+    precompute_spatial_attributes(
+      parcels_wrong_crs,
+      station_areas = NULL,
+      density_deductions = NULL,
+      verbose = FALSE
+    ),
+    regexp = "26986"
+  )
+})
+
+test_that("precompute_spatial_attributes errors on wrong station_areas CRS", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+  station_areas_wrong_crs <- sf::st_transform(station_areas, 4326)  # WGS84
+
+  # Should error with CRS mismatch
+  expect_error(
+    precompute_spatial_attributes(
+      parcels,
+      station_areas = station_areas_wrong_crs,
+      verbose = FALSE
+    ),
+    regexp = "26986"
+  )
+})
+
+test_that("precompute_spatial_attributes errors on wrong density_deductions CRS", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  density_deductions <- get_cached_density_deductions()
+  density_deductions_wrong_crs <- sf::st_transform(density_deductions, 4326)
+
+  # Should error with CRS mismatch
+  expect_error(
+    precompute_spatial_attributes(
+      parcels,
+      density_deductions = density_deductions_wrong_crs,
+      verbose = FALSE
+    ),
+    regexp = "26986"
+  )
+})
+
+test_that("precompute_spatial_attributes adds metadata attributes", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+  density_deductions <- get_cached_density_deductions()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    density_deductions = density_deductions,
+    verbose = FALSE
+  )
+
+  # Check metadata attributes
+  expect_true(attr(result, "spatial_attributes_precomputed"))
+  expect_true(!is.null(attr(result, "precomputation_date")))
+  expect_s3_class(attr(result, "precomputation_date"), "Date")
+
+  # Check parameter-specific metadata
+  expect_true(attr(result, "precomputed_station_areas"))
+  expect_true(attr(result, "precomputed_density_deductions"))
+})
+
+test_that("precompute_spatial_attributes tracks which parameters were used", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+
+  # Pre-compute with only station_areas
+  result1 <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    density_deductions = NULL,
+    verbose = FALSE
+  )
+
+  # Check metadata
+  expect_true(attr(result1, "precomputed_station_areas"))
+  expect_null(attr(result1, "precomputed_density_deductions"))
+
+  # Pre-compute with only density_deductions
+  density_deductions <- get_cached_density_deductions()
+  result2 <- precompute_spatial_attributes(
+    parcels,
+    station_areas = NULL,
+    density_deductions = density_deductions,
+    verbose = FALSE
+  )
+
+  # Check metadata
+  expect_null(attr(result2, "precomputed_station_areas"))
+  expect_true(attr(result2, "precomputed_density_deductions"))
+})
+
+test_that("precompute_spatial_attributes works with verbose output", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+  density_deductions <- get_cached_density_deductions()
+
+  # Should not error with verbose = TRUE
+  expect_no_error(
+    precompute_spatial_attributes(
+      parcels,
+      station_areas = station_areas,
+      density_deductions = density_deductions,
+      verbose = TRUE
+    )
+  )
+})
+
+test_that("precompute_spatial_attributes preserves sf geometry", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+  station_areas <- get_cached_transit_stations()
+
+  # Pre-compute spatial attributes
+  result <- precompute_spatial_attributes(
+    parcels,
+    station_areas = station_areas,
+    verbose = FALSE
+  )
+
+  # Result should still be an sf object
+  expect_s3_class(result, "sf")
+
+  # Geometry should be preserved
+  expect_equal(sf::st_crs(result), sf::st_crs(parcels))
+  expect_equal(nrow(result), nrow(parcels))
+})
+
+test_that("precompute_spatial_attributes handles empty density_deductions layer", {
+  # Load test data
+  parcels <- load_municipality(
+    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
+    community_name = "Maynard"
+  )
+
+  # Create empty density deductions layer with correct CRS
+  empty_deductions <- sf::st_sf(
+    geometry = sf::st_sfc(crs = 26986)
+  )
+
+  # Should handle empty layer gracefully
+  result <- precompute_spatial_attributes(
+    parcels,
+    density_deductions = empty_deductions,
+    verbose = FALSE
+  )
+
+  # Column should be added but all values should be 0
+  expect_true("density_deduction_area" %in% names(result))
+  expect_true(all(result$density_deduction_area == 0))
+})
+
+test_that("precompute_spatial_attributes consistency across multiple communities", {
+  # Test with multiple communities to ensure consistency
+  for (comm_name in c("Maynard", "Lincoln")) {
+    community_file <- switch(
+      comm_name,
+      "Maynard" = "174_MAYNARD_basic.zip",
+      "Lincoln" = "175_LINCOLN_basic.zip"
+    )
+
+    parcels <- load_municipality(
+      test_path("../../inst/extdata/parcels", community_file),
+      community_name = comm_name
+    )
+    station_areas <- get_cached_transit_stations()
+    density_deductions <- get_cached_density_deductions()
+
+    # Should work without error
+    result <- expect_no_error(
+      precompute_spatial_attributes(
+        parcels,
+        station_areas = station_areas,
+        density_deductions = density_deductions,
+        verbose = FALSE
+      ),
+      info = paste(comm_name, "should process without error")
+    )
+
+    # All expected columns should be present
+    expect_true("station_area_sf" %in% names(result), info = comm_name)
+    expect_true("station_area_pct" %in% names(result), info = comm_name)
+    expect_true("in_station_area" %in% names(result), info = comm_name)
+    expect_true("density_deduction_area" %in% names(result), info = comm_name)
+
+    # Metadata should be present
+    expect_true(attr(result, "spatial_attributes_precomputed"), info = comm_name)
+  }
+})
+
+# ============================================================================
 # Performance Tests
 # ============================================================================
 

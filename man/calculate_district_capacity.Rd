@@ -8,7 +8,8 @@ calculate_district_capacity(
   parcels,
   zoning_params,
   station_areas = NULL,
-  override_developable_sf = NULL
+  override_developable_sf = NULL,
+  precomputed = FALSE
 )
 }
 \arguments{
@@ -34,10 +35,15 @@ calculate_district_capacity(
 
 \item{station_areas}{Optional sf object with transit station buffers (from
 \code{\link{load_transit_stations}}). If provided, adds station area flag
-to parcels.}
+to parcels. Ignored if \code{precomputed = TRUE}.}
 
 \item{override_developable_sf}{Optional numeric vector of manual override
 values for developable area. Use NA for parcels without overrides.}
+
+\item{precomputed}{Logical indicating whether spatial attributes have been
+pre-computed via \code{\link{precompute_spatial_attributes}} (default: FALSE).
+When TRUE, skips spatial intersection calculations and uses existing columns,
+enabling high-performance batch simulation workflows.}
 }
 \value{
 The input sf object with 18 additional columns representing each
