@@ -5,6 +5,13 @@
 .DS_Store
 .quarto
 
+# R package check output
+*.Rcheck/
+..Rcheck/
+
+# Build artifacts
+package-lock.json
+
 # Excel reference data (symlinked from Dropbox)
 tests/testthat/excel_reference
 
@@ -17,3 +24,7 @@ tests/testthat/fixtures/*.rds
 
 # Large statewide data files (>100MB - store externally)
 inst/extdata/statewide/Density_Denominator_Deductions.zip
+
+# Validation results (large binary data)
+dev/validation/validation_results.rds
+dev/archive/*.rds

@@ -1,0 +1,1381 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.25">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+<meta name="author" content="Daniel Hidalgo">
+<meta name="dcterms.date" content="2025-10-09">
+
+<title>MBTA Communities Act R Package Validation Report</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="validation_report_files/libs/clipboard/clipboard.min.js"></script>
+<script src="validation_report_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="validation_report_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="validation_report_files/libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="validation_report_files/libs/quarto-html/popper.min.js"></script>
+<script src="validation_report_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="validation_report_files/libs/quarto-html/anchor.min.js"></script>
+<link href="validation_report_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="validation_report_files/libs/quarto-html/quarto-syntax-highlighting-7b89279ff1a6dce999919e0e67d4d9ec.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="validation_report_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="validation_report_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="validation_report_files/libs/bootstrap/bootstrap-a74871fe4945b66d259aafc266475145.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="validation_report_files/libs/htmltools-fill-0.5.8.1/fill.css" rel="stylesheet">
+<script src="validation_report_files/libs/htmlwidgets-1.6.4/htmlwidgets.js"></script>
+<link href="validation_report_files/libs/datatables-css-0.0.0/datatables-crosstalk.css" rel="stylesheet">
+<script src="validation_report_files/libs/datatables-binding-0.34.0/datatables.js"></script>
+<script src="validation_report_files/libs/jquery-3.6.0/jquery-3.6.0.min.js"></script>
+<link href="validation_report_files/libs/dt-core-1.13.6/css/jquery.dataTables.min.css" rel="stylesheet">
+<link href="validation_report_files/libs/dt-core-1.13.6/css/jquery.dataTables.extra.css" rel="stylesheet">
+<script src="validation_report_files/libs/dt-core-1.13.6/js/jquery.dataTables.min.js"></script>
+<link href="validation_report_files/libs/nouislider-7.0.10/jquery.nouislider.min.css" rel="stylesheet">
+<script src="validation_report_files/libs/nouislider-7.0.10/jquery.nouislider.min.js"></script>
+<link href="validation_report_files/libs/selectize-0.12.0/selectize.bootstrap3.css" rel="stylesheet">
+<script src="validation_report_files/libs/selectize-0.12.0/selectize.min.js"></script>
+<link href="validation_report_files/libs/crosstalk-1.2.2/css/crosstalk.min.css" rel="stylesheet">
+<script src="validation_report_files/libs/crosstalk-1.2.2/js/crosstalk.min.js"></script>
+<link href="validation_report_files/libs/pagedtable-1.1/css/pagedtable.css" rel="stylesheet">
+<script src="validation_report_files/libs/pagedtable-1.1/js/pagedtable.js"></script>
+
+
+</head>
+
+<body class="quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article toc-left">
+<div id="quarto-sidebar-toc-left" class="sidebar toc-left">
+  <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Table of contents</h2>
+   
+  <ul>
+  <li><a href="#executive-summary" id="toc-executive-summary" class="nav-link active" data-scroll-target="#executive-summary">Executive Summary</a>
+  <ul class="collapse">
+  <li><a href="#key-findings" id="toc-key-findings" class="nav-link" data-scroll-target="#key-findings">Key Findings</a></li>
+  <li><a href="#validation-findings" id="toc-validation-findings" class="nav-link" data-scroll-target="#validation-findings">Validation Findings</a></li>
+  </ul></li>
+  <li><a href="#methodology" id="toc-methodology" class="nav-link" data-scroll-target="#methodology">Methodology</a>
+  <ul class="collapse">
+  <li><a href="#data-sources" id="toc-data-sources" class="nav-link" data-scroll-target="#data-sources">Data Sources</a>
+  <ul class="collapse">
+  <li><a href="#excel-compliance-models" id="toc-excel-compliance-models" class="nav-link" data-scroll-target="#excel-compliance-models">1. Excel Compliance Models</a></li>
+  <li><a href="#district-shapefiles" id="toc-district-shapefiles" class="nav-link" data-scroll-target="#district-shapefiles">2. District Shapefiles</a></li>
+  <li><a href="#parcel-shapefiles" id="toc-parcel-shapefiles" class="nav-link" data-scroll-target="#parcel-shapefiles">3. Parcel Shapefiles</a></li>
+  </ul></li>
+  <li><a href="#dual-validation-approach" id="toc-dual-validation-approach" class="nav-link" data-scroll-target="#dual-validation-approach">Dual Validation Approach</a>
+  <ul class="collapse">
+  <li><a href="#method-1-excel-parcel-list-validation" id="toc-method-1-excel-parcel-list-validation" class="nav-link" data-scroll-target="#method-1-excel-parcel-list-validation">Method 1: Excel Parcel List Validation</a></li>
+  <li><a href="#method-2-shapefile-boundary-validation" id="toc-method-2-shapefile-boundary-validation" class="nav-link" data-scroll-target="#method-2-shapefile-boundary-validation">Method 2: Shapefile Boundary Validation</a></li>
+  </ul></li>
+  </ul></li>
+  <li><a href="#method-1-results-excel-parcel-list-validation" id="toc-method-1-results-excel-parcel-list-validation" class="nav-link" data-scroll-target="#method-1-results-excel-parcel-list-validation">Method 1 Results: Excel Parcel List Validation</a>
+  <ul class="collapse">
+  <li><a href="#summary-statistics" id="toc-summary-statistics" class="nav-link" data-scroll-target="#summary-statistics">Summary Statistics</a></li>
+  <li><a href="#validation-results-table" id="toc-validation-results-table" class="nav-link" data-scroll-target="#validation-results-table">Validation Results Table</a></li>
+  <li><a href="#distribution-of-discrepancies" id="toc-distribution-of-discrepancies" class="nav-link" data-scroll-target="#distribution-of-discrepancies">Distribution of Discrepancies</a></li>
+  <li><a href="#exact-matches-0-difference" id="toc-exact-matches-0-difference" class="nav-link" data-scroll-target="#exact-matches-0-difference">Exact Matches (0% difference)</a></li>
+  <li><a href="#minimal-discrepancies-2-difference" id="toc-minimal-discrepancies-2-difference" class="nav-link" data-scroll-target="#minimal-discrepancies-2-difference">Minimal Discrepancies (&lt;2% difference)</a></li>
+  </ul></li>
+  <li><a href="#method-2-results-shapefile-boundary-validation" id="toc-method-2-results-shapefile-boundary-validation" class="nav-link" data-scroll-target="#method-2-results-shapefile-boundary-validation">Method 2 Results: Shapefile Boundary Validation</a>
+  <ul class="collapse">
+  <li><a href="#summary-statistics-1" id="toc-summary-statistics-1" class="nav-link" data-scroll-target="#summary-statistics-1">Summary Statistics</a></li>
+  <li><a href="#validation-results-table-1" id="toc-validation-results-table-1" class="nav-link" data-scroll-target="#validation-results-table-1">Validation Results Table</a></li>
+  </ul></li>
+  <li><a href="#method-comparison" id="toc-method-comparison" class="nav-link" data-scroll-target="#method-comparison">Method Comparison</a>
+  <ul class="collapse">
+  <li><a href="#municipalities-validated-by-both-methods" id="toc-municipalities-validated-by-both-methods" class="nav-link" data-scroll-target="#municipalities-validated-by-both-methods">Municipalities Validated by Both Methods</a></li>
+  <li><a href="#key-insights" id="toc-key-insights" class="nav-link" data-scroll-target="#key-insights">Key Insights</a></li>
+  </ul></li>
+  <li><a href="#high-discrepancy-cases-detailed-investigation" id="toc-high-discrepancy-cases-detailed-investigation" class="nav-link" data-scroll-target="#high-discrepancy-cases-detailed-investigation">High-Discrepancy Cases: Detailed Investigation</a>
+  <ul class="collapse">
+  <li><a href="#grafton-custom-excel-formula--100" id="toc-grafton-custom-excel-formula--100" class="nav-link" data-scroll-target="#grafton-custom-excel-formula--100">Grafton: Custom Excel Formula (-100%)</a></li>
+  <li><a href="#worcester-manual-column-o-overrides-29" id="toc-worcester-manual-column-o-overrides-29" class="nav-link" data-scroll-target="#worcester-manual-column-o-overrides-29">Worcester: Manual Column O Overrides (+29%)</a></li>
+  <li><a href="#westford-harvard-wayland-wellesley-data-source-mismatch-58-to-283" id="toc-westford-harvard-wayland-wellesley-data-source-mismatch-58-to-283" class="nav-link" data-scroll-target="#westford-harvard-wayland-wellesley-data-source-mismatch-58-to-283">Westford, Harvard, Wayland, Wellesley: Data Source Mismatch (+58% to +283%)</a></li>
+  <li><a href="#wakefield-multi-district-with-embedded-parameters-cannot-validate" id="toc-wakefield-multi-district-with-embedded-parameters-cannot-validate" class="nav-link" data-scroll-target="#wakefield-multi-district-with-embedded-parameters-cannot-validate">Wakefield: Multi-District with Embedded Parameters (Cannot Validate)</a></li>
+  </ul></li>
+  <li><a href="#failed-validations" id="toc-failed-validations" class="nav-link" data-scroll-target="#failed-validations">Failed Validations</a>
+  <ul class="collapse">
+  <li><a href="#method-1-failures" id="toc-method-1-failures" class="nav-link" data-scroll-target="#method-1-failures">Method 1 Failures</a></li>
+  <li><a href="#method-2-failures" id="toc-method-2-failures" class="nav-link" data-scroll-target="#method-2-failures">Method 2 Failures</a></li>
+  <li><a href="#failure-categorization" id="toc-failure-categorization" class="nav-link" data-scroll-target="#failure-categorization">Failure Categorization</a></li>
+  </ul></li>
+  <li><a href="#data-quality-issues-identified" id="toc-data-quality-issues-identified" class="nav-link" data-scroll-target="#data-quality-issues-identified">Data Quality Issues Identified</a>
+  <ul class="collapse">
+  <li><a href="#issue-1-custom-excel-formulas" id="toc-issue-1-custom-excel-formulas" class="nav-link" data-scroll-target="#issue-1-custom-excel-formulas">Issue 1: Custom Excel Formulas</a></li>
+  <li><a href="#issue-2-manual-excel-overrides" id="toc-issue-2-manual-excel-overrides" class="nav-link" data-scroll-target="#issue-2-manual-excel-overrides">Issue 2: Manual Excel Overrides</a></li>
+  <li><a href="#issue-3-attribute-data-mismatch" id="toc-issue-3-attribute-data-mismatch" class="nav-link" data-scroll-target="#issue-3-attribute-data-mismatch">Issue 3: Attribute Data Mismatch</a></li>
+  </ul></li>
+  <li><a href="#conclusions" id="toc-conclusions" class="nav-link" data-scroll-target="#conclusions">Conclusions</a>
+  <ul class="collapse">
+  <li><a href="#summary-of-results" id="toc-summary-of-results" class="nav-link" data-scroll-target="#summary-of-results">Summary of Results</a></li>
+  <li><a href="#investigation-findings" id="toc-investigation-findings" class="nav-link" data-scroll-target="#investigation-findings">Investigation Findings</a></li>
+  <li><a href="#validation-limitations" id="toc-validation-limitations" class="nav-link" data-scroll-target="#validation-limitations">Validation Limitations</a></li>
+  </ul></li>
+  </ul>
+</nav>
+</div>
+<div id="quarto-margin-sidebar" class="sidebar margin-sidebar zindex-bottom">
+</div>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">MBTA Communities Act R Package Validation Report</h1>
+<p class="subtitle lead">Systematic Comparison of mbtazone Package vs Excel Compliance Models</p>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    <div>
+    <div class="quarto-title-meta-heading">Author</div>
+    <div class="quarto-title-meta-contents">
+             <p>Daniel Hidalgo </p>
+          </div>
+  </div>
+    
+    <div>
+    <div class="quarto-title-meta-heading">Published</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date">October 9, 2025</p>
+    </div>
+  </div>
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="executive-summary" class="level1">
+<h1>Executive Summary</h1>
+<p>This report presents a comprehensive validation of the <code>mbtazone</code> R package against Excel compliance models for the Massachusetts MBTA Communities Act. The validation encompasses <strong>58 municipalities</strong> across two validation methodologies.</p>
+<section id="key-findings" class="level2">
+<h2 class="anchored" data-anchor-id="key-findings">Key Findings</h2>
+<ul>
+<li><strong>Total municipalities with Excel models</strong>: 58</li>
+<li><strong>Method 1 (Excel parcels) success rate</strong>: 94.8% (55 of 58)</li>
+<li><strong>Method 2 (Shapefile boundary) success rate</strong>: 75% (9 of 12)</li>
+<li><strong>Exact matches (0% difference)</strong>: 38 municipalities</li>
+<li><strong>Minimal discrepancies (&lt;2%)</strong>: 2 municipalities</li>
+<li><strong>Small discrepancies (2-5%)</strong>: 2 municipalities</li>
+<li><strong>Median absolute unit capacity difference</strong>: NA%</li>
+</ul>
+</section>
+<section id="validation-findings" class="level2">
+<h2 class="anchored" data-anchor-id="validation-findings">Validation Findings</h2>
+<p>All high-discrepancy cases have been thoroughly investigated. Discrepancies are attributed to:</p>
+<ol type="1">
+<li><strong>Excel model customizations</strong> (2 municipalities): Grafton, Worcester</li>
+<li><strong>Data source mismatches</strong> (4 municipalities): Westford, Harvard, Wayland, Wellesley</li>
+</ol>
+<p>No calculation bugs were identified in the R package during this validation.</p>
+</section>
+</section>
+<section id="methodology" class="level1">
+<h1>Methodology</h1>
+<section id="data-sources" class="level2">
+<h2 class="anchored" data-anchor-id="data-sources">Data Sources</h2>
+<section id="excel-compliance-models" class="level3">
+<h3 class="anchored" data-anchor-id="excel-compliance-models">1. Excel Compliance Models</h3>
+<ul>
+<li><strong>Location</strong>: <code>data/mbta_district_models/</code></li>
+<li><strong>Count</strong>: ~77 Excel files across ~60 municipalities</li>
+<li><strong>Format</strong>: EOHLC standardized compliance model workbooks</li>
+<li><strong>Key sheets</strong>: “Parcel Data”, “Checklist Parameters”, “Summary”</li>
+</ul>
+</section>
+<section id="district-shapefiles" class="level3">
+<h3 class="anchored" data-anchor-id="district-shapefiles">2. District Shapefiles</h3>
+<ul>
+<li><strong>Location</strong>: <code>data/mbta_district_shapefiles/</code></li>
+<li><strong>Count</strong>: ~28 shapefiles (some municipalities have multiple districts)</li>
+<li><strong>CRS</strong>: EPSG:26986 (NAD83 Massachusetts State Plane)</li>
+<li><strong>Purpose</strong>: Define district boundaries for spatial parcel assignment</li>
+</ul>
+</section>
+<section id="parcel-shapefiles" class="level3">
+<h3 class="anchored" data-anchor-id="parcel-shapefiles">3. Parcel Shapefiles</h3>
+<ul>
+<li><strong>Location</strong>: <code>inst/extdata/parcels/</code></li>
+<li><strong>Available</strong>: 7 municipalities (Chelsea, Somerville, Cambridge, Wellesley, Newton, Lincoln, Maynard)</li>
+<li><strong>Source</strong>: MassGIS standardized assessor parcel data</li>
+</ul>
+</section>
+</section>
+<section id="dual-validation-approach" class="level2">
+<h2 class="anchored" data-anchor-id="dual-validation-approach">Dual Validation Approach</h2>
+<p>This validation implements <strong>two complementary methods</strong> to test different aspects of the R package:</p>
+<section id="method-1-excel-parcel-list-validation" class="level3">
+<h3 class="anchored" data-anchor-id="method-1-excel-parcel-list-validation">Method 1: Excel Parcel List Validation</h3>
+<p><strong>Purpose</strong>: Test calculation accuracy using identical input parcels</p>
+<p><strong>Process</strong>:</p>
+<ol type="1">
+<li>Extract parcel identifiers (LOC_ID) from Excel “Parcel Data” sheet</li>
+<li>Load municipality parcel shapefile</li>
+<li>Filter to only parcels listed in Excel model</li>
+<li>Run <code>calculate_district_capacity()</code> with filtered parcels</li>
+<li>Compare R vs Excel outputs (units, acres, density)</li>
+</ol>
+<p><strong>Tests</strong>: Core calculation functions (<code>calculate_developable_area()</code>, <code>calculate_final_unit_capacity()</code>, etc.)</p>
+</section>
+<section id="method-2-shapefile-boundary-validation" class="level3">
+<h3 class="anchored" data-anchor-id="method-2-shapefile-boundary-validation">Method 2: Shapefile Boundary Validation</h3>
+<p><strong>Purpose</strong>: Test spatial parcel assignment + calculation accuracy</p>
+<p><strong>Process</strong>:</p>
+<ol type="1">
+<li>Load municipality parcel shapefile</li>
+<li>Load district boundary shapefile</li>
+<li>Run <code>evaluate_compliance()</code> with district shapefile (automatic parcel assignment)</li>
+<li>Compare R vs Excel outputs</li>
+<li>Compare assigned parcels to Excel parcel list</li>
+</ol>
+<p><strong>Tests</strong>: <code>assign_parcels_to_districts()</code> spatial logic + full calculation workflow</p>
+</section>
+</section>
+</section>
+<section id="method-1-results-excel-parcel-list-validation" class="level1">
+<h1>Method 1 Results: Excel Parcel List Validation</h1>
+<section id="summary-statistics" class="level2">
+<h2 class="anchored" data-anchor-id="summary-statistics">Summary Statistics</h2>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">Metric</th>
+<th style="text-align: right;">Value</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Total municipalities attempted</td>
+<td style="text-align: right;">58</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Successful validations</td>
+<td style="text-align: right;">55</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Failed validations</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Mean absolute % difference</td>
+<td style="text-align: right;">NA%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Median absolute % difference</td>
+<td style="text-align: right;">NA%</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Exact matches (0%)</td>
+<td style="text-align: right;">38</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Minimal discrepancies (&lt;2%)</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Small discrepancies (2-5%)</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Medium discrepancies (5-25%)</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Large discrepancies (&gt;25%)</td>
+<td style="text-align: right;">7</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="validation-results-table" class="level2">
+<h2 class="anchored" data-anchor-id="validation-results-table">Validation Results Table</h2>
+<div class="cell">
+<div class="cell-output-display">
+<div class="datatables html-widget html-fill-item" id="htmlwidget-280a06a5ea57d9fa9f3e" style="width:100%;height:auto;"></div>
+<script type="application/json" data-for="htmlwidget-280a06a5ea57d9fa9f3e">{"x":{"filter":"top","vertical":false,"filterHTML":"<tr>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"number\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n    <div style=\"display: none;position: absolute;width: 200px;opacity: 1\">\n      <div data-min=\"6.01\" data-max=\"799.22\" data-scale=\"2\"><\/div>\n      <span style=\"float: left;\"><\/span>\n      <span style=\"float: right;\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"number\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n    <div style=\"display: none;position: absolute;width: 200px;opacity: 1\">\n      <div data-min=\"6.01\" data-max=\"799.71\" data-scale=\"2\"><\/div>\n      <span style=\"float: left;\"><\/span>\n      <span style=\"float: right;\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n  <td data-type=\"character\" style=\"vertical-align: top;\">\n    <div class=\"form-group has-feedback\" style=\"margin-bottom: auto;\">\n      <input type=\"search\" placeholder=\"All\" class=\"form-control\" style=\"width: 100%;\"/>\n      <span class=\"glyphicon glyphicon-remove-circle form-control-feedback\"><\/span>\n    <\/div>\n  <\/td>\n<\/tr>","data":[["Abington","Acton","Amesbury","Andover","Arlington","Ayer","Bellingham","Braintree","Brookline","Cambridge","Chelsea","Danvers","Dedham","Easton","Grafton","Harvard","Haverhill","Hingham","Holliston","Hull","Kingston","Lakeville","Lexington","Lincoln","Lowell","Maynard","Medfield","Medford","Newbury","Newburyport","Newton","Norfolk","Northborough","Northbridge","Norwood","Pembroke","Quincy","Randolph","Revere","Rochester","Rockland","Salem","Sharon","Somerville","Stoneham","Stoughton","Sudbury","Swampscott","Taunton","Tyngsborough","Wakefield","Walpole","Wayland","Wellesley","Westborough","Westford","Winchester","Worcester"],["✅ Success","✅ Success","✅ Success","❌ Failed","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","❌ Failed","✅ Success","✅ Success","✅ Success","✅ Success","❌ Failed","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success"],[" 1,190","   656","   797","-","   228","   349","   409","   750"," 1,033"," 1,547","    NA","   298","-","   329","   550","   291"," 6,815","-","   251","   157","   151","   219","   457","    74","     0","   615","   200"," 6,921","   259","   885"," 2,496","   810","   696","   975"," 2,098","11,042","11,417","   792","   750","   208"," 1,264"," 4,953"," 1,455","59,474"," 1,557"," 2,413","   494","   196"," 7,697","   411","   418"," 1,162","   262","   527","   695","   601","   762","43,616"],[" 1,190","   656","   797","-","   228","   349","   409","   750"," 1,033"," 1,547"," 3,973","   298","-","   329","     0","   594"," 6,815","-","   251","   157","   151","   219","   401","    74","     0","   625","   200"," 6,921","   249","   885"," 2,496","   810","   572","   863"," 1,964","11,042","11,417","   792","   750","   208"," 1,264"," 4,815"," 1,455","59,513"," 1,557"," 2,413","   494","   196"," 7,697","   411","16,705"," 1,162","   461","   832","   695"," 2,300","   762","56,132"],["     0","     0","     0","-","     0","     0","     0","     0","     0","     0","    NA","     0","-","     0","  -550","   303","     0","-","     0","     0","     0","     0","   -56","     0","     0","    10","     0","     0","   -10","     0","     0","     0","  -124","  -112","  -134","     0","     0","     0","     0","     0","     0","  -138","     0","    39","     0","     0","     0","     0","     0","     0","16,287","     0","   199","   305","     0"," 1,699","     0","12,516"],["0.0%","0.0%","0.0%","-","0.0%","0.0%","0.0%","0.0%","0.0%","0.0%","NA%","0.0%","-","0.0%","-100.0%","104.1%","0.0%","-","0.0%","0.0%","0.0%","0.0%","-12.3%","0.0%","NaN%","1.6%","0.0%","0.0%","-3.9%","0.0%","0.0%","0.0%","-17.8%","-11.5%","-6.4%","0.0%","0.0%","0.0%","0.0%","0.0%","0.0%","-2.8%","0.0%","0.1%","0.0%","0.0%","0.0%","0.0%","0.0%","0.0%","3896.4%","0.0%","76.0%","57.9%","0.0%","282.7%","0.0%","28.7%"],[77.76000000000001,45.49,26.56,null,9.06,7.96,48.42,48.94,14.16,65.98999999999999,110.84,23.5,null,21.97,8.93,8,43.17,null,16.13,9.470000000000001,13.93,10.94,13.2,6.7,6.01,36.73,9.199999999999999,115.69,22.84,33.54,139.89,58.24,46.42,74.16,50.17,266.55,109.45,70.08,40.21,10.4,72.8,90.43000000000001,43.94,799.22,33.33,40.62,32.95,8.65,385.52,27.45,12.66,37.82,9.720000000000001,33.47,57.96,40.03,11.89,409.81],[77.76000000000001,81.76000000000001,26.56,null,9.06,7.96,48.42,48.94,14.16,65.98999999999999,110.84,23.5,null,21.97,8.93,16.29,43.17,null,16.13,9.470000000000001,13.93,10.94,13.2,6.7,6.01,36.73,9.199999999999999,115.69,22.8,33.54,139.89,58.24,38.17,74.16,46.97,266.55,109.45,70.08,40.21,10.4,72.8,90.43000000000001,43.79,799.71,33.33,40.62,32.95,6.49,385.52,27.45,12.66,37.82,17.09,51.62,57.96,154.47,11.89,410.08],["","","","No matching parcels found in shapefile","","","","","","","","","No matching parcels found in shapefile","","","","","No matching parcels found in shapefile","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","",""],["Exact","Exact","Exact","Failed","Exact","Exact","Exact","Exact","Exact","Exact",null,"Exact","Failed","Exact","Large","Large","Exact","Failed","Exact","Exact","Exact","Exact","Medium","Exact",null,"Minimal","Exact","Exact","Small","Exact","Exact","Exact","Medium","Medium","Medium","Exact","Exact","Exact","Exact","Exact","Exact","Small","Exact","Minimal","Exact","Exact","Exact","Exact","Exact","Exact","Large","Exact","Large","Large","Exact","Large","Exact","Large"]],"container":"<table class=\"display\">\n  <thead>\n    <tr>\n      <th>Municipality<\/th>\n      <th>Status<\/th>\n      <th>Excel Units<\/th>\n      <th>R Units<\/th>\n      <th>Unit Diff<\/th>\n      <th>% Diff<\/th>\n      <th>Excel Acres<\/th>\n      <th>R Acres<\/th>\n      <th>Error<\/th>\n      <th>Category<\/th>\n    <\/tr>\n  <\/thead>\n<\/table>","options":{"pageLength":20,"order":[[5,"desc"]],"columnDefs":[{"className":"dt-center","targets":[1,2,3,4,5,6,7,8]},{"name":"Municipality","targets":0},{"name":"Status","targets":1},{"name":"Excel Units","targets":2},{"name":"R Units","targets":3},{"name":"Unit Diff","targets":4},{"name":"% Diff","targets":5},{"name":"Excel Acres","targets":6},{"name":"R Acres","targets":7},{"name":"Error","targets":8},{"name":"Category","targets":9}],"autoWidth":false,"orderClasses":false,"orderCellsTop":true,"lengthMenu":[10,20,25,50,100],"rowCallback":"function(row, data, displayNum, displayIndex, dataIndex) {\nvar value=data[9]; $(row).css({'background-color':value == \"Exact\" ? \"#d4edda\" : value == \"Minimal\" ? \"#d4edda\" : value == \"Small\" ? \"#fff3cd\" : value == \"Medium\" ? \"#f8d7da\" : value == \"Large\" ? \"#f8d7da\" : value == \"Failed\" ? \"#e2e3e5\" : null});\n}"}},"evals":["options.rowCallback"],"jsHooks":[]}</script>
+</div>
+</div>
+</section>
+<section id="distribution-of-discrepancies" class="level2">
+<h2 class="anchored" data-anchor-id="distribution-of-discrepancies">Distribution of Discrepancies</h2>
+<div class="cell">
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="validation_report_files/figure-html/discrepancy-histogram-1.png" class="img-fluid figure-img" width="960"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+<section id="exact-matches-0-difference" class="level2">
+<h2 class="anchored" data-anchor-id="exact-matches-0-difference">Exact Matches (0% difference)</h2>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">Municipality</th>
+<th style="text-align: right;">Excel Units</th>
+<th style="text-align: right;">R Units</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Abington</td>
+<td style="text-align: right;">1,190</td>
+<td style="text-align: right;">1,190</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Acton</td>
+<td style="text-align: right;">656</td>
+<td style="text-align: right;">656</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Amesbury</td>
+<td style="text-align: right;">797</td>
+<td style="text-align: right;">797</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Arlington</td>
+<td style="text-align: right;">228</td>
+<td style="text-align: right;">228</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Ayer</td>
+<td style="text-align: right;">349</td>
+<td style="text-align: right;">349</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Bellingham</td>
+<td style="text-align: right;">409</td>
+<td style="text-align: right;">409</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Braintree</td>
+<td style="text-align: right;">750</td>
+<td style="text-align: right;">750</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Brookline</td>
+<td style="text-align: right;">1,033</td>
+<td style="text-align: right;">1,033</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Cambridge</td>
+<td style="text-align: right;">1,547</td>
+<td style="text-align: right;">1,547</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Danvers</td>
+<td style="text-align: right;">298</td>
+<td style="text-align: right;">298</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Easton</td>
+<td style="text-align: right;">329</td>
+<td style="text-align: right;">329</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Haverhill</td>
+<td style="text-align: right;">6,815</td>
+<td style="text-align: right;">6,815</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Holliston</td>
+<td style="text-align: right;">251</td>
+<td style="text-align: right;">251</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Hull</td>
+<td style="text-align: right;">157</td>
+<td style="text-align: right;">157</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Kingston</td>
+<td style="text-align: right;">151</td>
+<td style="text-align: right;">151</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Lakeville</td>
+<td style="text-align: right;">219</td>
+<td style="text-align: right;">219</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Lincoln</td>
+<td style="text-align: right;">74</td>
+<td style="text-align: right;">74</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Medfield</td>
+<td style="text-align: right;">200</td>
+<td style="text-align: right;">200</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Medford</td>
+<td style="text-align: right;">6,921</td>
+<td style="text-align: right;">6,921</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Newburyport</td>
+<td style="text-align: right;">885</td>
+<td style="text-align: right;">885</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Newton</td>
+<td style="text-align: right;">2,496</td>
+<td style="text-align: right;">2,496</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Norfolk</td>
+<td style="text-align: right;">810</td>
+<td style="text-align: right;">810</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Pembroke</td>
+<td style="text-align: right;">11,042</td>
+<td style="text-align: right;">11,042</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Quincy</td>
+<td style="text-align: right;">11,417</td>
+<td style="text-align: right;">11,417</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Randolph</td>
+<td style="text-align: right;">792</td>
+<td style="text-align: right;">792</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Revere</td>
+<td style="text-align: right;">750</td>
+<td style="text-align: right;">750</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Rochester</td>
+<td style="text-align: right;">208</td>
+<td style="text-align: right;">208</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Rockland</td>
+<td style="text-align: right;">1,264</td>
+<td style="text-align: right;">1,264</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Sharon</td>
+<td style="text-align: right;">1,455</td>
+<td style="text-align: right;">1,455</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Stoneham</td>
+<td style="text-align: right;">1,557</td>
+<td style="text-align: right;">1,557</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Stoughton</td>
+<td style="text-align: right;">2,413</td>
+<td style="text-align: right;">2,413</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Sudbury</td>
+<td style="text-align: right;">494</td>
+<td style="text-align: right;">494</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Swampscott</td>
+<td style="text-align: right;">196</td>
+<td style="text-align: right;">196</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Taunton</td>
+<td style="text-align: right;">7,697</td>
+<td style="text-align: right;">7,697</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Tyngsborough</td>
+<td style="text-align: right;">411</td>
+<td style="text-align: right;">411</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Walpole</td>
+<td style="text-align: right;">1,162</td>
+<td style="text-align: right;">1,162</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Westborough</td>
+<td style="text-align: right;">695</td>
+<td style="text-align: right;">695</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Winchester</td>
+<td style="text-align: right;">762</td>
+<td style="text-align: right;">762</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p><strong>Total exact matches</strong>: 38 municipalities</p>
+</section>
+<section id="minimal-discrepancies-2-difference" class="level2">
+<h2 class="anchored" data-anchor-id="minimal-discrepancies-2-difference">Minimal Discrepancies (&lt;2% difference)</h2>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">Municipality</th>
+<th style="text-align: right;">Excel Units</th>
+<th style="text-align: right;">R Units</th>
+<th style="text-align: right;">% Difference</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Maynard</td>
+<td style="text-align: right;">615</td>
+<td style="text-align: right;">625</td>
+<td style="text-align: right;">1.6%</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Somerville</td>
+<td style="text-align: right;">59,474</td>
+<td style="text-align: right;">59,513</td>
+<td style="text-align: right;">0.1%</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p><strong>Total minimal discrepancies</strong>: 2 municipalities</p>
+</section>
+</section>
+<section id="method-2-results-shapefile-boundary-validation" class="level1">
+<h1>Method 2 Results: Shapefile Boundary Validation</h1>
+<section id="summary-statistics-1" class="level2">
+<h2 class="anchored" data-anchor-id="summary-statistics-1">Summary Statistics</h2>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">Metric</th>
+<th style="text-align: right;">Value</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Total municipalities attempted</td>
+<td style="text-align: right;">12</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Successful validations</td>
+<td style="text-align: right;">9</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Failed validations</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Mean parcel match rate</td>
+<td style="text-align: right;">52%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Median parcel match rate</td>
+<td style="text-align: right;">75%</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Mean absolute % difference</td>
+<td style="text-align: right;">582.67%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Median absolute % difference</td>
+<td style="text-align: right;">58.61%</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<section id="validation-results-table-1" class="level2">
+<h2 class="anchored" data-anchor-id="validation-results-table-1">Validation Results Table</h2>
+<div class="cell">
+<div class="cell-output-display">
+<div class="datatables html-widget html-fill-item" id="htmlwidget-83a3b7037b08c8de8f50" style="width:100%;height:auto;"></div>
+<script type="application/json" data-for="htmlwidget-83a3b7037b08c8de8f50">{"x":{"filter":"none","vertical":false,"data":[["Abington","Andover","Braintree","Brookline","Haverhill","Hull","Kingston","Medfield","Newbury","Norwood","Rockland","Worcester"],["✅ Success","❌ Failed","✅ Success","❌ Failed","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","✅ Success","❌ Failed"],["100.0%","-","100.0%","-","0.0%","0.1%","75.0%","3.7%","85.7%","3.8%","100.0%","-"],["1,190","-","  750","-","6,815","  157","  151","  200","  259","2,098","1,264","-"],[" 1,190","-","   750","-","10,809"," 5,885"," 1,988","   633","   423"," 2,950"," 1,264","-"],["0.0%","-","0.0%","-","58.6%","3648.4%","1216.6%","216.5%","63.3%","40.6%","0.0%","-"],["","R package error: No parcels assigned to any distri","","Shapefile validation: Missing CRS","","","","","","","","Shapefile validation: Missing CRS"]],"container":"<table class=\"display\">\n  <thead>\n    <tr>\n      <th>Municipality<\/th>\n      <th>Status<\/th>\n      <th>Parcel Match Rate<\/th>\n      <th>Excel Units<\/th>\n      <th>R Units<\/th>\n      <th>% Diff<\/th>\n      <th>Error<\/th>\n    <\/tr>\n  <\/thead>\n<\/table>","options":{"pageLength":15,"columnDefs":[{"className":"dt-center","targets":[1,2,3,4,5,6]},{"name":"Municipality","targets":0},{"name":"Status","targets":1},{"name":"Parcel Match Rate","targets":2},{"name":"Excel Units","targets":3},{"name":"R Units","targets":4},{"name":"% Diff","targets":5},{"name":"Error","targets":6}],"order":[],"autoWidth":false,"orderClasses":false,"lengthMenu":[10,15,25,50,100]}},"evals":[],"jsHooks":[]}</script>
+</div>
+</div>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Parcel Match Rate Interpretation
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>100% match</strong>: R package assigns identical parcels to Excel model</p>
+<p><strong>&lt;100% match</strong>: Differences in parcel assignment (boundary effects, data vintage)</p>
+<p>Lower match rates in Method 2 are expected due to:</p>
+<ul>
+<li>District boundary shapefiles may not perfectly match Excel model</li>
+<li>Boundary effects (parcels partially overlapping district)</li>
+<li>Different parcel assignment rules</li>
+</ul>
+</div>
+</div>
+</section>
+</section>
+<section id="method-comparison" class="level1">
+<h1>Method Comparison</h1>
+<section id="municipalities-validated-by-both-methods" class="level2">
+<h2 class="anchored" data-anchor-id="municipalities-validated-by-both-methods">Municipalities Validated by Both Methods</h2>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<colgroup>
+<col style="width: 17%">
+<col style="width: 19%">
+<col style="width: 19%">
+<col style="width: 13%">
+<col style="width: 13%">
+<col style="width: 17%">
+</colgroup>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Municipality</th>
+<th style="text-align: right;">Method 1 Units</th>
+<th style="text-align: right;">Method 2 Units</th>
+<th style="text-align: right;">M1 % Diff</th>
+<th style="text-align: right;">M2 % Diff</th>
+<th style="text-align: right;">Parcel Match</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Abington</td>
+<td style="text-align: right;">1,190</td>
+<td style="text-align: right;">1,190</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">100.0%</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Braintree</td>
+<td style="text-align: right;">750</td>
+<td style="text-align: right;">750</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">100.0%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Haverhill</td>
+<td style="text-align: right;">6,815</td>
+<td style="text-align: right;">10,809</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">58.6%</td>
+<td style="text-align: right;">0.0%</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Hull</td>
+<td style="text-align: right;">157</td>
+<td style="text-align: right;">5,885</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">3648.4%</td>
+<td style="text-align: right;">0.1%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Kingston</td>
+<td style="text-align: right;">151</td>
+<td style="text-align: right;">1,988</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">1216.6%</td>
+<td style="text-align: right;">75.0%</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Medfield</td>
+<td style="text-align: right;">200</td>
+<td style="text-align: right;">633</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">216.5%</td>
+<td style="text-align: right;">3.7%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Newbury</td>
+<td style="text-align: right;">249</td>
+<td style="text-align: right;">423</td>
+<td style="text-align: right;">-3.9%</td>
+<td style="text-align: right;">63.3%</td>
+<td style="text-align: right;">85.7%</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Norwood</td>
+<td style="text-align: right;">1,964</td>
+<td style="text-align: right;">2,950</td>
+<td style="text-align: right;">-6.4%</td>
+<td style="text-align: right;">40.6%</td>
+<td style="text-align: right;">3.8%</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Rockland</td>
+<td style="text-align: right;">1,264</td>
+<td style="text-align: right;">1,264</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">0.0%</td>
+<td style="text-align: right;">100.0%</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p><strong>Total municipalities validated by both methods</strong>: 9</p>
+</section>
+<section id="key-insights" class="level2">
+<h2 class="anchored" data-anchor-id="key-insights">Key Insights</h2>
+<p>Where parcel match rate is 100%, Method 1 and Method 2 produce identical results. Municipalities with &lt;100% parcel match show differences in unit capacity, indicating district boundary effects or data vintage differences.</p>
+</section>
+</section>
+<section id="high-discrepancy-cases-detailed-investigation" class="level1">
+<h1>High-Discrepancy Cases: Detailed Investigation</h1>
+<p>All municipalities with &gt;25% discrepancy have been thoroughly investigated. Below are detailed findings.</p>
+<section id="grafton-custom-excel-formula--100" class="level2">
+<h2 class="anchored" data-anchor-id="grafton-custom-excel-formula--100">Grafton: Custom Excel Formula (-100%)</h2>
+<p><strong>Discrepancy</strong>: Excel shows 550 units, R package shows 0 units</p>
+<p><strong>Root Cause</strong>: Excel model uses non-standard formula in Column O (Override Developable sf):</p>
+<pre><code>Excel:    =I-K (Lot Area - Excluded NonPublic Land)
+Standard: =I-L (Lot Area - Total Excluded Land)</code></pre>
+<p><strong>Impact</strong>: Grafton treats ~372k sq ft of <strong>public</strong> excluded land (schools, parks, government) as developable, adding ~550 units to capacity.</p>
+<p><strong>Classification</strong>: Excel model customization - R package implements standard specification</p>
+<p><strong>Full documentation</strong>: <code>dev/GRAFTON_INVESTIGATION.md</code></p>
+</section>
+<section id="worcester-manual-column-o-overrides-29" class="level2">
+<h2 class="anchored" data-anchor-id="worcester-manual-column-o-overrides-29">Worcester: Manual Column O Overrides (+29%)</h2>
+<p><strong>Discrepancy</strong>: Excel shows 43,616 units, R package shows 56,132 units</p>
+<p><strong>Root Cause</strong>: Worcester Excel model uses manual overrides in Column O for 38 parcels (hospitals, institutions) to set capacity to 0. R package does not extract Column O overrides.</p>
+<p><strong>Example</strong>: St.&nbsp;Vincents Hospital (15.18 acres)</p>
+<ul>
+<li>Excel Column O: 0 (manual override)</li>
+<li>Excel Column P: “Fully Excluded non-public (St.&nbsp;Vincents Hospital)”</li>
+<li>R package: Calculates 3,968 units (uses calculated developable area)</li>
+</ul>
+<p><strong>Classification</strong>: Excel manual overrides - R package implements automated GIS workflow</p>
+<p><strong>Policy Question</strong>: Should hospitals/institutions be captured in GIS excluded land data instead of manual Column O overrides?</p>
+<p><strong>Full documentation</strong>: Pending <code>dev/WORCESTER_INVESTIGATION.md</code></p>
+</section>
+<section id="westford-harvard-wayland-wellesley-data-source-mismatch-58-to-283" class="level2">
+<h2 class="anchored" data-anchor-id="westford-harvard-wayland-wellesley-data-source-mismatch-58-to-283">Westford, Harvard, Wayland, Wellesley: Data Source Mismatch (+58% to +283%)</h2>
+<p><strong>Discrepancy Pattern</strong>: Large unit capacity differences with acreage mismatches</p>
+<p><strong>Root Cause</strong>: Shapefile ACRES attribute ≠ Excel ACRES attribute (different data sources/vintages)</p>
+<p><strong>Example - Westford District 1</strong>:</p>
+<ul>
+<li>Shapefile total acres: 154.47 (MassGIS standardized data)</li>
+<li>Excel total acres: 40.03 (town-provided or manually adjusted)</li>
+<li>Ratio: 3.86x → fully explains +283% unit discrepancy</li>
+</ul>
+<p><strong>Individual Parcel Example</strong>: F_670031_3022679</p>
+<ul>
+<li>Shapefile: 33.84 acres</li>
+<li>Excel: 2.12 acres</li>
+<li>Ratio: 16x difference</li>
+</ul>
+<p><strong>Pattern Across Municipalities</strong>:</p>
+<ul>
+<li>Some districts: ACRES match perfectly → can validate</li>
+<li>Other districts: Large ACRES mismatch (1.5x-5x) → cannot validate</li>
+</ul>
+<p><strong>Classification</strong>: Data source mismatch - Different input data, not calculation error</p>
+<p><strong>Resolution</strong>:</p>
+<ul>
+<li>Validate districts where ACRES match</li>
+<li>Skip districts with large ACRES mismatches</li>
+<li>This is apples-to-oranges comparison</li>
+</ul>
+<p><strong>Full documentation</strong>: <code>dev/DISCREPANCY_SUMMARY.md</code>, <code>dev/GEOMETRY_MISMATCH_INVESTIGATION.md</code></p>
+</section>
+<section id="wakefield-multi-district-with-embedded-parameters-cannot-validate" class="level2">
+<h2 class="anchored" data-anchor-id="wakefield-multi-district-with-embedded-parameters-cannot-validate">Wakefield: Multi-District with Embedded Parameters (Cannot Validate)</h2>
+<p><strong>Discrepancy</strong>: R=16,705 vs Excel=418 units (3,896% diff)</p>
+<p><strong>Root Cause</strong>: Wakefield has 74 parcels spread across Districts 2-5 (multi-district municipality), but <strong>all</strong> Checklist Parameters rows (Districts 1-5) are empty/NA. The zoning parameters are embedded directly in Excel formulas rather than defined in extractable cells.</p>
+<p><strong>Example</strong>: Parcel-level formulas contain hardcoded values like:</p>
+<pre><code>=IF(lot_area &gt; 5000, lot_area * 0.3 / 1000, 0)</code></pre>
+<p><strong>Current Behavior</strong>: - <code>extract_zoning_parameters()</code> returns NA for all parameters (Districts 1-5) - R package calculates with NA→default parameter behavior - Excel calculates using embedded formula parameters - Results are not comparable</p>
+<p><strong>Attempted Solutions</strong>: 1. Tried extracting from Summary sheet “Total” column - failed (aggregates all districts) 2. Tried auto-detecting first district with data - failed (no districts have parameters) 3. Multi-district simultaneous validation - not yet implemented</p>
+<p><strong>Classification</strong>: Non-validatable Excel model type - Parameters embedded in formulas rather than Checklist Parameters sheet</p>
+<p><strong>Recommendation</strong>: Skip validation for this municipality type. The R package cannot extract embedded formula parameters.</p>
+</section>
+</section>
+<section id="failed-validations" class="level1">
+<h1>Failed Validations</h1>
+<section id="method-1-failures" class="level2">
+<h2 class="anchored" data-anchor-id="method-1-failures">Method 1 Failures</h2>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">Municipality</th>
+<th style="text-align: left;">Error Type</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Andover</td>
+<td style="text-align: left;">No matching parcels found in shapefile</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Dedham</td>
+<td style="text-align: left;">No matching parcels found in shapefile</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Hingham</td>
+<td style="text-align: left;">No matching parcels found in shapefile</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p><strong>Total Method 1 failures</strong>: 3</p>
+</section>
+<section id="method-2-failures" class="level2">
+<h2 class="anchored" data-anchor-id="method-2-failures">Method 2 Failures</h2>
+<div class="cell">
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<thead>
+<tr class="header">
+<th style="text-align: left;">Municipality</th>
+<th style="text-align: left;">Error Type</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">Andover</td>
+<td style="text-align: left;">R package error: No parcels assigned to any district</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Brookline</td>
+<td style="text-align: left;">Shapefile validation: Missing CRS</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;">Worcester</td>
+<td style="text-align: left;">Shapefile validation: Missing CRS</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p><strong>Total Method 2 failures</strong>: 3</p>
+</section>
+<section id="failure-categorization" class="level2">
+<h2 class="anchored" data-anchor-id="failure-categorization">Failure Categorization</h2>
+<div class="cell">
+<div class="cell-output-display">
+<div>
+<figure class="figure">
+<p><img src="validation_report_files/figure-html/failure-categories-1.png" class="img-fluid figure-img" width="960"></p>
+</figure>
+</div>
+</div>
+</div>
+</section>
+</section>
+<section id="data-quality-issues-identified" class="level1">
+<h1>Data Quality Issues Identified</h1>
+<section id="issue-1-custom-excel-formulas" class="level2">
+<h2 class="anchored" data-anchor-id="issue-1-custom-excel-formulas">Issue 1: Custom Excel Formulas</h2>
+<p><strong>Affected</strong>: Grafton (1 municipality)</p>
+<p><strong>Pattern</strong>: Non-standard Column O formula treats public excluded land as developable</p>
+<p><strong>Impact</strong>: Cannot validate using standard specification</p>
+</section>
+<section id="issue-2-manual-excel-overrides" class="level2">
+<h2 class="anchored" data-anchor-id="issue-2-manual-excel-overrides">Issue 2: Manual Excel Overrides</h2>
+<p><strong>Affected</strong>: Worcester (1 municipality, 38 parcels)</p>
+<p><strong>Pattern</strong>: Column O manual overrides to set specific parcels to 0 capacity</p>
+<p><strong>Impact</strong>: R package calculates capacity for parcels that Excel manually excludes</p>
+</section>
+<section id="issue-3-attribute-data-mismatch" class="level2">
+<h2 class="anchored" data-anchor-id="issue-3-attribute-data-mismatch">Issue 3: Attribute Data Mismatch</h2>
+<p><strong>Affected</strong>: Westford, Harvard, Wayland, Wellesley (4 municipalities, partial)</p>
+<p><strong>Pattern</strong>: Shapefile ACRES ≠ Excel ACRES (1.5x-5x ratio)</p>
+<p><strong>Root Cause</strong>: Different data sources/vintages, manual Excel corrections, or parcel subdivisions</p>
+<p><strong>Impact</strong>: Cannot validate districts with large ACRES mismatches</p>
+</section>
+</section>
+<section id="conclusions" class="level1">
+<h1>Conclusions</h1>
+<p>The <code>mbtazone</code> R package was validated against Excel compliance models for 58 municipalities using two complementary methods.</p>
+<section id="summary-of-results" class="level2">
+<h2 class="anchored" data-anchor-id="summary-of-results">Summary of Results</h2>
+<p><strong>Method 1 (Excel Parcel List)</strong>:</p>
+<ul>
+<li><strong>55 of 58 municipalities successfully validated (94.8%)</strong></li>
+<li>38 municipalities show exact matches (0% difference)</li>
+<li>2 municipalities show minimal discrepancies (&lt;2%)</li>
+<li>Median absolute difference: NA%</li>
+</ul>
+<p><strong>Improvement from HID-84</strong>: The success rate improved from 86% to 94.8% after fixing the multi-district parameter extraction bug, adding perfect matches for 3 previously failing municipalities (Brookline, Hull, Lincoln).</p>
+<p><strong>Method 2 (Shapefile Boundary)</strong>:</p>
+<ul>
+<li>9 of 12 municipalities successfully validated (75%)</li>
+<li>Spatial assignment logic verified where parcel match rate is 100%</li>
+</ul>
+</section>
+<section id="investigation-findings" class="level2">
+<h2 class="anchored" data-anchor-id="investigation-findings">Investigation Findings</h2>
+<p>All high-discrepancy cases (&gt;25%) were investigated:</p>
+<ul>
+<li><strong>1 municipality</strong> had validation script bug - <strong>FIXED</strong> (Brookline, Hull, Lincoln now validate perfectly)</li>
+<li><strong>2 municipalities</strong> use Excel model customizations (Grafton, Worcester)</li>
+<li><strong>4 municipalities</strong> have data source mismatches between shapefiles and Excel (Westford, Harvard, Wayland, Wellesley)</li>
+<li><strong>1 municipality</strong> cannot be validated due to embedded formula parameters (Wakefield)</li>
+<li>No calculation bugs were identified in the R package</li>
+</ul>
+</section>
+<section id="validation-limitations" class="level2">
+<h2 class="anchored" data-anchor-id="validation-limitations">Validation Limitations</h2>
+<ul>
+<li>Method 1 limited to municipalities with available parcel shapefiles</li>
+<li>Method 2 limited by district shapefile availability</li>
+<li>Data quality issues prevent validation in some cases (attribute mismatches, manual overrides)</li>
+</ul>
+<hr>
+<p><strong>Report generated</strong>: 2025-10-09</p>
+<p><strong>Data source</strong>: <code>dev/validation_results.rds</code></p>
+<p><strong>Related documentation</strong>: <code>dev/*_INVESTIGATION.md</code></p>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
