@@ -59,17 +59,132 @@ list_community_excel_files <- function(community) {
   files
 }
 
-#' Get District Sheet Names from Excel File
+#' Get District Sheet Names from Excel File (Robust)
+#'
+#' Handles multiple naming conventions:
+#' - Standard: "District 1", "District 2"
+#' - With suffixes: "District 1 MFOH", "District 2 MFOM Excl. HCID"
+#' - Non-standard: "B5", custom district names (assigned to missing district numbers)
 #'
 #' @param excel_path Path to Excel compliance model file
-#' @return Character vector of district sheet names (e.g., "District 1", "District 2")
+#' @return data.frame with columns: sheet_name, district_num, is_standard
 get_district_sheets <- function(excel_path) {
   all_sheets <- readxl::excel_sheets(excel_path)
 
-  # Filter for District sheets
-  district_sheets <- all_sheets[grepl("^District \\d+$", all_sheets)]
+  # Known non-district sheets to exclude
+  exclude_patterns <- c(
+    "^Introduction$",
+    "^Checklist",
+    "^Zoning Input",
+    "^Summary$",
+    "^Formula Matrix$",
+    "^Community Info$"
+  )
 
-  district_sheets
+  # Filter out known non-district sheets
+  candidate_sheets <- all_sheets
+  for (pattern in exclude_patterns) {
+    candidate_sheets <- candidate_sheets[!grepl(pattern, candidate_sheets, ignore.case = TRUE)]
+  }
+
+  # Separate standard and non-standard sheets
+  standard_sheets <- list()
+  nonstandard_sheets <- character()
+
+  for (sheet in candidate_sheets) {
+    # Check if it starts with "District" followed by a number
+    if (grepl("^District\\s+\\d+", sheet)) {
+      # Extract district number
+      dist_num <- as.integer(sub("^District\\s+(\\d+).*", "\\1", sheet))
+      is_std <- grepl("^District\\s+\\d+$", sheet)
+
+      standard_sheets[[length(standard_sheets) + 1]] <- list(
+        sheet_name = sheet,
+        district_num = dist_num,
+        is_standard = is_std
+      )
+    } else {
+      # Non-standard naming
+      nonstandard_sheets <- c(nonstandard_sheets, sheet)
+    }
+  }
+
+  # Convert standard sheets to data frame
+  if (length(standard_sheets) > 0) {
+    standard_df <- do.call(rbind, lapply(standard_sheets, function(x) {
+      data.frame(
+        sheet_name = x$sheet_name,
+        district_num = x$district_num,
+        is_standard = x$is_standard,
+        stringsAsFactors = FALSE
+      )
+    }))
+  } else {
+    standard_df <- data.frame(
+      sheet_name = character(),
+      district_num = integer(),
+      is_standard = logical(),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  # For non-standard sheets, assign to missing district numbers
+  if (length(nonstandard_sheets) > 0) {
+    # Find which district numbers are used
+    used_nums <- standard_df$district_num
+    max_dist <- if (length(used_nums) > 0) max(used_nums) else 0
+
+    # Find missing district numbers from 1 to max
+    all_nums <- 1:max(max_dist, length(nonstandard_sheets))
+    missing_nums <- setdiff(all_nums, used_nums)
+
+    # If we don't have enough missing numbers, extend the range
+    if (length(missing_nums) < length(nonstandard_sheets)) {
+      missing_nums <- c(
+        missing_nums,
+        (max_dist + 1):(max_dist + length(nonstandard_sheets) - length(missing_nums))
+      )
+    }
+
+    # Assign non-standard sheets to missing numbers (in order of appearance)
+    nonstandard_df <- data.frame(
+      sheet_name = nonstandard_sheets,
+      district_num = missing_nums[1:length(nonstandard_sheets)],
+      is_standard = FALSE,
+      stringsAsFactors = FALSE
+    )
+
+    # Combine
+    results <- rbind(standard_df, nonstandard_df)
+  } else {
+    results <- standard_df
+  }
+
+  # Sort by district number
+  results <- results[order(results$district_num), ]
+  rownames(results) <- NULL
+
+  return(results)
+}
+
+#' Find District Sheet Name by Number
+#'
+#' Looks up the sheet name for a given district number, handling both
+#' standard and non-standard naming conventions.
+#'
+#' @param excel_path Path to Excel compliance model file
+#' @param district District number
+#' @return Sheet name or NULL if not found
+find_district_sheet <- function(excel_path, district) {
+  district_info <- get_district_sheets(excel_path)
+
+  match_idx <- which(district_info$district_num == district)
+
+  if (length(match_idx) > 0) {
+    return(district_info$sheet_name[match_idx[1]])
+  } else {
+    return(NULL)
+  }
 }
 
 #' Read Parcel Data from District Sheet
@@ -211,14 +326,15 @@ load_community_reference <- function(community, district, force_refresh = FALSE)
   # Use first Excel file (most communities have only one)
   excel_path <- excel_files[1]
 
-  sheet_name <- paste0("District ", district)
+  # Find district sheet (handles non-standard naming)
+  sheet_name <- find_district_sheet(excel_path, district)
 
   # Check if sheet exists
-  available_sheets <- get_district_sheets(excel_path)
-  if (!sheet_name %in% available_sheets) {
+  if (is.null(sheet_name)) {
+    available_districts <- get_district_sheets(excel_path)
     stop(paste0(
       "District ", district, " not found in ", basename(excel_path),
-      ". Available districts: ", paste(available_sheets, collapse = ", ")
+      ". Available districts: ", paste(available_districts$district_num, collapse = ", ")
     ))
   }
 

@@ -1,0 +1,154 @@
+#' MBTA Communities Zoning Parameters Dataset
+#'
+#' A comprehensive dataset of zoning parameters extracted from Excel compliance
+#' models for 60 Massachusetts municipalities subject to the MBTA Communities Act.
+#' Contains district-specific zoning regulations needed for housing unit capacity
+#' calculations.
+#'
+#' @format A data.table with 138 rows (district parameter sets) and 16 columns:
+#' \describe{
+#'   \item{municipality}{Character. Municipality name (60 unique municipalities)}
+#'   \item{district}{Integer. Zoning district number (1-5) within municipality}
+#'   \item{excel_file}{Character. Source Excel compliance model filename}
+#'   \item{extraction_date}{Character. Date parameters were extracted (ISO 8601 format)}
+#'   \item{min_lot_size}{Numeric. Minimum allowable lot size in square feet}
+#'   \item{base_min_lot_size}{Numeric. Base minimum lot size for graduated sizing (NA if not used)}
+#'   \item{additional_lot_SF}{Numeric. Additional square footage required per dwelling unit beyond base (NA if not used)}
+#'   \item{building_height}{Numeric. Maximum building height in stories}
+#'   \item{FAR}{Numeric. Floor Area Ratio limit as decimal (e.g., 2.0 means building floor area can be 2x lot area)}
+#'   \item{max_lot_coverage}{Numeric. Maximum lot coverage as decimal (e.g., 0.5 = 50\% coverage)}
+#'   \item{min_required_open_space}{Numeric. Minimum open space percentage as decimal (typically 0.2 = 20\%)}
+#'   \item{parking_spaces_per_dwelling_unit}{Numeric. Required parking spaces per dwelling unit}
+#'   \item{lot_area_per_dwelling_unit}{Numeric. Minimum lot area required per dwelling unit in square feet}
+#'   \item{max_dwelling_units_per_acre}{Numeric. Maximum density limit in units per acre}
+#'   \item{max_units_per_lot}{Numeric. Maximum number of dwelling units allowed per lot}
+#'   \item{water_included}{Character. Whether water bodies count toward open space requirement ("Y" or "N")}
+#' }
+#'
+#' @details
+#' ## Data Source
+#' Parameters were extracted from Excel compliance models provided by municipalities
+#' to the Massachusetts Executive Office of Housing and Livable Communities (EOHLC).
+#' Each municipality submitted Excel models documenting their proposed multi-family
+#' zoning districts for MBTA Communities Act compliance.
+#'
+#' ## Extraction Process
+#' - Extracted using \code{\link{extract_zoning_parameters}} function
+#' - Read from "Checklist Parameters" sheet in Excel models
+#' - Extracted on: October 9, 2025
+#' - Source directory: MBTA district models collection (60 municipalities, 77 Excel files)
+#'
+#' ## Missing Values (NA)
+#' - \code{NA} values indicate the parameter is not applicable or not specified
+#' - In calculations, \code{NA} typically means "no limit" or "not a binding constraint"
+#' - Example: \code{FAR = NA} means no Floor Area Ratio limit is imposed
+#' - Only \code{min_lot_size} is guaranteed to be non-NA for all rows
+#'
+#' ## Multiple Districts per Municipality
+#' - Municipalities may define 1-5 zoning districts for MBTA compliance
+#' - Each row represents one district's complete parameter set
+#' - Average: 2.3 districts per municipality
+#' - Range: 1-5 districts per municipality
+#'
+#' ## File Selection
+#' For municipalities with multiple Excel files, the dataset uses the file
+#' containing a "District 1" sheet (indicating standard format).
+#'
+#' @section Usage Examples:
+#'
+#' \strong{Basic access:}
+#' \preformatted{
+#' # Load package (dataset is lazy-loaded automatically)
+#' library(mbtazone)
+#'
+#' # View dataset structure
+#' head(zoning_parameters)
+#' str(zoning_parameters)
+#'
+#' # Summary statistics
+#' summary(zoning_parameters)
+#' }
+#'
+#' \strong{Filter to specific municipality:}
+#' \preformatted{
+#' # Get all districts for Chelsea
+#' chelsea_params <- zoning_parameters[municipality == "Chelsea"]
+#'
+#' # Get specific district
+#' cambridge_d1 <- zoning_parameters[municipality == "Cambridge" & district == 1]
+#' }
+#'
+#' \strong{Use in compliance calculations:}
+#' \preformatted{
+#' # Load municipality parcels
+#' parcels <- load_municipality(
+#'   "inst/extdata/parcels/57_CHELSEA_basic.zip",
+#'   "Chelsea"
+#' )
+#'
+#' # Get zoning parameters from dataset
+#' params_row <- zoning_parameters[municipality == "Chelsea" & district == 1]
+#'
+#' # Convert to named list (drop metadata columns)
+#' params <- as.list(params_row[, -(1:4)])
+#'
+#' # Calculate capacity
+#' capacity <- calculate_district_capacity(
+#'   parcels = parcels,
+#'   districts = district_boundary,
+#'   zoning_params = params
+#' )
+#' }
+#'
+#' \strong{Explore zoning parameter patterns:}
+#' \preformatted{
+#' # Distribution of minimum lot sizes
+#' hist(zoning_parameters$min_lot_size,
+#'      main = "Distribution of Minimum Lot Sizes",
+#'      xlab = "Square Feet")
+#'
+#' # Compare building heights across municipalities
+#' library(ggplot2)
+#' ggplot(zoning_parameters, aes(x = building_height)) +
+#'   geom_histogram(binwidth = 0.5) +
+#'   labs(title = "Building Height Distribution",
+#'        x = "Stories", y = "Count")
+#'
+#' # Municipalities with highest density allowances
+#' zoning_parameters[order(-max_dwelling_units_per_acre),
+#'                   .(municipality, district, max_dwelling_units_per_acre)]
+#' }
+#'
+#' @section Related Functions:
+#' - \code{\link{extract_zoning_parameters}}: Extract parameters from Excel file
+#' - \code{\link{create_zoning_parameters}}: Manually create parameter list
+#' - \code{\link{calculate_district_capacity}}: Use parameters in capacity calculations
+#' - \code{\link{evaluate_compliance}}: Complete compliance evaluation workflow
+#'
+#' @source
+#' Extracted from MBTA Communities Act compliance models submitted by Massachusetts
+#' municipalities to EOHLC. Original Excel models stored in project data directory.
+#'
+#' @seealso
+#' \url{https://www.mass.gov/info-details/multi-family-zoning-requirement-for-mbta-communities}
+#'
+#' @examples
+#' # Load and explore the dataset
+#' data(zoning_parameters)
+#' head(zoning_parameters)
+#'
+#' # How many districts per municipality?
+#' zoning_parameters[, .N, by = municipality][order(-N)]
+#'
+#' # Which municipalities have FAR limits?
+#' zoning_parameters[!is.na(FAR), .(municipality, district, FAR)]
+#'
+#' # Compare parking requirements
+#' zoning_parameters[!is.na(parking_spaces_per_dwelling_unit),
+#'                   .(municipality, district, parking_spaces_per_dwelling_unit)]
+#'
+#' # Get parameters for a specific municipality-district
+#' somerville_d1 <- zoning_parameters[municipality == "Somerville" & district == 1]
+#' print(somerville_d1)
+#'
+"zoning_parameters"

@@ -110,6 +110,9 @@ mbtazone/
 │   ├── helper-excel-extraction.R
 │   └── generate-fixtures.R
 │
+├── data/                       # Package datasets (lazy-loaded)
+│   └── zoning_parameters.rda   # Pre-extracted zoning parameters (60 municipalities)
+│
 ├── inst/extdata/               # Example data
 │   ├── parcels/                # 7 municipality shapefiles (ZIP)
 │   ├── community_info.csv      # Community metadata
@@ -117,6 +120,7 @@ mbtazone/
 │
 ├── dev/                        # Development resources
 │   ├── PRD.md                  # Product Requirements Document
+│   ├── build_zoning_data.R     # Script to rebuild zoning_parameters dataset
 │   ├── compliance_model_docs/  # Excel model documentation
 │   └── proof_of_concept/       # Student prototype (reference only)
 │
@@ -124,6 +128,58 @@ mbtazone/
 ├── DESCRIPTION                 # Package metadata
 ├── NAMESPACE                   # Exported functions (auto-generated)
 └── CLAUDE.md                   # This file
+```
+
+## Package Data
+
+The package includes pre-extracted zoning parameters from real MBTA Communities compliance models:
+
+### `zoning_parameters` Dataset
+
+**Overview:**
+- **138 district parameter sets** from **60 Massachusetts municipalities**
+- Pre-extracted zoning regulations ready for use in calculations
+- Automatically lazy-loaded when package is loaded
+- File size: 18.6 KB (compressed .rda format)
+
+**Structure:**
+```r
+# Access the dataset
+library(mbtazone)
+head(zoning_parameters)
+
+# Data.table with 138 rows × 16 columns:
+#   - municipality: Municipality name
+#   - district: District number (1-5)
+#   - excel_file: Source Excel filename
+#   - extraction_date: When data was extracted
+#   - 12 zoning parameters: min_lot_size, building_height, FAR, etc.
+```
+
+**Common Use Cases:**
+```r
+# Get parameters for specific municipality
+chelsea_params <- zoning_parameters[municipality == "Chelsea" & district == 1]
+
+# Use in calculations (convert row to list, drop metadata)
+params <- as.list(chelsea_params[, -(1:4)])
+capacity <- calculate_district_capacity(parcels, districts, params)
+
+# Explore patterns across municipalities
+hist(zoning_parameters$min_lot_size)
+zoning_parameters[order(-max_dwelling_units_per_acre)]
+```
+
+**Documentation:**
+- Help: `?zoning_parameters`
+- Documented in: `R/data.R`
+- Build script: `dev/build_zoning_data.R`
+
+**Rebuilding the Dataset:**
+If new Excel models are added or updated, rebuild with:
+```r
+source("dev/build_zoning_data.R")  # Extracts from all Excel models
+devtools::document()                 # Regenerate help files
 ```
 
 ## Code Style and Conventions
