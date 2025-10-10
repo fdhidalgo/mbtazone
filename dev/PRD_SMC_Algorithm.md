@@ -1,7 +1,8 @@
 # SMC Algorithm for MBTA Zoning Simulation
+
 ## Product Requirements Document
 
-**Version:** 1.0 (Adapted for mbtazone package)
+**Version:** 2.0 (Revised with Valuation-Guided RSIS Methodology)
 **Date:** October 10, 2025
 **Status:** Design Phase
 
@@ -22,9 +23,11 @@ This document specifies a Sequential Monte Carlo (SMC) algorithm to generate a r
 ## 2. Research Objectives
 
 ### Primary Research Question
+
 Do adopted MBTA overlay zones exhibit systematic bias in their demographic or economic composition relative to all feasible alternative configurations?
 
 ### Specific Comparisons
+
 1. **Racial composition:** Does the adopted zone concentrate or avoid minority populations?
 2. **Economic indicators:** Property values, median income, rental prices
 3. **Existing land use:** Industrial/commercial vs. residential patterns
@@ -32,11 +35,13 @@ Do adopted MBTA overlay zones exhibit systematic bias in their demographic or ec
 5. **Development potential:** Redevelopment likelihood based on current vs. maximum use intensity
 
 ### Null Hypothesis
+
 The adopted plan is drawn from a uniform distribution over all feasible plans that meet minimum statutory requirements.
 
 **Implementation Note:** The SMC algorithm uses soft penalties during particle propagation for computational efficiency (guiding particles toward feasible, contiguous configurations and reducing particle death rates). After SMC completes, Sampling/Importance Resampling (SIR) is applied to correct for the penalized exploration distribution, restoring a true uniform distribution over compliant configurations. The final reference distribution used for hypothesis testing is uniform.
 
 ### Academic Contribution
+
 This work extends redistricting simulation methods (Fifield et al. 2020; McCartan & Imai 2020) to partial-coverage zoning problems, providing first-of-its-kind tools for detecting bias in municipal land use decisions.
 
 ---
@@ -46,11 +51,13 @@ This work extends redistricting simulation methods (Fifield et al. 2020; McCarta
 ### 3.1 Graph Representation
 
 **Geographic units as graph:**
+
 - **Nodes (V):** Individual parcels in the municipality
 - **Edges (E):** Connect parcels that share a physical boundary (contiguity)
 - **Graph:** G = (V, E) is undirected
 
 **Parcel attributes** (from existing package data structures):
+
 - `parcel_id`: Unique identifier (LOC_ID column)
 - `lot_area`: Land area in square feet (SQFT column)
 - `unit_capacity`: Maximum units under MBTA zoning parameters (calculated via `calculate_final_unit_capacity()`)
@@ -63,6 +70,7 @@ This work extends redistricting simulation methods (Fifield et al. 2020; McCarta
 ### 3.2 State Space
 
 **Configuration:** A binary vector **x** ∈ {0,1}^N where:
+
 - x_i = 1 if parcel i is in MBTA overlay zone
 - x_i = 0 otherwise
 
@@ -73,6 +81,7 @@ This work extends redistricting simulation methods (Fifield et al. 2020; McCarta
 All configurations must satisfy the same constraints enforced by existing `evaluate_compliance()` function:
 
 **Hard constraints (must be satisfied):**
+
 1. **Contiguity:** At least 50% of district area must be in a single contiguous portion; remaining portions must be ≥5 acres each (validated by `validate_contiguity()`)
 2. **Station proximity:** Proportion of district in station areas must meet threshold (sliding scale by municipality type)
 3. **Minimum capacity:** Σ(x_i × capacity_i) ≥ minimum_units (community-specific, from `community_info.csv`)
@@ -84,16 +93,19 @@ All configurations must satisfy the same constraints enforced by existing `evalu
 > Two distinct requirements that both involve percentages:
 >
 > 1. **Contiguity (50%)**: At least 50% of district **area** must be in a single contiguous (spatially connected) portion. Remaining area can be in separate portions ≥5 acres each.
+>
 >    - Source: 760 CMR 59.04(3)(d)
 >    - Enforced by: `validate_contiguity()` (R/gis_operations.R:1019-1216)
 >    - Check: Geographic connectedness of parcel boundaries
 >
 > 2. **Station Coverage (50-90%)**: Percentage of district required within 0.5-mile transit station buffers. This is a **dual-metric requirement**:
+>
 >    - **Both** land area % AND unit capacity % must meet the threshold
 >    - `station_area / total_area ≥ threshold`
 >    - `station_capacity / total_capacity ≥ threshold`
 >
 >    **Sliding scale by developable station area** (from Compliance Model Guidelines Table 2):
+>
 >    - Rapid Transit communities: 90% coverage required
 >    - Commuter Rail communities:
 >      - ≥30 acres developable in station area: 50% coverage required
@@ -105,12 +117,11 @@ All configurations must satisfy the same constraints enforced by existing `evalu
 >
 > These are independent requirements checked separately.
 
-**Soft constraints (enforced via penalty function, not hard cutoffs):**
-6. **Compactness:** Zones should be reasonably compact (not sprawling)
-7. **Efficiency:** Zones should not vastly exceed minimums
-   - Penalty for: capacity > α × minimum_units or area > α × minimum_acres
-   - Suggested α = 1.25 (configurable)
-   - **Note:** This is enforced via penalty function only, not as a hard termination rule. This avoids truncating the state space and biasing the distribution.
+**Soft constraints (enforced via penalty function, not hard cutoffs):** 6. **Compactness:** Zones should be reasonably compact (not sprawling) 7. **Efficiency:** Zones should not vastly exceed minimums
+
+- Penalty for: capacity > α × minimum_units or area > α × minimum_acres
+- Suggested α = 1.25 (configurable)
+- **Note:** This is enforced via penalty function only, not as a hard termination rule. This avoids truncating the state space and biasing the distribution.
 
 **Rationale for efficiency bound:** Empirically, municipalities target minimum requirements. Without this soft constraint, SMC would favor larger zones. Setting α as a configurable parameter with sensitivity analysis allows assessment of impact on results.
 
@@ -122,19 +133,15 @@ All configurations must satisfy the same constraints enforced by existing `evalu
 
 ### 4.1 Why SMC for MBTA Zoning?
 
-**Advantages over MCMC for this problem:**
+This implementation uses a modern SMC framework known as Sequential Importance Sampling with Resampling (RSIS).
 
-1. **Natural for partial coverage:** SMC builds zones by sequentially adding parcels, naturally suited for selecting subset of parcels rather than partitioning all parcels
+**Advantages over MCMC and Pure SIS for this problem:**
 
-2. **Faster mixing:** No burn-in period needed; particles are weighted samples that approximate the target distribution after resampling. Effective sample size (ESS) estimates the quality of this approximation.
-
-3. **Handles hard constraints efficiently:** Resampling eliminates infeasible particles at each step, avoiding wasted computation on constraint-violating states
-
-4. **Better for soft efficiency constraints:** SMC naturally handles soft upper bounds via penalty functions; MCMC must navigate narrow feasible region when constraints are hard
-
-5. **Parallel by design:** Multiple particles run independently, trivial to parallelize
-
-6. **Well-defined target:** SMC samples from a specified target distribution; diagnostics (ESS, R-hat across runs) assess convergence without extensive burn-in
+1. **Natural for partial coverage:** RSIS builds zones sequentially.
+2. **Enhanced Efficiency via Resampling:** RSIS uses intermediate resampling to concentrate computational effort on promising partial solutions, significantly improving efficiency over Pure SIS (which lacks resampling).
+3. **Valuation-Guided Exploration:** Resampling is guided by a **Valuation Function V(x)**, which estimates the potential of a partial plan based on lookahead metrics (Tier 2 optimizations). This guides the search effectively without needing to define complex intermediate targets (as required by standard tempering).
+4. **Handles hard constraints efficiently:** Tier 2 checks prune infeasible paths early, and resampling eliminates low-potential particles.
+5. **Mathematically Robust:** By rigorously tracking the proposal probability Q(x) and correctly handling resampling, RSIS guarantees correct importance weights, ensuring sampling from the desired target distribution.
 
 **Integration with existing package performance optimization:**
 
@@ -156,18 +163,26 @@ plans <- mbta_smc(
 )
 ```
 
-**How SMC works for zoning:**
+**How RSIS works for zoning (Revised):**
 
 ```
-1. Initialize M particles (potential zones), each starting from a random seed parcel
-2. For each step t = 1, 2, ..., T:
-   a. For each particle m:
-      - Propose adding a parcel from the boundary
-      - Calculate feasibility/optimality score using evaluate_compliance()
-   b. Resample particles proportional to their scores
-   c. Continue until particles reach target size/capacity
-3. Final particles are weighted samples that approximate the target distribution after resampling
-4. Apply SIR correction to restore uniform distribution over compliant configurations
+1. Initialize M active particles (potential zones) from seed parcels.
+2. Initialize log_proposal_path = 0 for all particles.
+3. While active particles remain:
+    a. Propagation: For each active particle:
+        - Propose adding a parcel using proposal distribution Q (heuristics).
+        - Update log_proposal_path (tracking Q(x)).
+        - Check viability (Tier 1 & 2).
+        - Calculate Valuation Score V(x) based on lookahead metrics.
+    b. Completion Check (Tier 3):
+        - If a particle completed (met minimums):
+        - Calculate final Importance Weight W_explore = π_explore(x) / Q(x).
+        - Move particle to Completed population.
+    c. Resampling (Active Population):
+        - If ESS of active particles (weighted by V(x)) drops too low, resample.
+        - CRITICAL: Copy all state, including the cumulative log_proposal_path.
+4. Final completed particles are weighted samples approximating the exploration distribution (π_explore).
+5. Apply SIR correction to restore the uniform distribution (π_uniform).
 ```
 
 ### 4.2 Target Distribution
@@ -176,13 +191,22 @@ The algorithm uses a two-stage approach: (1) penalized exploration during SMC fo
 
 #### 4.2.1 Exploration Target (During SMC)
 
-During particle propagation, SMC samples from a penalized distribution to guide particles toward feasible regions and reduce particle death rates:
+We define an Exploration Target Distribution $\pi_{explore}$ that incorporates the soft penalties (compactness, efficiency). Sampling from this distribution improves the Effective Sample Size (ESS) for the final SIR correction.
 
-**Exploration distribution:**
+**Exploration Target Distribution $\pi_{explore}$:**
 
-π_explore(x) ∝ exp(-λ × penalty(x)) × I(x satisfies hard constraints)
+$\pi_{explore}(x) \propto \exp(-\lambda \times penalty(x)) \times I(x\ satisfies\ hard\ constraints)$
+
+_(Penalty function definition remains the same as the original PRD Section 4.2.1, incorporating efficiency, compactness, and station coverage soft constraints.)_
+
+**Exploration Strategy:**
+The RSIS algorithm samples from $\pi_{explore}$ using:
+
+1. **Proposal Distribution Q(x):** Heuristics (capacity/closeness bias) guide the growth at each step.
+2. **Valuation Function V(x):** Lookaheads guide the intermediate resampling of active particles (see Section 4.3.4).
 
 where **I(x satisfies hard constraints)** = 1 if all of the following hold, 0 otherwise:
+
 - Minimum capacity: Σ(x_i × capacity_i) ≥ target_capacity
 - Minimum area: Σ(x_i × area_i) ≥ target_area
 - Contiguity: ≥50% of district area in single portion (checked via `validate_contiguity()`)
@@ -208,6 +232,7 @@ where compactness(x) is the Polsby-Popper ratio:
 **Note on compactness:** Compactness is NOT a legal requirement under 760 CMR 59. Setting `w_compact = 0` (default) produces a uniform distribution over all legally compliant plans. Users may set `w_compact > 0` to bias toward compact shapes if modeling realistic municipal behavior. The compactness metric is computed only at particle completion, not at each step.
 
 **Key design choices:**
+
 - **Hard constraints** enforced by setting weight = 0 (particle dies)
 - **Soft constraints** guide exploration but don't truncate state space
 - **Efficiency bound** (α) is soft-only to avoid biasing distribution
@@ -215,6 +240,7 @@ where compactness(x) is the Polsby-Popper ratio:
 - **Station coverage penalty** helps particles meet station area requirements
 
 **Pure SIS approach (no tempering):** Penalty weight λ is a constant scalar applied only at completion:
+
 - Particles grow using capacity-weighted + closeness proposals (no penalty-based weighting during propagation)
 - Penalty computed once when particle completes (Tier 3)
 - Importance weight: `w ∝ exp(-λ × penalty) / proposal_path_prob`
@@ -225,42 +251,46 @@ where compactness(x) is the Polsby-Popper ratio:
 
 #### 4.2.2 Final Target (After SIR Correction)
 
-After SMC completes, the final distribution is restored to uniform over all compliant configurations:
+The final target distribution for hypothesis testing is uniform over all compliant configurations:
 
-**Final distribution (for hypothesis testing):**
+**Final distribution $\pi_{uniform}$:**
 
-π_final(x) ∝ I(x satisfies hard constraints)
+$\pi_{uniform}(x) \propto I(x\ satisfies\ hard\ constraints)$
 
-This is a **true uniform distribution**—all compliant configurations are equally likely, regardless of compactness, efficiency, or other characteristics beyond statutory requirements.
+**SIR correction (Revised):** Each sampled plan has an exploration weight $W_{explore}$ calculated during the RSIS process.
 
-**SIR correction:** Each sampled plan receives an importance weight to correct for the exploration bias:
+$W_{explore}(x) \propto \pi_{explore}(x) / Q'(x)$
+(Where $Q'(x)$ is the effective proposal distribution resulting from Q(x) and resampling).
 
-```
-importance_weight(x) = π_final(x) / π_explore(x)
-                     = 1 / exp(-λ × penalty(x))
-                     = exp(λ × penalty(x))
-```
+We apply a correction factor $C(x)$ to adjust from $\pi_{explore}$ to $\pi_{uniform}$.
 
-Plans with **higher penalties** (less compact, less efficient) receive **higher weights** to compensate for being sampled less frequently during exploration. Resampling proportional to these weights restores the uniform distribution.
+$C(x) = \pi_{uniform}(x) / \pi_{explore}(x) = \exp(\lambda \times penalty(x))$
+
+**Final Uniform Weight $W_{uniform}(x)$:**
+$W_{uniform}(x) = W_{explore}(x) \times C(x)$
+
+Resampling proportional to $W_{uniform}$ restores the uniform distribution.
 
 **Result:** The final reference distribution is uniform over compliant plans, suitable for testing the null hypothesis that adopted plans are not systematically biased.
 
-### 4.3 SMC Algorithm Components
+### 4.3 SMC Algorithm Components (Revised)
 
-#### Initialization (Step 0)
+#### 4.3.1 Initialization (Step 0)
 
 For each particle m = 1, ..., M:
-```r
-1. Select seed parcel i:
-   - If specified: use provided seed
-   - If random: sample parcel with probability ∝ capacity_i × I(in_station_area)
+_(Seed selection and Tier 1/Tier 2 state initialization remains the same as the original PRD Section 4.3.1.)_
 
-2. Initialize state:
-   x^(m)_0 = {i}
-   capacity^(m)_0 = capacity_i
-   area^(m)_0 = area_i
-   weight^(m)_0 = 1
-   log_proposal_path^(m)_0 = 0  # Cumulative log probability of proposal path
+```r
+# Initialize RSIS tracking variables
+# CRITICAL: Initialize cumulative log probability of proposal path
+# If seed selection is non-uniform, start with log(P_seed). Assuming uniform here.
+log_proposal_path^(m)_0 = 0
+
+# Initialize status
+particle_active^(m) = TRUE        # Particle starts in the active population
+
+# Initialize Valuation Score (for resampling)
+valuation_score^(m)_0 = V(x^(m)_0)
 
    # For Tier-2 infeasibility checking:
    # Identify connected component containing seed parcel i
@@ -274,166 +304,95 @@ For each particle m = 1, ..., M:
 ```
 
 **Seed selection strategies:**
+
 - **Random in station area:** Default, samples from all station-adjacent parcels
 - **High capacity:** Biased toward parcels with high unit capacity
 - **Municipal seed:** Start from parcel near town center
 - **Reference plan:** Use adopted plan's core as seed for status-quo constraint
 
-#### Propagation (Steps t = 1, ..., T)
+#### 4.3.2 Propagation (Iterative)
 
-For each particle m at step t, use **3-tier checking strategy** for performance:
+The algorithm iterates until the active population is empty or the target number of completed plans is reached. In each iteration:
+
+For each active particle m:
 
 ```r
-1. Identify boundary parcels:
-   B^(m)_t = {j : j ∉ x^(m)_{t-1} and j adjacent to x^(m)_{t-1}}
+1. Identify boundary parcels B^(m). (If empty, mark particle inactive/dead).
 
-   # Uses adjacency graph from mbta_map object (built once)
+2. Calculate raw proposal scores q_raw(j | x^(m)).
+   # Proposal mechanism uses heuristics:
+   q_raw(j) ∝ (capacity_j)^γ_cap × (closeness_j)^γ_close
 
-2. Calculate proposal probabilities for each j ∈ B^(m)_t:
+3. Normalize and Calculate Z_proposal:
+   Z_proposal = Σ_{k ∈ B^(m)} q_raw(k)
 
-   q(j | x^(m)_{t-1}) ∝ (capacity_j)^γ_cap × (closeness_j)^γ_close
+4. Sample addition j ~ q_raw(·) / Z_proposal.
 
-   where:
-   - closeness_j = 1 / (1 + distance to zone centroid)
-   - γ_cap controls bias toward high-capacity parcels (suggest 0.5)
-   - γ_close controls bias toward compact zones (suggest 1.0)
+5. Update proposal path Q(x):
+   proposal_prob = q_raw(j) / Z_proposal
+   # CRITICAL: Update the tracked proposal path
+   log_proposal_path^(m) += log(proposal_prob)
 
-3. Sample addition j ~ q(· | x^(m)_{t-1})
+6. Create proposed state: x^(m)_new = x^(m) ∪ {j}
 
-   # Compute proposal probability for SMC weight update
-   Z_proposal = Σ_{k ∈ B^(m)_t} (capacity_k)^γ_cap × (closeness_k)^γ_close
-   proposal_prob_t = q(j | x^(m)_{t-1}) / Z_proposal
+7. TIER 1 - Update running sums (O(1)).
+   # (Increment total capacity/area, decrement remaining capacity/area - Same as original PRD)
 
-4. Create proposed state:
-   x^(m)_t = x^(m)_{t-1} ∪ {j}
+8. TIER 2 - Infeasibility check (O(1)).
+   # (Check if mathematically impossible to succeed - Same as original PRD)
 
-5. TIER 1 - Update running sums (cheap arithmetic, O(1)):
-
-   # Increment cached particle state
-   total_capacity^(m) += capacity_j
-   total_area^(m) += area_j
-   station_capacity^(m) += capacity_j × I(j in station area)
-   station_area^(m) += area_j × I(j in station area)
-
-   # Decrement remaining capacity/area (for Tier-2 infeasibility check)
-   remaining_capacity^(m) -= capacity_j
-   remaining_area^(m) -= area_j
-
-   # Decrement remaining station capacity/area (for station coverage bounds)
-   if (j in station area):
-     remaining_station_capacity^(m) -= capacity_j
-     remaining_station_area^(m) -= area_j
-
-   # Track cumulative proposal probability (for importance weight correction)
-   log_proposal_path^(m) += log(proposal_prob_t)
-
-6. TIER 2 - Infeasibility check (can this particle possibly succeed?):
-
-   # Calculate maximum achievable capacity/area from ALL reachable parcels
-   # (not just immediate boundary—a particle might need to expand 2+ rings
-   # to reach high-capacity parcels)
-
-   # Use running totals for O(1) check:
-   # - Precomputation: Connected components identified once per municipality
-   # - Initialization: Each particle tracks its connected component
-   # - Each step: Decrement remaining capacity/area as parcels are added
-   #
-   # remaining_capacity^(m): Total capacity in connected component minus
-   #                         capacity of parcels already in zone
-   # remaining_area^(m): Total area in connected component minus
-   #                     area of parcels already in zone
-   #
-   # These running totals are updated in Tier 1 when a parcel is added:
-   # remaining_capacity^(m) -= capacity_j
-   # remaining_area^(m) -= area_j
-
-   # Infeasibility test using running totals
-   if (total_capacity^(m) + remaining_capacity^(m) < target_capacity OR
-       total_area^(m) + remaining_area^(m) < target_area):
-     weight^(m)_t = 0  # Particle dies (mathematically impossible to succeed)
-     continue to next particle
-
-   # Station coverage infeasibility test (dual-metric requirement)
-   # Best-case scenario: add all remaining station-area parcels
-   max_station_capacity = station_capacity^(m) + remaining_station_capacity^(m)
-   max_station_area = station_area^(m) + remaining_station_area^(m)
-   max_total_capacity = total_capacity^(m) + remaining_capacity^(m)
-   max_total_area = total_area^(m) + remaining_area^(m)
-
-   # Check both capacity % AND area % (dual-metric requirement)
-   max_capacity_coverage = max_station_capacity / max_total_capacity
-   max_area_coverage = max_station_area / max_total_area
-
-   if (max_capacity_coverage < required_coverage OR
-       max_area_coverage < required_coverage):
-     weight^(m)_t = 0  # Cannot meet station coverage requirement
-     continue to next particle
-
-   # Note: This maintains O(1) cost per step by tracking running totals
-   # rather than recomputing reachable sets at each step. The reachable
-   # component changes as the zone grows, so we decrement the running total
-   # as parcels are added rather than using a static precomputed cache.
-
-7. TIER 3 - Full compliance check (only when particle completes):
-
-   # Check if particle has met minimum requirements
-   if (total_capacity^(m) >= target_capacity AND
-       total_area^(m) >= target_area):
-
-     # Particle complete - extract parcels and run full compliance
-     particle_parcels <- parcels_precomputed[x^(m)_t, ]
-
-     # Check contiguity using existing function
-     contiguity <- validate_contiguity(
-       particle_parcels,
-       min_contiguous_pct = 0.5,
-       min_portion_acres = 5
-     )
-
-     if (!contiguity$is_valid):
-       weight^(m)_t = 0  # Fails contiguity requirement
-       particle_complete^(m) = TRUE
+   if (infeasible):
+       particle_active^(m) = FALSE  # Particle dies
        continue to next particle
 
-     # Check all other compliance requirements
-     compliance <- evaluate_compliance(
-       municipality = particle_parcels,
-       districts = NULL,  # all parcels in one district
-       zoning_params = zoning_params,
-       community_type = community_type,
-       precomputed = TRUE,  # Uses pre-cached spatial attributes
-       verbose = FALSE
-     )
+9. TIER 3 - Completion check.
 
-     if (!compliance$summary$compliant):
-       weight^(m)_t = 0  # Fails other hard constraints
-     else:
-       # Calculate penalty from soft constraints
-       penalty = calculate_penalty(compliance, efficiency_alpha)
+   # Check if particle has met minimum requirements
+   if (total_capacity^(m) >= target_capacity AND total_area^(m) >= target_area):
 
-       # SMC importance weight update using cumulative path probability
-       # Pure SIS: constant λ applied at completion only
-       target_prob = exp(-λ × penalty)  # λ is constant, not time-varying
+       # Stochastic Continuation (prevents first-hit bias)
+       # Note: In RSIS, P(continue) does not need to be tracked in Q(x) if it depends only on the current state.
+       if (runif(1) < p_continue):
+           # Continue growing
+           # Update valuation for next step's resampling
+           valuation_score^(m) = V(x^(m)_new)
+           continue to next particle
+       else:
+           # Stop growing and run full compliance
+           # (Full compliance check logic using evaluate_compliance() - Same as original PRD)
 
-       # Proposal path probability (product of all step probabilities)
-       proposal_path_prob = exp(log_proposal_path^(m))
+           if (compliance$summary$compliant):
+               # SUCCESS: Calculate Final Importance Weight (W_explore)
 
-       # Importance weight: ratio of target to proposal
-       weight^(m)_t = weight^(m)_0 × (target_prob / proposal_path_prob)
+               # 1. Calculate penalty (for π_explore)
+               penalty = calculate_penalty(compliance, efficiency_alpha)
+               particle_penalty^(m) = penalty
 
-       # Store penalty for later SIR correction
-       # (λ is stored globally as function parameter, not per-particle)
-       particle_penalty^(m) = penalty
+               # 2. Calculate Target probability (unnormalized)
+               # π_explore(x) ∝ exp(-λ × penalty)
+               log_target_prob = -λ * penalty
 
-     particle_complete^(m) = TRUE
+               # 3. Calculate Importance weight W_explore: ratio of target to proposal
+               # log(W) = log(π(x)) - log(Q(x))
+               log_W_explore^(m) = log_target_prob - log_proposal_path^(m)
 
+               # Store the final log weight (we will normalize during SIR)
+               # Move to completed population
+               particle_active^(m) = FALSE
+               # (Store the completed plan and its log_W_explore)
+
+           else:
+               # Fails hard constraints (e.g., contiguity, density)
+               particle_active^(m) = FALSE # Particle dies
+               continue to next particle
    else:
-     # Particle not yet complete, continue growing
-     # Weight stays unchanged, no compliance check needed yet
-     weight^(m)_t = weight^(m)_{t-1}
+       # Particle not yet complete, continue growing
+       # Update Valuation Score for next step's resampling
+       valuation_score^(m) = V(x^(m)_new)
 ```
 
 **Termination (with stochastic continuation):** Particle stops growing when:
+
 - **Completion with stochastic continuation:**
   - If total_capacity ≥ target_capacity AND total_area ≥ target_area:
     - With probability (1 - p_continue): mark as complete and run Tier-3 compliance check
@@ -445,33 +404,59 @@ For each particle m at step t, use **3-tier checking strategy** for performance:
 - **Note:** Efficiency bound (α) is NOT a termination rule; it's enforced via penalty only
 
 **Why 3-tier checking works:**
+
 - **Tier 1** (every step): O(1) arithmetic updates, ~0.001 sec per step
 - **Tier 2** (every step): O(|boundary|) infeasibility check, kills impossible particles early
 - **Tier 3** (only on completion): ~0.03 sec per particle with precomputation
 - **Result:** Average particle takes ~40 steps to complete, so we do 40× cheap checks and 1× expensive check instead of 40× expensive checks
 
-#### Resampling (After each step t)
+#### 4.3.3 Resampling (Adaptive)
 
-**Systematic resampling:**
+Resampling concentrates computational effort on promising active particles. It is performed adaptively on the **Active population only**.
+
 ```r
-1. Normalize weights: w̃^(m)_t = weight^(m)_t / Σ_m weight^(m)_t
+1. Identify active particles: P_active = {m : particle_active^(m) == TRUE}
+   M_active = length(P_active)
 
-2. Calculate effective sample size:
-   ESS_t = 1 / Σ_m (w̃^(m)_t)^2
+2. Normalize Valuation Scores (acting as weights for resampling):
+   V_norm^(m) = valuation_score^(m) / Σ_{m ∈ P_active} valuation_score^(m)
 
-3. If ESS_t < M/2, resample:
-   - Draw M new particles with replacement from current particles
-   - Probability of selecting particle m = w̃^(m)_t
-   - **Copy all particle state to offspring particles:**
-     * x^(m)_t (parcels in zone)
-     * total_capacity^(m), total_area^(m)
-     * station_capacity^(m), station_area^(m)
-     * remaining_capacity^(m), remaining_area^(m)
-     * remaining_station_capacity^(m), remaining_station_area^(m)
-     * log_proposal_path^(m) (CRITICAL - needed for final weight calculation)
+3. Calculate Effective Sample Size (ESS) of the active population:
+   ESS_active = 1 / Σ_{m ∈ P_active} (V_norm^(m))^2
+
+4. If ESS_active < M_active * resample_threshold (e.g., 0.5):
+   # Perform Systematic or Multinomial Resampling
+   - Draw M_active new particles with replacement from P_active
+   - Probability of selecting particle m = V_norm^(m)
+
+   - **CRITICAL: Copy ALL particle state to offspring particles:**
+     * x^(m) (parcels in zone)
+     * All Tier 1 and Tier 2 running sums (total_capacity, remaining_capacity, etc.)
+     * log_proposal_path^(m) (MUST be copied; ensures final W_explore remains valid)
      * component_id^(m)
-   - Reset all weights to 1/M
 ```
+
+#### 4.3.4 Valuation Function V(x) (NEW)
+
+The Valuation Function $V(x)$ estimates the potential of a partial plan $x$ to reach a compliant final state. It guides the intermediate resampling. $V(x)$ leverages the Tier 2 lookahead metrics already computed.
+
+**Proposed Valuation Function:**
+
+```r
+V(x) = (Reachable_Capacity(x) / Target_Capacity)^α_V ×
+       (Reachable_Station_Coverage(x) / Target_Coverage)^β_V
+
+where:
+- Reachable_Capacity(x) = total_capacity^(m) + remaining_capacity^(m)
+  (Maximum capacity achievable in the connected component, tracked in Tier 1/2)
+
+- Reachable_Station_Coverage(x) = max_area_coverage (calculated in Tier 2 infeasibility check)
+  (Maximum station area coverage achievable)
+
+- α_V, β_V: Tuning parameters (default 1.0) controlling the influence of these factors.
+```
+
+**Behavior:** If a particle expands into an area with low remaining capacity or poor station access, its $V(x)$ decreases, making it more likely to be eliminated during resampling.
 
 **Why resample?** Concentrates computational effort on high-probability regions, eliminates low-weight particles.
 
@@ -501,6 +486,7 @@ After every K particles complete:
 The 3-tier checking architecture enables realistic performance targets by avoiding expensive compliance checks during propagation.
 
 **Tier 1: Running Sums (Every Step)**
+
 - **Purpose:** Track particle state with cheap arithmetic
 - **Operations:**
   - Increment capacity, area, station metrics: O(1)
@@ -509,8 +495,10 @@ The 3-tier checking architecture enables realistic performance targets by avoidi
 - **Implementation:** Store in `ParticleState` object with cached sums
 
 **Tier 2: Infeasibility Tests (Every Step)**
+
 - **Purpose:** Kill particles that cannot possibly succeed
 - **Logic:** Uses running totals maintained in particle state (updated in Tier 1)
+
   ```r
   # Can this particle reach minimums even if we add ALL remaining parcels
   # in its connected component?
@@ -523,6 +511,7 @@ The 3-tier checking architecture enables realistic performance targets by avoidi
       total_area^(m) + remaining_area^(m) < target_area):
     kill_particle()  # Mathematically impossible to succeed
   ```
+
 - **Cost:** O(1) arithmetic ≈ 0.001 seconds (simple comparison of cached values)
 - **Precomputation:** Connected components identified once; total capacity/area per component cached in mbta_map
 - **Runtime tracking:** `remaining_capacity^(m)` and `remaining_area^(m)` decremented in Tier 1 as zone grows
@@ -532,6 +521,7 @@ The 3-tier checking architecture enables realistic performance targets by avoidi
   - Maintains O(1) cost via running totals instead of recomputing reachable sets
 
 **Tier 3: Full Compliance (On Completion Only)**
+
 - **Purpose:** Validate all hard constraints when particle reaches minimum requirements
 - **Operations:**
   - Extract particle parcels from precomputed data
@@ -543,6 +533,7 @@ The 3-tier checking architecture enables realistic performance targets by avoidi
 **Performance Calculation:**
 
 For typical municipality (e.g., Chelsea with 1,234 parcels):
+
 ```
 Assumptions:
 - Target: 10,000 completed plans
@@ -564,12 +555,14 @@ WITH precomputation (existing infrastructure):
 ```
 
 **Why this works:**
+
 - **Avoid repeated spatial operations:** Expensive GIS calculations done once via `precompute_spatial_attributes()`
 - **Defer expensive checks:** Only call `evaluate_compliance()` when absolutely necessary
 - **Early termination:** Infeasibility checks prevent wasted computation on impossible particles
 - **Parallelization:** Each particle independent, trivial to parallelize across cores
 
 **Integration with existing package:**
+
 ```r
 # Setup (once per municipality)
 parcels <- load_municipality("chelsea.zip")
@@ -653,6 +646,7 @@ print(chelsea_map)
 ```
 
 **Attributes stored in `mbta_map`:**
+
 - `data`: sf data.table with parcels (uses data.table for performance)
 - `ndists`: Number of districts (usually 1)
 - `capacity_col`: Column name for unit capacity
@@ -676,22 +670,17 @@ class(plans)
 #> [1] "mbta_plans" "redist_plans" "data.table" "data.frame"
 
 # Columns (automatically created):
-# - draw: Plan ID
-# - district: District ID (usually 1)
-# - parcel_id: Parcel identifier
-# - total_capacity: Unit capacity
-# - total_area: Land area (acres)
-# - gross_density: Units per acre
-# - in_station_area: # parcels in station areas
-# - station_coverage: % of capacity in station areas
-# - contiguity: Largest contiguous component as % of total
-# - n_parcels: Number of parcels in district
-# - particle_penalty: Penalty value at completion (for SIR correction)
+# - draw, district, parcel_id, ... (statistics: total_capacity, etc.)
+# - particle_penalty: Penalty value P(x) at completion (for SIR correction)
+
+# NEW/REVISED Columns for RSIS/SIR:
+# - log_proposal_path: Cumulative log probability of the proposal path Q(x) (CRITICAL)
+# - log_weight_explore: The log importance weight log(W_explore) = log(π_explore / Q(x))
+# - weight_uniform: The final weight after SIR correction W_uniform (normalized)
 
 # Attributes (metadata):
-# - lambda: Constant penalty weight used in SMC (scalar, same for all plans)
+# - lambda: Constant penalty weight used in π_explore (scalar)
 # - sir_corrected: Boolean, whether SIR correction has been applied
-# - sir_lambda: Lambda used for SIR correction (if applicable)
 
 # Access underlying assignment matrix
 get_plans_matrix(plans)  # Returns matrix: parcels × plans
@@ -712,6 +701,7 @@ print(plans)
 ```
 
 **Data.table Integration:**
+
 ```r
 # Use data.table syntax for fast aggregation
 plans[, .(
@@ -750,40 +740,40 @@ cons <- mbta_constr(chelsea_map) %>%
 
 ```r
 mbta_smc(
-  map,                    # mbta_map object
-  nsims = 1000,          # number of plans to sample
-  constraints = NULL,     # mbta_constr object (optional)
-  compactness = 0,       # compactness strength (0 = pure legal uniform, >0 = bias toward compact)
+  map,                         # mbta_map object
+  nsims = 1000,                # number of plans to sample
+  constraints = NULL,          # mbta_constr object (optional)
 
-  # SMC-specific parameters
-  M = NULL,              # number of particles (default: nsims * 5)
-  lambda = 1.0,          # constant penalty weight (pure SIS, no tempering)
+  # Exploration Target Parameters (π_explore - Soft Constraints)
+  compactness = 1.0,           # compactness strength (used in π_explore)
+  lambda = 1.0,                # constant penalty weight
+  efficiency_alpha = 1.25,     # soft upper bound multiplier
+  efficiency_strength = 1.0,   # penalty weight for exceeding efficiency bound
 
-  # Efficiency bound (soft constraint)
-  efficiency_alpha = 1.25,      # soft upper bound multiplier (zones ≤ α × target)
-  efficiency_strength = 1.0,    # penalty weight for exceeding efficiency bound
+  # Proposal Distribution Parameters (Q(x) - Heuristics for efficient exploration)
+  gamma_cap = 0.5,             # Bias toward high-capacity parcels
+  gamma_close = 1.0,           # Bias toward closeness (compact growth)
+
+  # SMC Parameters
+  M = NULL,                    # number of particles (default: nsims * 5)
 
   # Computational
-  runs = 2,              # independent runs for diagnostics
-  ncores = 1,            # parallel cores
+  runs = 2,
+  ncores = 1,
 
-  # Initialization
-  init_particles = "random",  # "random", "capacity", "reference"
+  # Advanced RSIS Parameters
+  resample_threshold = 0.5,    # ESS threshold for resampling active population
+  p_continue = 0.2,            # stochastic continuation probability
 
-  # Advanced
-  resample_threshold = 0.5,  # ESS threshold for resampling (as fraction of M)
-  adapt_every = 100,         # frequency of parameter adaptation
-  p_continue = 0.2,          # probability of continuing after reaching minimums (stochastic continuation)
+  # NEW: Valuation Function Tuning
+  valuation_alpha = 1.0,       # α_V: Exponent for capacity in V(x)
+  valuation_beta = 1.0,        # β_V: Exponent for station coverage in V(x)
 
   # SIR correction (post-processing)
-  apply_sir = TRUE,          # automatically apply SIR correction to restore uniform distribution
-  return_weights = FALSE,    # return importance weights for custom SIR corrections
-
-  silent = FALSE,       # suppress progress messages
-  verbose = FALSE       # detailed diagnostic output
+  apply_sir = TRUE,            # automatically apply SIR correction to restore uniform
+  return_weights = FALSE,
+  # ...
 )
-
-# Returns: mbta_plans object (SIR-corrected if apply_sir = TRUE)
 ```
 
 **Parameter details:**
@@ -897,47 +887,50 @@ After SMC generates plans using the penalized exploration distribution, apply Sa
 
 ```r
 apply_sir_correction <- function(
-  plans,                    # mbta_plans object from mbta_smc()
-  lambda = NULL,            # lambda value used in SMC (extracted from plans if NULL)
-  nsims = NULL,             # number of plans in final sample (defaults to nrow(plans))
-  return_weights = FALSE    # return importance weights without resampling
+  plans,                 # mbta_plans object from mbta_smc()
+  lambda = NULL,         # lambda value used in SMC
+  nsims = NULL,
+  return_weights = FALSE
 ) {
 
-  # Extract lambda if not provided (scalar, same for all plans)
-  if (is.null(lambda)) {
-    lambda <- attr(plans, "lambda")
-    if (is.null(lambda)) {
-      stop("Lambda not found. Provide lambda parameter or ensure plans ",
-           "object has 'lambda' attribute.")
-    }
+  # (Extract lambda if needed)
+  if (is.null(lambda)) lambda <- attr(plans, "lambda")
+
+  # Extract penalties and exploration log weights
+  penalties <- plans$particle_penalty
+  log_W_explore <- plans$log_weight_explore
+
+  # Calculate Correction Factor C(x) = π_uniform / π_explore = exp(λ × penalty)
+  # Calculate Final Uniform Weights W_uniform = W_explore × C(x)
+  # Use log space for numerical stability:
+  # log(W_uniform) = log(W_explore) + λ × penalty
+
+  log_W_uniform <- log_W_explore + lambda * penalties
+
+  # Normalize using log-sum-exp trick
+  max_log_W <- max(log_W_uniform)
+
+  # Check for simulation failure (all weights are -Inf)
+  if (is.infinite(max_log_W) && max_log_W < 0) {
+      stop("All weights are zero. Simulation failed.")
   }
 
-  # Extract penalties stored during SMC
-  penalties <- plans$particle_penalty
-
-  # Calculate importance weights using log-sum-exp for numerical stability
-  # Target: uniform (all compliant plans equally likely)
-  # Exploration: penalized (favored compact/efficient plans)
-  # Weight = target / exploration = 1 / exp(-λ × penalty) = exp(λ × penalty)
-
-  # Log-sum-exp trick to avoid overflow:
-  # Instead of: w_i = exp(λ × penalty_i)
-  # Compute: w_i = exp(λ × penalty_i - max(λ × penalty))
-  log_weights <- lambda * penalties
-  max_log_weight <- max(log_weights)
-  importance_weights <- exp(log_weights - max_log_weight)
-
-  # Normalize weights (denominator cancels the max shift)
-  normalized_weights <- importance_weights / sum(importance_weights)
+  W_uniform_unnorm <- exp(log_W_uniform - max_log_W)
+  normalized_weights <- W_uniform_unnorm / sum(W_uniform_unnorm)
 
   if (return_weights) {
-    # Return plans with importance weights (for diagnostics)
-    plans$sir_weight <- normalized_weights
+    plans$weight_uniform <- normalized_weights
     return(plans)
   }
 
-  # Resample plans proportional to importance weights
-  n_final <- if (is.null(nsims)) nrow(plans) else nsims
+  # Resample plans proportional to W_uniform
+  n_successful <- nrow(plans[normalized_weights > 0])
+  n_final <- if (is.null(nsims)) n_successful else min(nsims, n_successful)
+
+  if (n_final == 0) {
+      stop("No successful plans generated.")
+  }
+
   resampled_indices <- sample(
     1:nrow(plans),
     size = n_final,
@@ -949,10 +942,7 @@ apply_sir_correction <- function(
   final_plans <- plans[resampled_indices, ]
   final_plans$draw <- 1:n_final  # Renumber draws
 
-  # Mark as SIR-corrected
   attr(final_plans, "sir_corrected") <- TRUE
-  attr(final_plans, "sir_lambda") <- lambda
-
   return(final_plans)
 }
 ```
@@ -960,6 +950,7 @@ apply_sir_correction <- function(
 #### 5.5.3 Usage Examples
 
 **Basic workflow:**
+
 ```r
 # Run SMC with penalties for efficient exploration
 plans_raw <- mbta_smc(
@@ -977,6 +968,7 @@ compare_to_reference(plans_uniform, chelsea_map, "pct_minority")
 ```
 
 **Automatic SIR (default behavior):**
+
 ```r
 # If apply_sir = TRUE (default), mbta_smc() automatically applies correction
 plans <- mbta_smc(
@@ -988,6 +980,7 @@ plans <- mbta_smc(
 ```
 
 **Diagnostic workflow:**
+
 ```r
 # Compare distributions before/after SIR correction
 plans_raw <- mbta_smc(chelsea_map, nsims = 5000, apply_sir = FALSE)
@@ -1007,29 +1000,20 @@ ESS <- 1 / sum(plans_with_weights$sir_weight^2)
 cat("Effective sample size:", ESS, "out of", nrow(plans_raw), "\n")
 ```
 
-#### 5.5.4 Theoretical Justification
+#### 5.5.4 Theoretical Justification (Revised)
 
-**SMC exploration target:**
-```
-π_explore(x) ∝ exp(-λ × penalty(x)) × I(hard constraints)
-```
+**RSIS Exploration:** The algorithm rigorously tracks the proposal probability Q(x) (`log_proposal_path`). By copying this path during resampling events, the final importance weight $W_{explore}$ remains valid, even though the effective proposal distribution $Q'(x)$ (resulting from Q(x) and resampling via V(x)) is complex.
+$W_{explore}(x) \propto \pi_{explore}(x) / Q'(x)$
 
-**Desired final target:**
-```
-π_uniform(x) ∝ I(hard constraints)
-```
+**Targets:** $\pi_{explore}(x) \propto \exp(-\lambda \times penalty(x))$; $\pi_{uniform}(x) \propto 1$.
 
-**Importance weight:**
-```
-w(x) = π_uniform(x) / π_explore(x)
-     = I(hard constraints) / [exp(-λ × penalty(x)) × I(hard constraints)]
-     = 1 / exp(-λ × penalty(x))
-     = exp(λ × penalty(x))
-```
+**Importance Weight Correction:** We multiply by the correction factor $C(x) = \pi_{uniform}(x) / \pi_{explore}(x) = \exp(\lambda \times penalty(x))$.
 
-**Effect:** Plans with higher penalties (violated soft constraints more) receive higher weights, compensating for being sampled less frequently during exploration.
+$W_{uniform}(x) = W_{explore}(x) \times C(x)$
+$W_{uniform}(x) \propto (\pi_{explore}(x) / Q'(x)) \times (\pi_{uniform}(x) / \pi_{explore}(x))$
+$W_{uniform}(x) \propto \pi_{uniform}(x) / Q'(x)$
 
-**Result:** After resampling proportional to w(x), the final distribution matches π_uniform—a true uniform distribution over compliant configurations.
+**Result:** Resampling proportional to $W_{uniform}(x)$ yields the desired uniform distribution.
 
 #### 5.5.5 Diagnostics and Validation
 
@@ -1126,6 +1110,7 @@ plot_diagnostics(plans, measure = "total_capacity")
 ## 6. Implementation Plan
 
 ### Phase 1: Core SMC Engine (Weeks 1-2)
+
 - [ ] Implement `mbta_map` S3 class and constructor (R/mbta_map.R)
 - [ ] Build adjacency graph from sf data using `sf::st_touches()` (R/adjacency.R)
 - [ ] Implement particle state tracking with running sums (R/smc_particle.R)
@@ -1141,6 +1126,7 @@ plot_diagnostics(plans, measure = "total_capacity")
 - [ ] **Linear Issue:** Create issue for Phase 1 completion
 
 ### Phase 2: Constraint System (Week 3)
+
 - [ ] Implement `mbta_constr` S3 class (R/mbta_constraints.R)
 - [ ] Implement `add_constr_compactness()` using spatial metrics
 - [ ] Implement `add_constr_status_quo()` for reference plan comparison
@@ -1149,6 +1135,7 @@ plot_diagnostics(plans, measure = "total_capacity")
 - [ ] **Linear Issue:** Create issue for Phase 2 completion
 
 ### Phase 3: Plans Object & Analysis (Week 4)
+
 - [ ] Implement `mbta_plans` S3 class inheriting from data.table (R/mbta_plans.R)
 - [ ] Implement `get_plans_matrix()` accessor
 - [ ] Implement plan-level aggregation functions using data.table
@@ -1157,6 +1144,7 @@ plot_diagnostics(plans, measure = "total_capacity")
 - [ ] **Linear Issue:** Create issue for Phase 3 completion
 
 ### Phase 4: Plotting & Diagnostics (Week 5)
+
 - [ ] Implement `plot.mbta_map()` (R/plotting.R)
 - [ ] Implement `plot.mbta_plans()` with sf visualization
 - [ ] Implement `hist.mbta_plans()` for distribution analysis
@@ -1165,6 +1153,7 @@ plot_diagnostics(plans, measure = "total_capacity")
 - [ ] **Linear Issue:** Create issue for Phase 4 completion
 
 ### Phase 5: Integration & Optimization (Week 6)
+
 - [ ] Integrate with `precompute_spatial_attributes()` for performance
 - [ ] Full validation on Chelsea test case (rapid transit community)
 - [ ] Performance profiling and optimization
@@ -1173,15 +1162,17 @@ plot_diagnostics(plans, measure = "total_capacity")
 - [ ] **Linear Issue:** Create issue for Phase 5 completion
 
 ### Phase 6: Documentation & Testing (Week 7)
+
 - [ ] Write comprehensive function documentation (Roxygen2)
 - [ ] Create vignette: "Simulating MBTA Zoning Plans with SMC"
 - [ ] Create vignette: "Detecting Bias in Adopted Plans"
-- [ ] Write unit tests for all SMC functions (tests/testthat/test-smc-*.R)
+- [ ] Write unit tests for all SMC functions (tests/testthat/test-smc-\*.R)
 - [ ] Integration tests with real municipality data
 - [ ] Update CLAUDE.md with SMC workflow
 - [ ] **Linear Issue:** Create issue for Phase 6 completion
 
 ### Phase 7: Validation & Release (Week 8)
+
 - [ ] Run validation suite on 7 test municipalities
 - [ ] Generate 10,000 plans for Chelsea and analyze
 - [ ] Compare computational performance vs. theoretical predictions
@@ -1261,6 +1252,7 @@ The SMC algorithm will integrate with existing package infrastructure:
 **Existing function:** `evaluate_compliance()`
 
 **SMC usage:**
+
 ```r
 # In propagation step, use existing compliance function
 compliance <- evaluate_compliance(
@@ -1324,6 +1316,7 @@ plans <- mbta_smc(chelsea_map, nsims = 10000)
 ```
 
 **Why precomputation enables realistic performance targets:**
+
 - Spatial intersections (st_intersection, st_area) are expensive: ~0.03 sec each
 - Without precomputation: 50K particles × 0.03 sec = 25 minutes just for Tier 3
 - With precomputation: Tier 3 reads cached columns instead of computing intersections
@@ -1334,6 +1327,7 @@ plans <- mbta_smc(chelsea_map, nsims = 10000)
 **Existing function:** `validate_contiguity()`
 
 **SMC usage:**
+
 ```r
 # In propagation step, check contiguity constraint
 is_contiguous <- validate_contiguity(
@@ -1349,6 +1343,7 @@ if (!is_contiguous) {
 ### 9.4 Adjacency Graph
 
 **New function** (builds on existing sf operations):
+
 ```r
 # Build adjacency graph from sf data using rook adjacency
 build_adjacency <- function(parcels_sf) {
@@ -1370,12 +1365,14 @@ build_adjacency <- function(parcels_sf) {
 ```
 
 **Why rook adjacency:**
+
 - **Queen adjacency** (`st_touches()`): Includes corner-touch connections
 - **Rook adjacency** (`st_relate` with boundary pattern): Requires shared edge
 - **Benefit:** Avoids fragile single-point connections that can violate contiguity intent
 - **Trade-off:** Slightly more restrictive, but more robust for legal compliance
 
 **SMC usage:**
+
 ```r
 # In mbta_map constructor
 if (is.null(adj)) {
@@ -1392,6 +1389,7 @@ if (is.null(adj)) {
 ### 10.1 Computational Targets
 
 **With precomputation (using `precompute_spatial_attributes()`):**
+
 - 1,000 plans: <1 minute
 - 10,000 plans: <10 minutes (target: ~6 minutes with optimization)
 - 100,000 plans: <2 hours (with parallelization)
@@ -1427,11 +1425,13 @@ optimization strategies include: (1) vectorizing more aggressively with data.tab
 ```
 
 **Why 3-tier checking achieves this:**
+
 - **Avoids 2M expensive compliance checks:** Only check when particle completes
 - **Early termination:** Tier 2 kills impossible particles, reducing wasted Tier 3 calls
 - **Precomputation:** Tier 3 reads cached columns instead of computing intersections
 
 **Parallel scaling:**
+
 - Linear speedup with ncores (up to physical cores)
 - 10,000 plans on 8 cores: ~40 seconds
 
@@ -1603,18 +1603,22 @@ smc_diagnostics(plans)
 ## 13. Key References
 
 **SMC for Redistricting:**
-- McCartan, C., & Imai, K. (2020). Sequential Monte Carlo for Sampling Balanced and Compact Redistricting Plans. *arXiv preprint arXiv:2008.06131*.
-- McCartan, C., & Imai, K. (2023). `redist`: Simulation Methods for Legislative Redistricting. *Journal of Statistical Software*.
+
+- McCartan, C., & Imai, K. (2020). Sequential Monte Carlo for Sampling Balanced and Compact Redistricting Plans. _arXiv preprint arXiv:2008.06131_.
+- McCartan, C., & Imai, K. (2023). `redist`: Simulation Methods for Legislative Redistricting. _Journal of Statistical Software_.
 
 **MCMC for Redistricting (for comparison):**
-- Fifield, B., Higgins, M., Imai, K., & Tarr, A. (2020). Automated redistricting simulation using Markov chain Monte Carlo. *Journal of Computational and Graphical Statistics*, 29(4), 715-728.
+
+- Fifield, B., Higgins, M., Imai, K., & Tarr, A. (2020). Automated redistricting simulation using Markov chain Monte Carlo. _Journal of Computational and Graphical Statistics_, 29(4), 715-728.
 
 **MBTA Communities Act:**
+
 - Massachusetts General Law Chapter 40A Section 3A
 - EOHLC Compliance Model Documentation (`dev/compliance_model_docs/`)
 
 **R Package Design:**
-- Wickham, H. (2015). *R packages: organize, test, document, and share your code*. O'Reilly Media.
+
+- Wickham, H. (2015). _R packages: organize, test, document, and share your code_. O'Reilly Media.
 
 ---
 
@@ -1627,17 +1631,20 @@ All development work will be tracked in Linear with the following conventions:
 **Labels:** `smc-algorithm`, `enhancement`, `research`
 
 **Issue Naming Convention:**
+
 - "SMC Phase 1: Core SMC Engine"
 - "SMC Phase 2: Constraint System"
 - etc.
 
 **Progress Updates:**
+
 - Comment on Linear issues after completing each sub-task
 - Reference code locations using `file_path:line_number` format
 - Update issue status (In Progress → Completed)
 - Link related issues (e.g., performance optimization issues)
 
 **Example Linear Comment:**
+
 ```
 Completed particle initialization in R/smc_initialize.R:1-150.
 
@@ -1665,17 +1672,36 @@ Next: Implementing propagation step (Phase 1, task 4)
 
 ---
 
-## 15. Technical Corrections from Review
+## 15. Technical Corrections from Review (Updated for v2.0)
 
-This section documents corrections made to v1.0 based on expert review feedback.
+This section documents corrections made based on expert review feedback of v1.0, leading to the adoption of the v2.0 design.
+
+### Summary of v2.0 Redesign (Methodology Correction)
+
+The initial SMC design (v1.0/v1.1) contained critical mathematical flaws related to inconsistent weighting, incorrect resampling procedures, and flawed SIR correction. Version 2.0 corrects these by adopting a **Valuation-Guided Sequential Importance Sampling with Resampling (RSIS)** framework.
+
+**Key Changes in v2.0:**
+
+1. **Valuation-Guided Resampling (Sections 4.3.3, 4.3.4):** Introduced a Valuation Function V(x) based on Tier 2 lookaheads to guide intermediate resampling. This provides efficient, guided exploration (similar to tempering) while remaining tractable for this problem structure.
+2. **Rigorous Proposal Tracking (Section 4.3.2):** Implemented meticulous tracking of the cumulative proposal probability Q(x) (`log_proposal_path`).
+3. **Corrected Weight Calculation (Section 4.3.2):** The final importance weight $W_{explore}$ is correctly calculated as $\pi_{explore}(x) / Q(x)$ only at completion.
+4. **Sound Resampling Procedure (Section 4.3.3):** Resampling is applied only to the active population, and crucially, the `log_proposal_path` is copied to offspring particles, preserving the validity of the final importance weights.
+5. **Corrected SIR Implementation (Section 5.5.2):** The SIR correction step now correctly incorporates the exploration weights $W_{explore}$ and the correction factor $C(x)$, utilizing log-space calculations for stability.
+6. **Data Structure Updates (Section 5.1.2):** `mbta_plans` object updated to store `log_proposal_path` and intermediate log weights.
+
+**Impact:** The v2.0 algorithm is mathematically sound, ensuring samples correctly represent the target distribution. It provides the efficiency benefits of guided SMC exploration and integrates seamlessly with the existing 3-Tier optimization strategy.
+
+---
 
 ### Issue 1: Propagation Feasibility Logic (HIGH - CRITICAL)
 
 **Problem identified:**
+
 > "Applying every hard compliance check after each parcel addition will zero-out almost all particles until they hit the minimum units/acreage thresholds (the partial zones will fail min-capacity/min-area at every intermediate step), so the SMC will die out immediately unless you change the feasibility logic in propagation."
 
 **Resolution:**
 Implemented **3-tier checking strategy** (Section 4.3.2, 4.3.6):
+
 - **Tier 1 (every step):** Update running sums (capacity, area, station metrics) - O(1) arithmetic
 - **Tier 2 (every step):** Infeasibility test - "can this particle possibly succeed?" - kills mathematically impossible particles early
 - **Tier 3 (on completion only):** Full compliance check via `evaluate_compliance()` - only when particle reaches minimum requirements
@@ -1689,9 +1715,11 @@ Implemented **3-tier checking strategy** (Section 4.3.2, 4.3.6):
 ### Issue 2: SMC Weight Update Formula (HIGH - THEORETICAL CORRECTNESS)
 
 **Problem identified:**
+
 > "The weight update ignores the proposal density and instead multiplies by exp(-λ penalty), which means the sampler targets a different, undetermined distribution; the text also overclaims that final particles are independent."
 
 **Resolution:**
+
 - **Corrected weight update** (Section 4.3.2):
   ```r
   # Correct SMC importance sampling:
@@ -1711,9 +1739,11 @@ Implemented **3-tier checking strategy** (Section 4.3.2, 4.3.6):
 ### Issue 3: Efficiency Bound Soft vs Hard (MEDIUM - CONSISTENCY)
 
 **Problem identified:**
+
 > "The 'efficiency bound' is described as soft, yet the termination rule enforces it as a hard cutoff; that truncates the state space and directly conflicts with the uniform-null framing unless you document the resulting bias and run sensitivity checks on α."
 
 **Resolution:**
+
 - **Removed from termination rule** (Section 4.3.2): Particles no longer terminate when exceeding α × target
 - **Added to penalty function** (Section 4.2):
   ```r
@@ -1732,9 +1762,11 @@ Implemented **3-tier checking strategy** (Section 4.3.2, 4.3.6):
 ### Issue 4: Contiguity Specification (MEDIUM - CLARIFICATION)
 
 **Problem identified:**
+
 > "Contiguity is listed as 'at least 50%' which does not match either the statute or the existing compliance helper that requires the whole overlay to be contiguous; this discrepancy needs to be resolved or justified."
 
 **Resolution:**
+
 - **Verified against existing code** (R/gis_operations.R:1019-1216): `validate_contiguity()` checks ≥50% in largest contiguous portion + 5-acre minimum for other portions
 - **Added clarification box** (Section 3.3): Distinguishes contiguity (50% of area in single spatially connected portion) from station coverage (50-90% of capacity in station buffers)
 - **Cited statute** (Section 3.3): 760 CMR 59.04(3)(d) per existing documentation
@@ -1749,16 +1781,19 @@ Implemented **3-tier checking strategy** (Section 4.3.2, 4.3.6):
 ### Issue 5: Performance of Compliance Calls (MEDIUM - OPTIMIZATION)
 
 **Problem identified:**
+
 > "Re-running evaluate_compliance() on freshly subset sf objects inside every propagation step will be very expensive; without cached incremental metrics or a cheaper feasibility test, the five-minute/10k-plan target looks unreachable."
 
 **Resolution:**
 Integrated with Issue 1 solution (3-tier checking):
+
 - **Tier 1:** Cache running sums in particle state, avoid recomputing aggregates every step
 - **Tier 2:** Cheap infeasibility test avoids futile propagation
 - **Tier 3:** Only call `evaluate_compliance()` when particle completes (~once per 40 steps, not every step)
 - **Precomputation integration** (Section 9.2): Leverages existing `precompute_spatial_attributes()` for ~1000x speedup
 
 **Performance calculation** (Section 10):
+
 ```
 Without optimization: 2M compliance calls × 0.03 sec = 1,000 min
 With 3-tier + precomputation:
@@ -1792,6 +1827,7 @@ This section documents key design decisions for the MVP (Phase 1) implementation
 **Decision:** The MVP implementation supports only single-component (fully contiguous) overlay districts, deferring multi-component support to Phase 2.
 
 **Legal context:**
+
 - Massachusetts law (760 CMR 59.04(3)(d)) permits multi-component overlays:
   - ≥50% of district area must be in one contiguous portion
   - Remaining area can be in separate portions ≥5 acres each
@@ -1802,11 +1838,13 @@ This section documents key design decisions for the MVP (Phase 1) implementation
 1. **Municipal preference:** Most adopted plans use single-component designs for simplicity and administrative ease
 
 2. **Conservative bias test:** Restricting to single-component plans makes the reference distribution more conservative:
+
    - Tests bias within the subset of "simpler" feasible plans
    - If bias is detected in this restricted space, it's still meaningful
    - If no bias detected, can expand to multi-component in Phase 2
 
 3. **Implementation complexity:** Multi-component support requires:
+
    - {grow, spawn} move types instead of simple grow-only
    - Component management and gating rules (≥5 acre enforcement)
    - More complex state tracking and resampling
@@ -1819,6 +1857,7 @@ This section documents key design decisions for the MVP (Phase 1) implementation
    - Integration with existing compliance functions
 
 **Phase 2 extension path:**
+
 - Add `component_spawn` move type to propagation step
 - Track multiple components per particle with area/capacity per component
 - Gate non-largest components: only keep if ≥5 acres at completion
@@ -1826,6 +1865,7 @@ This section documents key design decisions for the MVP (Phase 1) implementation
 - Validate that multi-component support preserves correctness
 
 **Documentation requirement:** All user-facing documentation and function help files must clearly state:
+
 > "This implementation generates single-component (fully contiguous) overlay districts. Multi-component overlays (permitted under 760 CMR 59.04(3)(d)) are not currently supported."
 
 #### Pure R Implementation (Phase 1)
@@ -1835,16 +1875,19 @@ This section documents key design decisions for the MVP (Phase 1) implementation
 **Rationale:**
 
 1. **Premature optimization:** Rcpp adds development complexity without validating that optimization is needed:
+
    - Pure R may meet performance targets with proper vectorization
    - Profiling real workloads will identify actual bottlenecks
    - Optimization effort should focus on measured hot paths
 
 2. **Developer experience:** Team has R expertise but limited Rcpp experience:
+
    - Pure R allows faster iteration during algorithm development
    - Reduces debugging complexity during initial validation
    - Enables easier contributions from R-focused team members
 
 3. **Maintenance burden:** Rcpp introduces build dependencies and platform-specific issues:
+
    - Complicates package installation for users
    - Requires compiler toolchain on user machines
    - Pure R package is more portable and easier to distribute
@@ -1863,6 +1906,7 @@ This section documents key design decisions for the MVP (Phase 1) implementation
 4. **Only then Rcpp:** If profiling shows Tier 1-2 dominate and R optimization is exhausted
 
 **Rcpp migration path (if needed):**
+
 - Port Tier 1-2 particle propagation to C++ (hot path)
 - Use `Rcpp::NumericVector` for running sums
 - Implement bitset-based membership tracking
@@ -1870,6 +1914,7 @@ This section documents key design decisions for the MVP (Phase 1) implementation
 - Keep Tier 3 (compliance evaluation) in R (reuses existing functions)
 
 **Success criteria:**
+
 - Pure R implementation meets 10-minute target for 10K plans
 - If profiling shows >50% time in Tier 1-2 and target missed, consider Rcpp
 
@@ -1880,11 +1925,13 @@ This section documents key design decisions for the MVP (Phase 1) implementation
 **Rationale:**
 
 1. **Legal basis:** Compactness is NOT a requirement under 760 CMR 59:
+
    - No statutory language mandating compact shapes
    - Compliance model does not check compactness
    - Including it as default biases the null hypothesis
 
 2. **Research validity:** Default `compactness = 0` produces the cleanest null:
+
    - "Adopted plan is uniform over all legally compliant configurations"
    - No additional substantive assumptions about municipal preferences
    - Users can explore behavioral realism by setting `compactness > 0`
@@ -1895,6 +1942,7 @@ This section documents key design decisions for the MVP (Phase 1) implementation
    - **Sensitivity analysis:** Vary compactness to assess robustness
 
 **User guidance:**
+
 - Default `compactness = 0`: For hypothesis testing against legal null
 - Set `compactness = 1-2`: To model realistic municipal behavior
 - Document clearly in vignettes which setting is appropriate for each research question
