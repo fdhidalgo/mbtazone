@@ -12,6 +12,7 @@ The `mbtazone` package implements Massachusetts' MBTA Communities Act compliance
 - GIS operations: ✅ Complete
 - Documentation: ✅ Complete (33 exported functions)
 - Shiny interactive app: ⏸️ Not yet implemented (see PRD in `dev/PRD.md`)
+- SMC algorithm for zoning simulation: 📋 Planned (see PRD in `dev/PRD_SMC_Algorithm.md`)
 
 ## Package Architecture
 
@@ -44,7 +45,7 @@ The package consists of 6 main R files with 34 exported functions:
    - See function list in R/unit_capacity_calculations.R:1-500 for complete inventory
 
 5. **`compliance_pipeline.R`** (4 exports)
-   - `assign_parcels_to_districts()`: Assign parcels to compliance districts
+   - `assign_parcels_to_districts()`: Assign parcels to compliance districts using area-weighted spatial intersection
    - `calculate_district_capacity()`: Calculate unit capacity for entire district
    - `evaluate_compliance()`: Complete end-to-end compliance evaluation
    - `summarize_compliance_results()`: Generate compliance summary reports
@@ -342,6 +343,85 @@ simulation_df <- data.frame(
 - Changing district boundaries between evaluations
 - Different municipalities each iteration
 
+### SMC Simulation Workflow (Planned Feature)
+
+For research applications involving bias detection in adopted zoning plans, use the Sequential Monte Carlo (SMC) algorithm to generate reference distributions of compliant zoning configurations:
+
+```r
+library(mbtazone)
+
+# ==== SETUP PHASE ====
+
+# 1. Load and precompute municipality data
+parcels <- load_municipality("inst/extdata/parcels/57_CHELSEA_basic.zip")
+transit_stations <- load_station_areas()
+
+parcels_precomputed <- precompute_spatial_attributes(
+  municipality = parcels,
+  station_areas = transit_stations
+)
+
+# 2. Create mbta_map object
+chelsea_map <- mbta_map(
+  parcels_precomputed,
+  community_type = "rapid_transit",
+  total_capacity = "unit_capacity",
+  precomputed = TRUE
+)
+
+# 3. Define constraints (optional)
+constraints <- mbta_constr(chelsea_map) %>%
+  add_constr_compactness(strength = 1.5) %>%
+  add_constr_status_quo(strength = 0.5, ref_plan = adopted_plan)
+
+# ==== SIMULATION PHASE ====
+
+# 4. Run SMC to generate reference distribution
+plans <- mbta_smc(
+  map = chelsea_map,
+  nsims = 10000,  # number of plans to sample
+  constraints = constraints,
+  runs = 4,       # independent runs for diagnostics
+  ncores = 8      # parallel cores
+)
+
+# ==== ANALYSIS PHASE ====
+
+# 5. Calculate plan statistics
+plans <- calculate_plan_statistics(
+  plans,
+  map = chelsea_map,
+  measures = c("pct_minority", "median_property_value", "pct_commercial")
+)
+
+# 6. Compare adopted plan to reference distribution
+minority_comparison <- compare_to_reference(
+  plans,
+  chelsea_map,
+  measure = "pct_minority"
+)
+
+# 7. Visualize and diagnose
+plot_distribution(plans, measure = "pct_minority", ref_plan = adopted_plan)
+summary(plans)  # includes R-hat, ESS, diversity metrics
+```
+
+**Key Features:**
+- **Sequential Monte Carlo**: Builds zoning districts incrementally, resampling to maintain feasibility
+- **Reference Distribution**: Generates thousands of compliant alternative plans
+- **Bias Detection**: Detects systematic bias in adopted plans relative to all feasible alternatives
+- **Performance**: Leverages precomputation workflow for ~1000x speedup (10K plans in ~5 minutes)
+- **Research Focus**: Designed for academic analysis of municipal zoning decisions
+
+**When to use SMC simulation:**
+- Detecting demographic/economic bias in adopted zoning plans
+- Understanding the space of all feasible compliant configurations
+- Academic research on municipal land use policy
+- Benchmarking adopted plans against neutral reference distributions
+
+**Documentation:**
+See `dev/PRD_SMC_Algorithm.md` for complete specification and implementation plan.
+
 ## Testing Infrastructure
 
 ### Test Organization (tests/testthat/)
@@ -429,6 +509,13 @@ The compliance model calculates housing unit capacity through a 17-step process 
 - **Zoning Parameters**: District-specific rules (min lot size, FAR, height, etc.)
   - Extracted from Excel "Checklist Parameters" sheet
   - Can be created manually for testing or new districts
+
+- **District Assignment**: Parcels assigned to compliance districts using area-weighted intersection
+  - Uses `sf::st_intersection()` to calculate actual spatial overlaps
+  - Each parcel assigned to district containing majority of its area
+  - Correctly handles boundary-straddling parcels and complex geometries (holes, narrow sections)
+  - Parcels split across districts with no clear majority (<50% overlap) are flagged with warning
+  - Aligns with MBTA regulation that "entire parcel capacity counts" in assigned district
 
 - **Excluded/Sensitive Land**: Areas that cannot be developed
   - Public institutions, water bodies, wetlands, etc.

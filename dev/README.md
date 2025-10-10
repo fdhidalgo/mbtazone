@@ -51,7 +51,9 @@ Original proof-of-concept implementation used as reference for understanding Exc
 
 ## Key Files at Root
 
-- `PRD.md` - Product Requirements Document for the R package
+- `PRD.md` - Product Requirements Document for the core R package (Phases 1-2, now complete)
+- `PRD_SMC_Algorithm.md` - Product Requirements Document for SMC simulation algorithm (planned feature)
+- `build_zoning_data.R` - Script to rebuild the `zoning_parameters` dataset
 - `README.md` - This file
 
 ## Running Validation

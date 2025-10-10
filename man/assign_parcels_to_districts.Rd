@@ -36,8 +36,15 @@ This function handles three common district specification patterns:
 \strong{Method 1: Spatial Intersection}
 
 Provide an sf object with district boundary polygons. Parcels are assigned
-to districts based on spatial intersection (centroid method to avoid
-boundary issues).
+to districts based on area-weighted spatial intersection. Each parcel is
+assigned to the district that contains the largest share of its area. This
+ensures correct handling of boundary-straddling parcels and parcels with
+complex geometries (e.g., holes, narrow sections).
+
+The function calculates overlap areas for all parcel-district intersections
+and assigns each parcel to the district with maximum overlap. Parcels split
+across multiple districts with no clear majority (overlap <50\%) are flagged
+with a warning but still assigned to the district with largest overlap.
 
 \strong{Method 2: Column Name}
 

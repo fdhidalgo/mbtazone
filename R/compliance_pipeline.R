@@ -35,8 +35,15 @@ NULL
 #' \strong{Method 1: Spatial Intersection}
 #'
 #' Provide an sf object with district boundary polygons. Parcels are assigned
-#' to districts based on spatial intersection (centroid method to avoid
-#' boundary issues).
+#' to districts based on area-weighted spatial intersection. Each parcel is
+#' assigned to the district that contains the largest share of its area. This
+#' ensures correct handling of boundary-straddling parcels and parcels with
+#' complex geometries (e.g., holes, narrow sections).
+#'
+#' The function calculates overlap areas for all parcel-district intersections
+#' and assigns each parcel to the district with maximum overlap. Parcels split
+#' across multiple districts with no clear majority (overlap <50%) are flagged
+#' with a warning but still assigned to the district with largest overlap.
 #'
 #' \strong{Method 2: Column Name}
 #'
@@ -93,20 +100,65 @@ assign_parcels_to_districts <- function(municipality, districts) {
       districts <- sf::st_transform(districts, sf::st_crs(municipality))
     }
 
-    # Use centroid method to avoid boundary assignment issues
-    parcel_centroids <- sf::st_centroid(municipality)
+    # Use area-based intersection to handle boundary straddlers correctly
+    # This ensures parcels are assigned to the district containing most of their area
 
-    # Find which district each parcel centroid falls within
-    intersection <- sf::st_intersects(parcel_centroids, districts, sparse = TRUE)
+    # Add row numbers to districts to track assignments
+    districts$district_rownum <- seq_len(nrow(districts))
 
-    # Extract district assignments (row indices)
-    district_assignment <- sapply(intersection, function(x) {
-      if (length(x) == 0) return(NA_character_)
-      if (length(x) > 1) {
-        cli::cli_warn("Parcel in multiple districts, using first match")
+    # Compute spatial intersections between parcels and districts
+    intersections <- sf::st_intersection(municipality, districts)
+
+    # Calculate overlap areas
+    intersections$overlap_area <- as.numeric(sf::st_area(intersections))
+
+    # Find district with maximum overlap for each parcel
+    if (nrow(intersections) > 0) {
+      # Convert to data.table for efficient aggregation
+      intersection_dt <- data.table::as.data.table(sf::st_drop_geometry(intersections))
+
+      # For each parcel, find the district row with maximum overlap area
+      max_overlap <- intersection_dt[, .(
+        district_row = district_rownum[which.max(overlap_area)],
+        max_overlap_area = max(overlap_area),
+        n_districts = .N
+      ), by = LOC_ID]
+
+      # Calculate parcel total areas for overlap percentage
+      municipality_dt <- data.table::as.data.table(sf::st_drop_geometry(municipality))
+      municipality_dt[, total_area := as.numeric(sf::st_area(municipality))]
+
+      # Merge to get overlap percentages
+      max_overlap <- merge(
+        max_overlap,
+        municipality_dt[, .(LOC_ID, total_area)],
+        by = "LOC_ID",
+        all.x = TRUE
+      )
+      max_overlap[, overlap_pct := (max_overlap_area / total_area) * 100]
+
+      # Flag ambiguous assignments (split parcels with no clear majority)
+      max_overlap[, ambiguous := n_districts > 1 & overlap_pct < 50]
+
+      # Warn about ambiguous assignments
+      n_ambiguous <- sum(max_overlap$ambiguous, na.rm = TRUE)
+      if (n_ambiguous > 0) {
+        cli::cli_warn(
+          "{n_ambiguous} parcel{?s} split across multiple districts with no clear majority (assigned to largest overlap)"
+        )
       }
-      as.character(x[1])
-    })
+
+      # Create district assignment vector for all parcels
+      district_assignment <- rep(NA_character_, nrow(municipality))
+      matched_idx <- match(municipality$LOC_ID, max_overlap$LOC_ID)
+      district_assignment[!is.na(matched_idx)] <- as.character(
+        max_overlap$district_row[matched_idx[!is.na(matched_idx)]]
+      )
+
+    } else {
+      # No intersections found
+      district_assignment <- rep(NA_character_, nrow(municipality))
+    }
 
     # Try to extract district IDs if available
     district_id_col <- NULL
@@ -130,7 +182,12 @@ assign_parcels_to_districts <- function(municipality, districts) {
     if (!is.null(district_name_col)) {
       district_names <- districts[[district_name_col]][as.integer(district_assignment)]
     } else {
-      district_names <- paste0("District_", district_assignment)
+      # Keep NA values truly missing rather than labeling them "District_NA"
+      district_names <- ifelse(
+        is.na(district_assignment),
+        NA_character_,
+        paste0("District_", district_assignment)
+      )
     }
 
     result <- data.frame(
@@ -386,6 +443,28 @@ calculate_district_capacity <- function(parcels,
   # Add station area flag if provided
   if (!precomputed && !is.null(station_areas)) {
     # Standard mode: compute station area intersection
+    if (!inherits(station_areas, "sf")) {
+      cli::cli_abort("station_areas must be an sf object when provided")
+    }
+
+    station_crs <- sf::st_crs(station_areas)
+    parcel_crs <- sf::st_crs(parcels)
+
+    if (is.na(parcel_crs)) {
+      cli::cli_abort("parcels must have a defined CRS before station area intersection")
+    }
+
+    if (is.na(station_crs)) {
+      cli::cli_abort("station_areas must have a defined CRS")
+    }
+
+    if (station_crs != parcel_crs) {
+      cli::cli_warn(
+        "CRS mismatch detected, transforming station_areas to match parcels"
+      )
+      station_areas <- sf::st_transform(station_areas, parcel_crs)
+    }
+
     parcel_centroids <- sf::st_centroid(parcels)
     in_station_area <- sf::st_intersects(parcel_centroids, station_areas, sparse = FALSE)
     parcels$in_station_area <- as.logical(rowSums(in_station_area) > 0)

@@ -138,6 +138,17 @@ This validation implements **two complementary methods** to test different aspec
 
 **Tests**: `assign_parcels_to_districts()` spatial logic + full calculation workflow
 
+::: {.callout-note}
+## Spatial Assignment Methodology (Updated October 2025)
+
+The `assign_parcels_to_districts()` function was updated to use **area-weighted spatial intersection** instead of centroid-based assignment. Each parcel is now assigned to the district containing the majority of its area. This ensures correct handling of:
+
+- **Boundary-straddling parcels**: Parcels split across district boundaries are assigned based on area overlap, not arbitrary centroid location
+- **Complex geometries**: Parcels with holes or irregular shapes are correctly assigned even when centroids fall outside valid areas
+
+This change aligns with MBTA regulations that "entire parcel capacity counts" in the assigned district. Validation results confirm the methodology works correctly: municipalities with low parcel match rates but 0% unit differences (e.g., Braintree: 31.6% match, 0.0% diff) indicate proper boundary effect handling.
+:::
+
 
 # Method 1 Results: Excel Parcel List Validation
 

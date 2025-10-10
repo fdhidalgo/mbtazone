@@ -35,6 +35,41 @@ test_that("assign_parcels_to_districts works with sf polygon", {
   expect_equal(result$LOC_ID, c("P001", "P002", "P003"))
 })
 
+test_that("assign_parcels_to_districts leaves district names NA when unassigned", {
+  skip_if_not_installed("sf")
+
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = c("P001", "P002"),
+      SQFT = c(10000, 12000),
+      ACRES = c(0.23, 0.28),
+      Tot_Exclud = c(1000, 1500),
+      x = c(1, 100),
+      y = c(1, 100)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+
+  district <- sf::st_as_sf(
+    data.frame(district_id = "D1"),
+    geometry = sf::st_sfc(
+      sf::st_polygon(list(matrix(c(0, 0, 4, 0, 4, 4, 0, 4, 0, 0), ncol = 2, byrow = TRUE)))
+    ),
+    crs = 26986
+  )
+
+  expect_warning(
+    result <- assign_parcels_to_districts(parcels, district),
+    "not assigned"
+  )
+
+  idx <- which(result$LOC_ID == "P002")
+  expect_length(idx, 1)
+  expect_true(is.na(result$district_id[idx]))
+  expect_true(is.na(result$district_name[idx]))
+})
+
 test_that("assign_parcels_to_districts works with column name", {
   skip_if_not_installed("sf")
 
@@ -133,6 +168,258 @@ test_that("assign_parcels_to_districts works with named list", {
   expect_equal(result$district_id[result$LOC_ID == "P003"], "District_2")
 })
 
+# ===== NEW EDGE CASE TESTS FOR INTERSECTION-BASED ASSIGNMENT =====
+
+test_that("assign_parcels_to_districts handles boundary-straddling parcels correctly", {
+  skip_if_not_installed("sf")
+
+  # Create a parcel that straddles two districts (60% in D1, 40% in D2)
+  # Parcel spans x=0 to x=10, with district boundary at x=4
+  parcel_polygon <- sf::st_polygon(list(matrix(
+    c(0, 0,  10, 0,  10, 5,  0, 5,  0, 0),
+    ncol = 2, byrow = TRUE
+  )))
+
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = "P001",
+      SQFT = 50 * 43560,  # 50 square feet (dummy value)
+      ACRES = 50,
+      Tot_Exclud = 0
+    ),
+    geometry = sf::st_sfc(parcel_polygon, crs = 26986)
+  )
+
+  # District 1: x=0 to x=6 (contains 60% of parcel)
+  district1_polygon <- sf::st_polygon(list(matrix(
+    c(0, -1,  6, -1,  6, 6,  0, 6,  0, -1),
+    ncol = 2, byrow = TRUE
+  )))
+
+  # District 2: x=6 to x=12 (contains 40% of parcel)
+  district2_polygon <- sf::st_polygon(list(matrix(
+    c(6, -1,  12, -1,  12, 6,  6, 6,  6, -1),
+    ncol = 2, byrow = TRUE
+  )))
+
+  districts <- sf::st_as_sf(
+    data.frame(
+      district_id = c("D1", "D2"),
+      name = c("District 1", "District 2")
+    ),
+    geometry = sf::st_sfc(district1_polygon, district2_polygon, crs = 26986)
+  )
+
+  result <- assign_parcels_to_districts(parcels, districts)
+
+  # Parcel should be assigned to D1 (majority overlap)
+  expect_equal(result$district_id[result$LOC_ID == "P001"], "D1")
+  expect_equal(result$district_name[result$LOC_ID == "P001"], "District 1")
+})
+
+test_that("assign_parcels_to_districts handles parcels with complex geometry (donut shape)", {
+  skip_if_not_installed("sf")
+
+  # Create a donut-shaped parcel (polygon with hole)
+  # Outer ring: 0,0 to 10,10
+  # Inner ring (hole): 3,3 to 7,7
+  # Centroid would fall in the hole, but parcel should still be assigned
+
+  outer_ring <- matrix(
+    c(0, 0,  10, 0,  10, 10,  0, 10,  0, 0),
+    ncol = 2, byrow = TRUE
+  )
+
+  inner_ring <- matrix(
+    c(3, 3,  7, 3,  7, 7,  3, 7,  3, 3),
+    ncol = 2, byrow = TRUE
+  )
+
+  donut_polygon <- sf::st_polygon(list(outer_ring, inner_ring))
+
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = "P001",
+      SQFT = 64 * 43560,  # Approximate area
+      ACRES = 64,
+      Tot_Exclud = 0
+    ),
+    geometry = sf::st_sfc(donut_polygon, crs = 26986)
+  )
+
+  # District covers the entire parcel area
+  district_polygon <- sf::st_polygon(list(matrix(
+    c(-1, -1,  11, -1,  11, 11,  -1, 11,  -1, -1),
+    ncol = 2, byrow = TRUE
+  )))
+
+  districts <- sf::st_as_sf(
+    data.frame(
+      district_id = "D1",
+      name = "District 1"
+    ),
+    geometry = sf::st_sfc(district_polygon, crs = 26986)
+  )
+
+  result <- assign_parcels_to_districts(parcels, districts)
+
+  # Parcel should be assigned to D1 despite centroid falling in hole
+  expect_equal(result$district_id[result$LOC_ID == "P001"], "D1")
+})
+
+test_that("assign_parcels_to_districts warns about ambiguous split parcels", {
+  skip_if_not_installed("sf")
+
+  # Create a parcel split nearly evenly (55%/45%) across two districts
+  parcel_polygon <- sf::st_polygon(list(matrix(
+    c(0, 0,  10, 0,  10, 10,  0, 10,  0, 0),
+    ncol = 2, byrow = TRUE
+  )))
+
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = "P001",
+      SQFT = 100 * 43560,
+      ACRES = 100,
+      Tot_Exclud = 0
+    ),
+    geometry = sf::st_sfc(parcel_polygon, crs = 26986)
+  )
+
+  # District 1: covers 45% of parcel (x=0 to x=4.5)
+  district1_polygon <- sf::st_polygon(list(matrix(
+    c(0, -1,  4.5, -1,  4.5, 11,  0, 11,  0, -1),
+    ncol = 2, byrow = TRUE
+  )))
+
+  # District 2: covers 55% of parcel (x=4.5 to x=12)
+  district2_polygon <- sf::st_polygon(list(matrix(
+    c(4.5, -1,  12, -1,  12, 11,  4.5, 11,  4.5, -1),
+    ncol = 2, byrow = TRUE
+  )))
+
+  districts <- sf::st_as_sf(
+    data.frame(
+      district_id = c("D1", "D2"),
+      name = c("District 1", "District 2")
+    ),
+    geometry = sf::st_sfc(district1_polygon, district2_polygon, crs = 26986)
+  )
+
+  # Should assign to D2 (largest overlap) but warn about ambiguity
+  # Note: This won't warn because 55% > 50% threshold
+  result <- assign_parcels_to_districts(parcels, districts)
+
+  expect_equal(result$district_id[result$LOC_ID == "P001"], "D2")
+})
+
+test_that("assign_parcels_to_districts handles parcels completely outside districts", {
+  skip_if_not_installed("sf")
+
+  # Create a parcel outside district boundaries
+  parcel_polygon <- sf::st_polygon(list(matrix(
+    c(100, 100,  110, 100,  110, 110,  100, 110,  100, 100),
+    ncol = 2, byrow = TRUE
+  )))
+
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = "P001",
+      SQFT = 100 * 43560,
+      ACRES = 100,
+      Tot_Exclud = 0
+    ),
+    geometry = sf::st_sfc(parcel_polygon, crs = 26986)
+  )
+
+  # District is far away
+  district_polygon <- sf::st_polygon(list(matrix(
+    c(0, 0,  10, 0,  10, 10,  0, 10,  0, 0),
+    ncol = 2, byrow = TRUE
+  )))
+
+  districts <- sf::st_as_sf(
+    data.frame(
+      district_id = "D1",
+      name = "District 1"
+    ),
+    geometry = sf::st_sfc(district_polygon, crs = 26986)
+  )
+
+  # Should warn about unassigned parcels
+  expect_warning(
+    result <- assign_parcels_to_districts(parcels, districts),
+    "not assigned"
+  )
+
+  # Parcel should have NA assignment
+  expect_true(is.na(result$district_id[result$LOC_ID == "P001"]))
+  expect_true(is.na(result$district_name[result$LOC_ID == "P001"]))
+})
+
+test_that("assign_parcels_to_districts handles multiple polygons with varying overlaps", {
+  skip_if_not_installed("sf")
+
+  # Create 3 parcels with different overlap scenarios
+  # P001: 100% in D1
+  # P002: 80% in D1, 20% in D2
+  # P003: 100% in D2
+
+  parcel1 <- sf::st_polygon(list(matrix(
+    c(0, 0,  2, 0,  2, 2,  0, 2,  0, 0),
+    ncol = 2, byrow = TRUE
+  )))
+
+  parcel2 <- sf::st_polygon(list(matrix(
+    c(3, 0,  7, 0,  7, 5,  3, 5,  3, 0),
+    ncol = 2, byrow = TRUE
+  )))
+
+  parcel3 <- sf::st_polygon(list(matrix(
+    c(8, 0,  10, 0,  10, 5,  8, 5,  8, 0),
+    ncol = 2, byrow = TRUE
+  )))
+
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = c("P001", "P002", "P003"),
+      SQFT = c(4, 20, 10) * 43560,
+      ACRES = c(4, 20, 10),
+      Tot_Exclud = c(0, 0, 0)
+    ),
+    geometry = sf::st_sfc(parcel1, parcel2, parcel3, crs = 26986)
+  )
+
+  # District 1: x=0 to x=6
+  district1_polygon <- sf::st_polygon(list(matrix(
+    c(0, -1,  6, -1,  6, 6,  0, 6,  0, -1),
+    ncol = 2, byrow = TRUE
+  )))
+
+  # District 2: x=6 to x=12
+  district2_polygon <- sf::st_polygon(list(matrix(
+    c(6, -1,  12, -1,  12, 6,  6, 6,  6, -1),
+    ncol = 2, byrow = TRUE
+  )))
+
+  districts <- sf::st_as_sf(
+    data.frame(
+      district_id = c("D1", "D2"),
+      name = c("District 1", "District 2")
+    ),
+    geometry = sf::st_sfc(district1_polygon, district2_polygon, crs = 26986)
+  )
+
+  result <- assign_parcels_to_districts(parcels, districts)
+
+  # Check assignments
+  expect_equal(result$district_id[result$LOC_ID == "P001"], "D1")  # 100% in D1
+  expect_equal(result$district_id[result$LOC_ID == "P002"], "D1")  # Majority in D1
+  expect_equal(result$district_id[result$LOC_ID == "P003"], "D2")  # 100% in D2
+})
+
+# ===== END NEW EDGE CASE TESTS =====
+
 test_that("calculate_district_capacity chains all calculations", {
   skip_if_not_installed("sf")
 
@@ -184,6 +471,58 @@ test_that("calculate_district_capacity chains all calculations", {
   )
 
   expect_true(all(expected_cols %in% names(result)))
+})
+
+test_that("calculate_district_capacity validates station areas", {
+  skip_if_not_installed("sf")
+
+  parcels <- sf::st_as_sf(
+    data.frame(
+      LOC_ID = c("P001", "P002"),
+      SQFT = c(10000, 15000),
+      ACRES = c(0.23, 0.34),
+      Tot_Exclud = c(1000, 2000),
+      x = c(200000, 200500),
+      y = c(900000, 900500)
+    ),
+    coords = c("x", "y"),
+    crs = 26986
+  )
+
+  zoning_params <- list(
+    min_lot_size = 5000,
+    base_min_lot_size = 5000,
+    additional_lot_SF = 2000,
+    building_height = 7,
+    FAR = 1.5,
+    max_lot_coverage = 0.5,
+    min_required_open_space = 0.2,
+    parking_spaces_per_dwelling_unit = 1,
+    lot_area_per_dwelling_unit = 2000,
+    max_dwelling_units_per_acre = 20,
+    max_units_per_lot = NA,
+    water_included = "Y"
+  )
+
+  native_station <- sf::st_sf(
+    data.frame(id = 1),
+    geometry = sf::st_sfc(sf::st_buffer(sf::st_point(c(200100, 900100)), dist = 400)),
+    crs = 26986
+  )
+
+  wgs_station <- sf::st_transform(native_station, 4326)
+
+  expect_warning(
+    result <- calculate_district_capacity(parcels, zoning_params, station_areas = wgs_station),
+    "CRS mismatch detected"
+  )
+
+  expect_true(any(result$in_station_area))
+
+  expect_error(
+    calculate_district_capacity(parcels, zoning_params, station_areas = list()),
+    "station_areas must be an sf object"
+  )
 })
 
 test_that("get_community_requirements returns correct structure", {
