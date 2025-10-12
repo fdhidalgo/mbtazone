@@ -2,7 +2,7 @@
 
 ## Product Requirements Document
 
-**Version:** 2.0 (Revised with Valuation-Guided RSIS Methodology)
+**Version:** 2.1 (Critical Corrections to Proposal Density Calculation)
 **Date:** October 10, 2025
 **Status:** Design Phase
 
@@ -189,6 +189,8 @@ plans <- mbta_smc(
 
 The algorithm uses a two-stage approach: (1) penalized exploration during SMC for computational efficiency, then (2) SIR correction to restore uniform distribution.
 
+**Important Note on Sample Space:** The algorithm samples over path space $\tau$ (sequences of growth decisions), not directly over the space of unique parcel sets $x$. Multiple paths can lead to the same final configuration. The uniform target distribution applies to the set space - each unique compliant configuration should be equally likely regardless of how many different paths can generate it.
+
 #### 4.2.1 Exploration Target (During SMC)
 
 We define an Exploration Target Distribution $\pi_{explore}$ that incorporates the soft penalties (compactness, efficiency). Sampling from this distribution improves the Effective Sample Size (ESS) for the final SIR correction.
@@ -255,7 +257,12 @@ The final target distribution for hypothesis testing is uniform over all complia
 
 **Final distribution $\pi_{uniform}$:**
 
-$\pi_{uniform}(x) \propto I(x\ satisfies\ hard\ constraints)$
+$\pi_{uniform}(x) \propto I(x\ satisfies\ hard\ constraints\ \cap\ x \in \text{generator support})$
+
+**Note on Generator Support:** The algorithm samples uniformly over compliant plans *conditional on the restrictions of the generator*:
+- **Single-component only** (due to MVP restriction - no multi-component overlays)
+- **Rook adjacency** (shared boundaries, not corner-touch)
+- **Reachable from seed selection strategy** (uniform, capacity-weighted, etc.)
 
 **SIR correction (Revised):** Each sampled plan has an exploration weight $W_{explore}$ calculated during the RSIS process.
 
@@ -283,8 +290,12 @@ _(Seed selection and Tier 1/Tier 2 state initialization remains the same as the 
 ```r
 # Initialize RSIS tracking variables
 # CRITICAL: Initialize cumulative log probability of proposal path
-# If seed selection is non-uniform, start with log(P_seed). Assuming uniform here.
-log_proposal_path^(m)_0 = 0
+# MUST account for seed selection probability if non-uniform
+if (seed_selection == "uniform"):
+  log_proposal_path^(m)_0 = 0
+else:
+  # For capacity-weighted or other biased seed selection
+  log_proposal_path^(m)_0 = log(P_seed(i))  # Probability of selecting seed parcel i
 
 # Initialize status
 particle_active^(m) = TRUE        # Particle starts in the active population
@@ -339,7 +350,11 @@ For each active particle m:
    # (Increment total capacity/area, decrement remaining capacity/area - Same as original PRD)
 
 8. TIER 2 - Infeasibility check (O(1)).
-   # (Check if mathematically impossible to succeed - Same as original PRD)
+   # Check if mathematically impossible to succeed using running totals:
+   # - Capacity: total_capacity^(m) + remaining_capacity^(m) >= target_capacity
+   # - Area: total_area^(m) + remaining_area^(m) >= target_area  
+   # - Station coverage: max_achievable_coverage >= required_coverage
+   # - OPTIMIZATION: Gross density: max_capacity/max_area >= 15.0 units/acre
 
    if (infeasible):
        particle_active^(m) = FALSE  # Particle dies
@@ -351,14 +366,17 @@ For each active particle m:
    if (total_capacity^(m) >= target_capacity AND total_area^(m) >= target_area):
 
        # Stochastic Continuation (prevents first-hit bias)
-       # Note: In RSIS, P(continue) does not need to be tracked in Q(x) if it depends only on the current state.
+       # CRITICAL FIX: P(continue) MUST be tracked in Q(τ) as it affects path probability
        if (runif(1) < p_continue):
-           # Continue growing
+           # Continue growing - add log probability of continuation decision
+           log_proposal_path^(m) += log(p_continue)
            # Update valuation for next step's resampling
            valuation_score^(m) = V(x^(m)_new)
            continue to next particle
        else:
-           # Stop growing and run full compliance
+           # Stop growing - add log probability of stopping decision
+           log_proposal_path^(m) += log(1 - p_continue)
+           # Run full compliance
            # (Full compliance check logic using evaluate_compliance() - Same as original PRD)
 
            if (compliance$summary$compliant):
@@ -421,19 +439,22 @@ Resampling concentrates computational effort on promising active particles. It i
 2. Normalize Valuation Scores (acting as weights for resampling):
    V_norm^(m) = valuation_score^(m) / Σ_{m ∈ P_active} valuation_score^(m)
 
-3. Calculate Effective Sample Size (ESS) of the active population:
-   ESS_active = 1 / Σ_{m ∈ P_active} (V_norm^(m))^2
+3. Calculate Valuation Degeneracy Score of the active population:
+   # NOTE: This is NOT the true Effective Sample Size since V(x) are heuristics, not importance weights
+   # It measures valuation concentration and triggers resampling appropriately
+   Valuation_Degeneracy = 1 / Σ_{m ∈ P_active} (V_norm^(m))^2
 
-4. If ESS_active < M_active * resample_threshold (e.g., 0.5):
+4. If Valuation_Degeneracy < M_active * resample_threshold (e.g., 0.5):
    # Perform Systematic or Multinomial Resampling
    - Draw M_active new particles with replacement from P_active
    - Probability of selecting particle m = V_norm^(m)
 
-   - **CRITICAL: Copy ALL particle state to offspring particles:**
+   - **CRITICAL: Copy ALL particle state AND account for parent selection in Q(τ):**
      * x^(m) (parcels in zone)
      * All Tier 1 and Tier 2 running sums (total_capacity, remaining_capacity, etc.)
-     * log_proposal_path^(m) (MUST be copied; ensures final W_explore remains valid)
      * component_id^(m)
+     * CRITICAL FIX: log_proposal_path^(child) = log_proposal_path^(parent) + log(V_norm^(parent))
+       # Must add the log-probability of selecting this specific parent during resampling
 ```
 
 #### 4.3.4 Valuation Function V(x) (NEW)
@@ -457,6 +478,11 @@ where:
 ```
 
 **Behavior:** If a particle expands into an area with low remaining capacity or poor station access, its $V(x)$ decreases, making it more likely to be eliminated during resampling.
+
+**Stabilization Techniques:**
+- **Softmax Temperature:** Apply temperature scaling to prevent extreme valuations: $V_{temp}(x) = V(x)^{1/T}$ where $T > 1$ increases diversity
+- **Valuation Clipping:** Bound extreme values to prevent degeneracy: $V_{clipped}(x) = \min(V(x), V_{max})$
+- **Adaptive Temperature:** Increase temperature when valuation diversity is low
 
 **Why resample?** Concentrates computational effort on high-probability regions, eliminates low-weight particles.
 
@@ -1012,6 +1038,13 @@ $W_{explore}(x) \propto \pi_{explore}(x) / Q'(x)$
 $W_{uniform}(x) = W_{explore}(x) \times C(x)$
 $W_{uniform}(x) \propto (\pi_{explore}(x) / Q'(x)) \times (\pi_{uniform}(x) / \pi_{explore}(x))$
 $W_{uniform}(x) \propto \pi_{uniform}(x) / Q'(x)$
+
+**Mathematical Insight for Uniform Sampling:**
+After the corrections to properly track all stochastic choices in $Q(\tau)$:
+
+$\log W_{uniform}(\tau) \approx -\log Q(\tau)$
+
+This elegant relationship shows that to sample uniformly, the final weight is simply the inverse probability of the path taken. The algorithm achieves uniform sampling by upweighting rare paths and downweighting common paths.
 
 **Result:** Resampling proportional to $W_{uniform}(x)$ yields the desired uniform distribution.
 
@@ -1690,6 +1723,83 @@ The initial SMC design (v1.0/v1.1) contained critical mathematical flaws related
 6. **Data Structure Updates (Section 5.1.2):** `mbta_plans` object updated to store `log_proposal_path` and intermediate log weights.
 
 **Impact:** The v2.0 algorithm is mathematically sound, ensuring samples correctly represent the target distribution. It provides the efficiency benefits of guided SMC exploration and integrates seamlessly with the existing 3-Tier optimization strategy.
+
+---
+
+### Critical v2.1 Corrections: Proposal Density Q(τ) Calculation
+
+**Problem Identified:** Expert review revealed that PRD v2.0 contained fundamental mathematical flaws in calculating the proposal density $Q(\tau)$, which would lead to biased sampling and invalidate the research objectives.
+
+**Core Issue:** The validity of Importance Sampling relies on calculating the exact probability of the realized path: $W \propto \pi(\tau)/Q(\tau)$. If $Q(\tau)$ is miscalculated, the weights are wrong and sampling is biased.
+
+**Critical Corrections Made:**
+
+1. **Fixed Resampling Probability Tracking:**
+   - **Problem:** PRD v2.0 only copied parent's `log_proposal_path` during resampling
+   - **Fix:** Must add parent selection probability to child's path:
+     ```r
+     log_proposal_path^(child) = log_proposal_path^(parent) + log(V_norm^(parent))
+     ```
+   - **Rationale:** Parent selection during resampling is a stochastic choice that affects the realized path
+
+2. **Fixed Stochastic Continuation Tracking:**
+   - **Problem:** PRD v2.0 incorrectly stated continuation probabilities didn't need tracking
+   - **Fix:** Must track both continuation and stopping decisions:
+     ```r
+     # If continuing: log_proposal_path += log(p_continue)
+     # If stopping: log_proposal_path += log(1 - p_continue)
+     ```
+   - **Rationale:** Stop/continue decisions affect plan size distribution; omitting biases toward larger plans
+
+3. **Fixed Seed Selection Initialization:**
+   - **Problem:** Always initialized `log_proposal_path = 0` regardless of seed strategy
+   - **Fix:** Account for non-uniform seed selection:
+     ```r
+     # For uniform: log_proposal_path = 0
+     # For biased: log_proposal_path = log(P_seed(i))
+     ```
+
+4. **Clarified Generator Support:**
+   - **Fix:** Target distribution is uniform over compliant plans *conditional on generator restrictions*:
+     - Single-component only (MVP limitation)
+     - Rook adjacency only
+     - Reachable from seed strategy
+
+5. **Corrected ESS Definition:**
+   - **Problem:** Called valuation-based metric "Effective Sample Size"
+   - **Fix:** Renamed to "Valuation Degeneracy Score" since $V(x)$ are heuristics, not importance weights
+
+**Mathematical Insight:**
+After these corrections, the final uniform weight achieves the elegant relationship:
+$$\log W_{uniform}(\tau) \approx -\log Q(\tau)$$
+
+This shows that uniform sampling is achieved by making the final weight the inverse probability of the path taken - upweighting rare paths and downweighting common paths.
+
+**Impact:** These corrections are essential for mathematical validity. Without them, the algorithm would produce biased samples that could lead to incorrect conclusions about municipal zoning bias.
+
+### Recommended Validation Suite
+
+To verify algorithmic correctness, implement validation on small toy graphs where the full state space can be enumerated:
+
+1. **Small Grid Graph (4x4):** 
+   - Enumerate all possible single-component configurations
+   - Run SMC with corrected Q(τ) tracking 
+   - Verify uniform sampling via chi-square test
+
+2. **Path Multiplicity Test:**
+   - Verify that configurations reachable via multiple paths have correct probabilities
+   - Check that final weights properly account for path degeneracy
+
+3. **Generator Support Verification:**
+   - Confirm SMC only samples configurations reachable by the growth process
+   - Test boundary conditions (unreachable via adjacency restrictions)
+
+4. **Proposal Tracking Validation:**
+   - Log all stochastic choices during generation
+   - Manually verify Q(τ) calculation matches recorded decisions
+   - Test with extreme resampling scenarios
+
+**Acceptance Criteria:** SMC should produce statistically indistinguishable samples from true uniform distribution over enumerable state space.
 
 ---
 

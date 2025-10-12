@@ -11,8 +11,73 @@ The `mbtazone` package implements Massachusetts' MBTA Communities Act compliance
 - Excel regression testing: ✅ Complete (7 communities validated)
 - GIS operations: ✅ Complete
 - Documentation: ✅ Complete (33 exported functions)
+- Precomputation optimization: ✅ Complete (~1000x speedup for batch simulations)
+- SMC algorithm infrastructure: 🔄 In progress (adjacency graphs, mbta_map class, connected components added)
 - Shiny interactive app: ⏸️ Not yet implemented (see PRD in `dev/PRD.md`)
-- SMC algorithm for zoning simulation: 📋 Planned (see PRD in `dev/PRD_SMC_Algorithm.md`)
+
+## Quick Reference
+
+**Most Common Commands:**
+```bash
+# Run all tests
+R -e "devtools::test()"
+
+# Run specific test file
+R -e "devtools::test(filter = 'compliance-pipeline')"
+R -e "devtools::test(filter = 'excel-regression')"
+
+# Load package for development
+devtools::load_all()
+
+# Check package
+R -e "devtools::check()"
+
+# Update documentation
+devtools::document()
+```
+
+**Key Files to Know:**
+- **Main workflow:** `R/compliance_pipeline.R` (4 exports: evaluate_compliance, calculate_district_capacity, etc.)
+- **Compliance calculations:** `R/unit_capacity_calculations.R` (18 functions mapping to Excel columns N-AF)
+- **GIS operations:** `R/gis_operations.R` (spatial analysis, precomputation)
+- **SMC algorithm PRD:** `dev/PRD_SMC_Algorithm.md` (comprehensive 2061-line specification)
+- **Excel model docs:** `dev/compliance_model_docs/` (official reference materials)
+
+**Data Locations:**
+- **Example parcels:** `inst/extdata/parcels/` (7 municipalities: Chelsea, Somerville, Cambridge, etc.)
+- **Zoning parameters dataset:** `data/zoning_parameters.rda` (138 districts from 60 municipalities, lazy-loaded)
+- **Test fixtures:** `tests/testthat/fixtures/` (Excel reference data for regression testing)
+
+**Recent Git Activity:**
+- Latest commit: Added SMC infrastructure (mbta_map class, adjacency graphs, connected components)
+- Modified: `dev/PRD_SMC_Algorithm.md` (not yet committed)
+
+## Linear Issue Tracking
+
+⚠️ **IMPORTANT:** This project uses Linear for all development tracking. This is a critical workflow requirement.
+
+**Always:**
+- Update Linear issues with progress comments as work proceeds
+- Reference code locations using `file_path:line_number` format
+- Create new issues for significant features or bugs discovered
+- Update issue status and add detailed comments when completing tasks
+
+**Project Details:**
+- **Team:** Hidalgo Research (ID: `5f1d6e78-3907-430b-a5c4-d98b592374e7`)
+- **Project:** MBTA Communities Compliance Model R Package (ID: `42a933c7-5ade-4c7d-8b06-14a60c0fea17`)
+- **Assignee:** fdhidalgo / Daniel Hidalgo (ID: `93d9c10a-bad2-4baf-9fbd-47d65cfc4871`)
+
+**Example Linear Comment:**
+```
+Completed particle initialization in R/smc_initialize.R:1-150.
+
+Key implementation details:
+- Supports 3 initialization strategies: random, capacity-weighted, reference
+- Integrates with existing adjacency graph from mbta_map object
+- Tested on Maynard test case (200 parcels)
+
+Next: Implementing propagation step (Phase 1, task 4)
+```
 
 ## Package Architecture
 
@@ -53,40 +118,6 @@ The package consists of 6 main R files with 34 exported functions:
 6. **`mbtazone-package.R`**
    - Package-level documentation
 
-## Development Commands
-
-### Standard R Package Development
-
-```r
-# Load and develop the package
-devtools::load_all()
-
-# Run all tests
-devtools::test()
-
-# Run specific test file
-devtools::test(filter = "compliance-pipeline")
-devtools::test(filter = "excel-regression")
-
-# Build and check package
-devtools::check()
-devtools::document()
-devtools::install()
-```
-
-### Running Tests from Command Line
-
-```bash
-# Run all tests
-R -e "devtools::test()"
-
-# Run specific test file
-R -e "devtools::test(filter = 'compliance-pipeline')"
-
-# Check package
-R -e "devtools::check()"
-```
-
 ### Key File Locations
 
 ```
@@ -120,7 +151,8 @@ mbtazone/
 │   └── statewide/              # Statewide GIS layers
 │
 ├── dev/                        # Development resources
-│   ├── PRD.md                  # Product Requirements Document
+│   ├── PRD.md                  # Product Requirements Document (Shiny app)
+│   ├── PRD_SMC_Algorithm.md    # SMC Algorithm PRD (2061 lines, comprehensive spec)
 │   ├── build_zoning_data.R     # Script to rebuild zoning_parameters dataset
 │   ├── compliance_model_docs/  # Excel model documentation
 │   └── proof_of_concept/       # Student prototype (reference only)
@@ -208,12 +240,10 @@ devtools::document()                 # Regenerate help files
   - ❌ Convert `NA` to `0` or other default values
   - Document NA handling behavior in function documentation
 
-
 ### Preferred Code Patterns
 - **Conditional Logic**: Use `data.table::fcase()` over nested `ifelse()` or `case_when()`
 - **Iteration**: Use `purrr` functions over explicit loops
 - **Vector Operations**: Leverage vectorized operations over element-wise processing
-
 
 ### Spatial Data Conventions
 - Always use EPSG:26986 (NAD83 Massachusetts State Plane) for calculations
@@ -221,7 +251,30 @@ devtools::document()                 # Regenerate help files
 - Use `units` package for explicit area/distance units
 - Prefer vectorized operations over loops for GIS processing
 
-### Typical Workflow
+### Running R Commands via Bash
+
+**BEST PRACTICE: Use Write tool for complex scripts**
+```bash
+# Avoids ALL bash escaping issues
+Write /tmp/analysis.R  # Create R script with tool
+Rscript /tmp/analysis.R
+```
+
+**For simple one-liners:**
+```bash
+R -e "devtools::test(filter = 'compliance-pipeline')"
+```
+
+**Avoid these patterns:**
+- ❌ Heredocs with special characters (`!`, `$`, `\`)
+- ❌ Inline R code with negation operators (`!is.na()` causes bash issues)
+- ✅ Use alternative syntax: `is.na(x) == FALSE` instead of `!is.na(x)`
+
+**Why:** Special characters in bash heredocs cause failures. Write tool and simple `-e` commands eliminate bash interaction issues.
+
+## Typical Workflows
+
+### Standard Compliance Evaluation
 
 ```r
 library(mbtazone)
@@ -257,7 +310,7 @@ results <- evaluate_compliance(
 )
 ```
 
-### Simulation Workflow (High-Performance Batch Processing)
+### High-Performance Batch Processing
 
 For scenarios requiring evaluation of thousands of zoning parameter combinations on the same municipality (e.g., policy simulations, optimization), use the pre-computation workflow for ~1000x performance improvement:
 
@@ -345,23 +398,42 @@ simulation_df <- data.frame(
 
 ### SMC Simulation Workflow (Planned Feature)
 
-For research applications involving bias detection in adopted zoning plans, use the Sequential Monte Carlo (SMC) algorithm to generate reference distributions of compliant zoning configurations:
+**Status:** Design phase - see `dev/PRD_SMC_Algorithm.md` (2061 lines) for complete specification.
 
+For research applications involving bias detection in adopted zoning plans, the package will implement a Sequential Monte Carlo (SMC) algorithm to generate reference distributions of compliant zoning configurations.
+
+**Key capabilities (when implemented):**
+- Generate thousands of alternative compliant zoning plans
+- Detect demographic/economic bias in adopted plans relative to all feasible alternatives
+- ~1000x speedup via integration with precomputation workflow
+- Based on redistricting simulation methods (McCartan & Imai 2020)
+- Following `redist` package API patterns (mbta_map, mbta_plans, mbta_smc)
+
+**Algorithm approach:**
+- Sequential Importance Sampling with Resampling (RSIS)
+- Valuation-guided particle propagation
+- 3-tier checking for performance (running sums, infeasibility tests, full compliance)
+- SIR correction to restore uniform distribution over compliant plans
+- Target: 10,000 plans in ~5 minutes with precomputation
+
+**Current implementation status:**
+- ✅ Core infrastructure committed (adjacency graphs via `build_adjacency()`, mbta_map class, connected components)
+- 📋 7 implementation phases remaining (see Linear project tracker and PRD Section 6)
+- 📋 Algorithm design finalized in PRD v2.1 with critical mathematical corrections
+
+**Implementation plan:** See `dev/PRD_SMC_Algorithm.md` for:
+- Complete algorithm specification (Sections 3-4)
+- API design following `redist` patterns (Section 5)
+- 8-week implementation roadmap (Section 6)
+- Performance targets and optimization strategy (Section 10)
+- Integration with existing package functions (Section 9)
+- Validation criteria and success metrics (Section 11)
+
+**Example usage (planned API):**
 ```r
 library(mbtazone)
 
-# ==== SETUP PHASE ====
-
-# 1. Load and precompute municipality data
-parcels <- load_municipality("inst/extdata/parcels/57_CHELSEA_basic.zip")
-transit_stations <- load_station_areas()
-
-parcels_precomputed <- precompute_spatial_attributes(
-  municipality = parcels,
-  station_areas = transit_stations
-)
-
-# 2. Create mbta_map object
+# Create mbta_map object (follows redist pattern)
 chelsea_map <- mbta_map(
   parcels_precomputed,
   community_type = "rapid_transit",
@@ -369,58 +441,17 @@ chelsea_map <- mbta_map(
   precomputed = TRUE
 )
 
-# 3. Define constraints (optional)
-constraints <- mbta_constr(chelsea_map) %>%
-  add_constr_compactness(strength = 1.5) %>%
-  add_constr_status_quo(strength = 0.5, ref_plan = adopted_plan)
-
-# ==== SIMULATION PHASE ====
-
-# 4. Run SMC to generate reference distribution
+# Run SMC simulation
 plans <- mbta_smc(
   map = chelsea_map,
-  nsims = 10000,  # number of plans to sample
-  constraints = constraints,
-  runs = 4,       # independent runs for diagnostics
-  ncores = 8      # parallel cores
+  nsims = 10000,
+  runs = 4,
+  ncores = 8
 )
 
-# ==== ANALYSIS PHASE ====
-
-# 5. Calculate plan statistics
-plans <- calculate_plan_statistics(
-  plans,
-  map = chelsea_map,
-  measures = c("pct_minority", "median_property_value", "pct_commercial")
-)
-
-# 6. Compare adopted plan to reference distribution
-minority_comparison <- compare_to_reference(
-  plans,
-  chelsea_map,
-  measure = "pct_minority"
-)
-
-# 7. Visualize and diagnose
-plot_distribution(plans, measure = "pct_minority", ref_plan = adopted_plan)
-summary(plans)  # includes R-hat, ESS, diversity metrics
+# Analyze bias
+compare_to_reference(plans, chelsea_map, measure = "pct_minority")
 ```
-
-**Key Features:**
-- **Sequential Monte Carlo**: Builds zoning districts incrementally, resampling to maintain feasibility
-- **Reference Distribution**: Generates thousands of compliant alternative plans
-- **Bias Detection**: Detects systematic bias in adopted plans relative to all feasible alternatives
-- **Performance**: Leverages precomputation workflow for ~1000x speedup (10K plans in ~5 minutes)
-- **Research Focus**: Designed for academic analysis of municipal zoning decisions
-
-**When to use SMC simulation:**
-- Detecting demographic/economic bias in adopted zoning plans
-- Understanding the space of all feasible compliant configurations
-- Academic research on municipal land use policy
-- Benchmarking adopted plans against neutral reference distributions
-
-**Documentation:**
-See `dev/PRD_SMC_Algorithm.md` for complete specification and implementation plan.
 
 ## Testing Infrastructure
 
@@ -540,21 +571,7 @@ Each R function maps to specific Excel model calculations:
 
 See `dev/compliance_model_docs/Compliance_Model_User_Guide_Summary.md` for detailed Excel model documentation.
 
-## Project Management
-
-### Linear Integration
-This project uses Linear for issue tracking and progress management. Key information:
-
-- **Team:** Hidalgo Research (ID: `5f1d6e78-3907-430b-a5c4-d98b592374e7`)
-- **Project:** MBTA Communities Compliance Model R Package (ID: `42a933c7-5ade-4c7d-8b06-14a60c0fea17`)
-- **Assignee:** fdhidalgo / Daniel Hidalgo (ID: `93d9c10a-bad2-4baf-9fbd-47d65cfc4871`)
-
-**Linear Usage Guidelines:**
-- **ALWAYS** update Linear issues with progress comments as work proceeds
-- Use Linear as the primary source of truth for development notes and decisions
-- Create new issues for any significant features or bug fixes discovered
-- Update issue status and add detailed comments when completing tasks
-- Reference specific code locations in comments using `file_path:line_number` format
+## Development Workflow
 
 ### Testing Guidelines
 
@@ -590,8 +607,6 @@ When developing new features:
 3. Review tolerance settings for numeric comparisons (typically 1 sq ft)
 4. Check that test fixtures are up to date
 
-## Development Workflow
-
 ### Reference Documentation
 
 The `dev/compliance_model_docs/` directory contains critical reference materials:
@@ -599,7 +614,7 @@ The `dev/compliance_model_docs/` directory contains critical reference materials
 - **`Compliance_Model_User_Guide.pdf`**: Official EOHLC Excel model documentation
 - **`Compliance_Model_User_Guide_Summary.md`**: Comprehensive markdown summary of the user guide covering:
   - Model components and workflow
-  - GIS calculation requirements  
+  - GIS calculation requirements
   - Excel model structure and logic
   - Unit capacity calculation methods
   - Compliance evaluation criteria
@@ -618,56 +633,3 @@ The `dev/proof_of_concept/` directory contains student-written prototype code. U
 3. Add comprehensive input validation
 4. Implement robust error handling
 5. Create thorough unit tests
-
-
-## Spatial Data Standards
-
-### Coordinate Reference System
-- **Always use EPSG:26986** (NAD83 Massachusetts State Plane, Mainland zone)
-- All calculations assume planar coordinates in US Survey Feet
-- Validate CRS on input: `stopifnot(sf::st_crs(data)$epsg == 26986)`
-
-### Avoid Escaping Issues
-
-
-#### ✅ **RECOMMENDED: Use Write Tool for Complex Scripts**
-```bash
-# BEST: Create R scripts with Write tool (avoids ALL escape issues)
-Write /tmp/analysis.R
-Rscript /tmp/analysis.R
-```
-
-#### ✅ **RECOMMENDED: Direct Commands for Simple Operations**
-```bash
-# GOOD: Simple operations with -e flag
-R -e "library(targets); tar_load('data'); cat('Records:', nrow(data))"
-```
-
-#### ✅ **RECOMMENDED: Alternative Syntax to Avoid Special Characters**
-```r
-# AVOID: result <- data[!is.na(column)]     # ! causes bash issues
-# USE:   result <- data[is.na(column) == FALSE]
-# OR:    result <- data[complete.cases(column)]
-# OR:    result <- subset(data, is.na(column) == FALSE)
-```
-
-#### ✅ **RECOMMENDED: Incremental Testing Approach**
-```bash
-# Instead of one 30-line diagnostic script, use 3 focused scripts:
-Write /tmp/step1_load.R      # Test data loading only
-Write /tmp/step2_process.R   # Test processing only  
-Write /tmp/step3_analyze.R   # Test analysis only
-```
-
-#### ❌ **AVOID: Bash Heredocs with Special Characters**
-```bash
-# PROBLEMATIC: Even quoted heredocs process some escapes
-cat > /tmp/script.R <<'EOF'
-data[!is.na(x)]  # This ! can still cause issues
-EOF
-```
-
-#### **Why These Practices Matter**
-- **Escape Character Issues**: `!`, `$`, `\` in bash heredocs cause failures
-- **Debug Difficulty**: Large failing scripts are hard to troubleshoot
-- **Reliability**: Write tool and simple -e commands eliminate bash interaction issues
