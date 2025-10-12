@@ -199,6 +199,12 @@ test_that("evaluate_compliance calculates station area metrics correctly", {
   )
   station_buffer <- sf::st_buffer(station_point, dist = 2640)  # 0.5 mile buffer
 
+  # Convert to sf object (not just sfc)
+  station_areas <- sf::st_sf(
+    station_id = 1,
+    geometry = station_buffer
+  )
+
   zoning_params <- create_standard_zoning()
 
   # Run pipeline with station areas
@@ -207,7 +213,7 @@ test_that("evaluate_compliance calculates station area metrics correctly", {
     districts = district,
     zoning_params = zoning_params,
     community_type = "rapid_transit",
-    transit_stations = station_buffer,
+    transit_stations = station_areas,
     custom_requirements = list(
       min_units = 100,
       min_acres = 10,

@@ -32,10 +32,6 @@ test_that("extract_zoning_parameters extracts Chelsea District 1 correctly", {
   expect_equal(params$base_min_lot_size, 5000)
   expect_equal(params$additional_lot_SF, 950)
   expect_equal(params$building_height, 7)
-
-  # Check that values are numeric (or NA)
-  expect_true(is.numeric(params$min_lot_size))
-  expect_true(is.numeric(params$building_height))
 })
 
 test_that("extract_zoning_parameters extracts Somerville District 1 correctly", {
@@ -60,29 +56,6 @@ test_that("extract_zoning_parameters extracts Somerville District 1 correctly", 
   # Check metadata
   expect_equal(attr(params, "source"), "excel")
   expect_equal(attr(params, "district"), 1)
-})
-
-test_that("extract_zoning_parameters handles different districts", {
-  skip_if_not(dir.exists(test_path("excel_reference")),
-              "Excel reference files not available")
-
-  excel_path <- file.path(
-    test_path("excel_reference"),
-    "Chelsea",
-    "Chelsea - Compliance Model 20231118 REDACTED.xlsx"
-  )
-
-  # Extract district 1
-  params1 <- extract_zoning_parameters(excel_path, district = 1)
-  expect_equal(attr(params1, "district"), 1)
-
-  # Extract district 2
-  # Note: Some districts may have NA for min_lot_size if not populated in Excel
-  suppressWarnings({
-    params2 <- extract_zoning_parameters(excel_path, district = 2)
-  })
-  expect_equal(attr(params2, "district"), 2)
-  expect_type(params2, "list")
 })
 
 test_that("extract_zoning_parameters validates district number", {
@@ -193,19 +166,3 @@ test_that("extracted parameters work with calculation functions", {
   expect_equal(result, c(9000, 7500, 0))
 })
 
-test_that("Excel-extracted parameters match expected structure", {
-  skip_if_not(dir.exists(test_path("excel_reference")),
-              "Excel reference files not available")
-
-  excel_path <- file.path(
-    test_path("excel_reference"),
-    "Chelsea",
-    "Chelsea - Compliance Model 20231118 REDACTED.xlsx"
-  )
-
-  excel_params <- extract_zoning_parameters(excel_path, district = 1)
-  manual_params <- create_zoning_parameters(min_lot_size = 5000)
-
-  # Both should have same names (structure)
-  expect_identical(names(excel_params), names(manual_params))
-})

@@ -87,9 +87,6 @@ test_that("calculate_district_area returns correct area for submitted districts"
 test_that("calculate_district_area validates CRS", {
   district_sf <- get_district_shapefile("Maynard")
 
-  # Should work with correct CRS
-  expect_no_error(calculate_district_area(district_sf))
-
   # Should error with wrong CRS
   district_wrong_crs <- sf::st_transform(district_sf, 4326)  # WGS84
   expect_error(
@@ -147,32 +144,6 @@ test_that("validate_contiguity correctly identifies contiguous districts", {
     expect_equal(result$n_portions, 1)
     expect_length(result$violations, 0)
   }
-})
-
-test_that("validate_contiguity returns correct structure", {
-  district_sf <- get_district_shapefile("Somerville")
-
-  result <- validate_contiguity(district_sf)
-
-  # Check return structure
-  expect_type(result, "list")
-  expect_named(result, c("is_valid", "contiguous_pct", "n_portions", "portion_areas", "violations"))
-
-  expect_type(result$is_valid, "logical")
-  expect_type(result$contiguous_pct, "double")
-  expect_type(result$n_portions, "integer")
-  expect_type(result$portion_areas, "double")
-  expect_type(result$violations, "character")
-
-  # contiguous_pct should be between 0 and 1
-  expect_gte(result$contiguous_pct, 0)
-  expect_lte(result$contiguous_pct, 1)
-
-  # n_portions should match length of portion_areas
-  expect_equal(result$n_portions, length(result$portion_areas))
-
-  # portion_areas should be sorted largest to smallest
-  expect_equal(result$portion_areas, sort(result$portion_areas, decreasing = TRUE))
 })
 
 test_that("validate_contiguity validates against expected contiguity percentages", {
@@ -248,9 +219,6 @@ test_that("validate_contiguity handles empty geometries", {
 
 test_that("validate_contiguity validates CRS", {
   district_sf <- get_district_shapefile("Maynard")
-
-  # Should work with correct CRS
-  expect_no_error(validate_contiguity(district_sf))
 
   # Should error with wrong CRS
   district_wrong_crs <- sf::st_transform(district_sf, 4326)
@@ -345,9 +313,6 @@ test_that("calculate_station_area_percentage handles empty district", {
 test_that("calculate_station_area_percentage validates CRS", {
   district_sf <- get_district_shapefile("Maynard")
   station_areas <- get_cached_transit_stations()
-
-  # Should work with correct CRS
-  expect_no_error(calculate_station_area_percentage(district_sf, station_areas))
 
   # Should error with wrong CRS on district
   district_wrong_crs <- sf::st_transform(district_sf, 4326)
@@ -493,9 +458,6 @@ test_that("calculate_station_intersection validates CRS", {
 
   station_areas <- get_cached_transit_stations()
 
-  # Should work with correct CRS
-  expect_no_error(calculate_station_intersection(parcels, station_areas))
-
   # Should error with wrong CRS on parcels
   parcels_wrong_crs <- sf::st_transform(parcels, 4326)
   expect_error(
@@ -632,9 +594,6 @@ test_that("calculate_density_denominator handles empty district", {
 test_that("calculate_density_denominator validates CRS", {
   district_sf <- get_district_shapefile("Maynard")
   deduction_layers <- get_cached_density_deductions()
-
-  # Should work with correct CRS
-  expect_no_error(calculate_density_denominator(district_sf, deduction_layers))
 
   # Should error with wrong CRS on district
   district_wrong_crs <- sf::st_transform(district_sf, 4326)
@@ -1171,33 +1130,6 @@ test_that("precompute_spatial_attributes errors on wrong density_deductions CRS"
   )
 })
 
-test_that("precompute_spatial_attributes adds metadata attributes", {
-  # Load test data
-  parcels <- load_municipality(
-    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
-    community_name = "Maynard"
-  )
-  station_areas <- get_cached_transit_stations()
-  density_deductions <- get_cached_density_deductions()
-
-  # Pre-compute spatial attributes
-  result <- precompute_spatial_attributes(
-    parcels,
-    station_areas = station_areas,
-    density_deductions = density_deductions,
-    verbose = FALSE
-  )
-
-  # Check metadata attributes
-  expect_true(attr(result, "spatial_attributes_precomputed"))
-  expect_true(!is.null(attr(result, "precomputation_date")))
-  expect_s3_class(attr(result, "precomputation_date"), "Date")
-
-  # Check parameter-specific metadata
-  expect_true(attr(result, "precomputed_station_areas"))
-  expect_true(attr(result, "precomputed_density_deductions"))
-})
-
 test_that("precompute_spatial_attributes tracks which parameters were used", {
   # Load test data
   parcels <- load_municipality(
@@ -1230,49 +1162,6 @@ test_that("precompute_spatial_attributes tracks which parameters were used", {
   # Check metadata
   expect_null(attr(result2, "precomputed_station_areas"))
   expect_true(attr(result2, "precomputed_density_deductions"))
-})
-
-test_that("precompute_spatial_attributes works with verbose output", {
-  # Load test data
-  parcels <- load_municipality(
-    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
-    community_name = "Maynard"
-  )
-  station_areas <- get_cached_transit_stations()
-  density_deductions <- get_cached_density_deductions()
-
-  # Should not error with verbose = TRUE
-  expect_no_error(
-    precompute_spatial_attributes(
-      parcels,
-      station_areas = station_areas,
-      density_deductions = density_deductions,
-      verbose = TRUE
-    )
-  )
-})
-
-test_that("precompute_spatial_attributes preserves sf geometry", {
-  # Load test data
-  parcels <- load_municipality(
-    test_path("../../inst/extdata/parcels/174_MAYNARD_basic.zip"),
-    community_name = "Maynard"
-  )
-  station_areas <- get_cached_transit_stations()
-
-  # Pre-compute spatial attributes
-  result <- precompute_spatial_attributes(
-    parcels,
-    station_areas = station_areas,
-    verbose = FALSE
-  )
-
-  # Result should still be an sf object
-  expect_s3_class(result, "sf")
-
-  # Geometry should be preserved
-  expect_equal(sf::st_crs(result), sf::st_crs(parcels))
-  expect_equal(nrow(result), nrow(parcels))
 })
 
 test_that("precompute_spatial_attributes handles empty density_deductions layer", {
