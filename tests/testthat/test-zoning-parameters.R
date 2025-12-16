@@ -9,8 +9,9 @@ test_that("extract_zoning_parameters extracts Chelsea District 1 correctly", {
   excel_path <- file.path(
     test_path("excel_reference"),
     "Chelsea",
-    "Chelsea - Compliance Model 20231118 REDACTED.xlsx"
+    "Chelsea - CM.xlsx"
   )
+  skip_if_not(file.exists(excel_path), "Chelsea Excel file not found")
 
   params <- extract_zoning_parameters(excel_path, district = 1)
 
@@ -41,8 +42,9 @@ test_that("extract_zoning_parameters extracts Somerville District 1 correctly", 
   excel_path <- file.path(
     test_path("excel_reference"),
     "Somerville",
-    "Somerville - CM - 20241222 REDACTED.xlsx"
+    "Somerville - CM.xlsx"
   )
+  skip_if_not(file.exists(excel_path), "Somerville Excel file not found")
 
   params <- extract_zoning_parameters(excel_path, district = 1)
 

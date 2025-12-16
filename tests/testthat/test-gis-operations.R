@@ -1194,7 +1194,7 @@ test_that("precompute_spatial_attributes consistency across multiple communities
     community_file <- switch(
       comm_name,
       "Maynard" = "174_MAYNARD_basic.zip",
-      "Lincoln" = "175_LINCOLN_basic.zip"
+      "Lincoln" = "157_LINCOLN_basic.zip"
     )
 
     parcels <- load_municipality(
@@ -1211,8 +1211,7 @@ test_that("precompute_spatial_attributes consistency across multiple communities
         station_areas = station_areas,
         density_deductions = density_deductions,
         verbose = FALSE
-      ),
-      info = paste(comm_name, "should process without error")
+      )
     )
 
     # All expected columns should be present
