@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The `mbtazone` package implements Massachusetts' MBTA Communities Act compliance model in R, providing automated zoning compliance assessment tools. The package replaces manual Excel-based workflows with robust R code featuring comprehensive calculation functions, GIS operations, and validation against Excel model outputs.
 
 **Current Status (October 2025):**
+
 - Core compliance calculation engine: ✅ Complete
 - Excel regression testing: ✅ Complete (7 communities validated)
 - GIS operations: ✅ Complete
@@ -20,15 +21,18 @@ The `mbtazone` package implements Massachusetts' MBTA Communities Act compliance
 The package consists of 6 main R files with 34 exported functions:
 
 1. **`data_loaders.R`** (3 exports)
+
    - `load_municipality()`: Load and validate parcel shapefiles
    - `load_station_areas()`: Load MBTA station area boundaries
    - `load_calculation_layers()`: Load GIS calculation layers (exclusions, etc.)
 
 2. **`zoning_parameters.R`** (2 exports)
+
    - `extract_zoning_parameters()`: Extract parameters from Excel compliance models
    - `create_zoning_parameters()`: Manually create zoning parameter lists
 
 3. **`gis_operations.R`** (7 exports)
+
    - `calculate_district_area()`: Calculate total land area of compliance district
    - `calculate_density_denominator()`: Calculate density denominator with deductions
    - `validate_contiguity()`: Check 50% contiguity requirement
@@ -38,12 +42,14 @@ The package consists of 6 main R files with 34 exported functions:
    - `precompute_spatial_attributes()`: Pre-compute spatial intersections for batch simulations
 
 4. **`unit_capacity_calculations.R`** (18 exports)
+
    - Core calculation functions implementing Excel model logic
    - Each function corresponds to specific Excel columns (N, O, P, etc.)
    - Includes: `calculate_developable_area()`, `calculate_final_unit_capacity()`, etc.
    - See function list in R/unit_capacity_calculations.R:1-500 for complete inventory
 
 5. **`compliance_pipeline.R`** (4 exports)
+
    - `assign_parcels_to_districts()`: Assign parcels to compliance districts using area-weighted spatial intersection
    - `calculate_district_capacity()`: Calculate unit capacity for entire district
    - `evaluate_compliance()`: Complete end-to-end compliance evaluation
@@ -137,12 +143,14 @@ The package includes pre-extracted zoning parameters from real MBTA Communities 
 ### `zoning_parameters` Dataset
 
 **Overview:**
+
 - **138 district parameter sets** from **60 Massachusetts municipalities**
 - Pre-extracted zoning regulations ready for use in calculations
 - Automatically lazy-loaded when package is loaded
 - File size: 18.6 KB (compressed .rda format)
 
 **Structure:**
+
 ```r
 # Access the dataset
 library(mbtazone)
@@ -157,6 +165,7 @@ head(zoning_parameters)
 ```
 
 **Common Use Cases:**
+
 ```r
 # Get parameters for specific municipality
 chelsea_params <- zoning_parameters[municipality == "Chelsea" & district == 1]
@@ -171,12 +180,14 @@ zoning_parameters[order(-max_dwelling_units_per_acre)]
 ```
 
 **Documentation:**
+
 - Help: `?zoning_parameters`
 - Documented in: `R/data.R`
 - Build script: `dev/build_zoning_data.R`
 
 **Rebuilding the Dataset:**
 If new Excel models are added or updated, rebuild with:
+
 ```r
 source("dev/build_zoning_data.R")  # Extracts from all Excel models
 devtools::document()                 # Regenerate help files
@@ -185,6 +196,7 @@ devtools::document()                 # Regenerate help files
 ## Code Style and Conventions
 
 ### R Package Standards
+
 - Use `snake_case` for function and variable names
 - All exported functions must have complete Roxygen2 documentation
 - Include `@examples` in function documentation
@@ -193,6 +205,7 @@ devtools::document()                 # Regenerate help files
 - Use data.table for all data manipulation
 
 ### Function Naming Patterns
+
 - **Calculation Functions**: Use descriptive `calculate_*()` pattern instead of cryptic abbreviations
   - ✅ `calculate_developable_area()` vs ❌ `apply_N_func()`
   - ✅ `calculate_final_unit_capacity()` vs ❌ `apply_AF_func()`
@@ -202,19 +215,20 @@ devtools::document()                 # Regenerate help files
   - ✅ `developable_area, final_capacity` vs ❌ `result, output`
 
 ### Data Handling Philosophy
+
 - **NA Preservation**: Always preserve uncertainty rather than silent conversion
   - ✅ Return `NA_real_` for missing input data
   - ❌ Convert `NA` to `0` or other default values
   - Document NA handling behavior in function documentation
 
-
 ### Preferred Code Patterns
+
 - **Conditional Logic**: Use `data.table::fcase()` over nested `ifelse()` or `case_when()`
 - **Iteration**: Use `purrr` functions over explicit loops
 - **Vector Operations**: Leverage vectorized operations over element-wise processing
 
-
 ### Spatial Data Conventions
+
 - Always use EPSG:26986 (NAD83 Massachusetts State Plane) for calculations
 - Validate CRS before processing: `sf::st_crs(data)$epsg == 26986`
 - Use `units` package for explicit area/distance units
@@ -327,17 +341,20 @@ simulation_df <- data.frame(
 ```
 
 **Performance Comparison:**
+
 - **Standard mode** (10,000 simulations): ~83 hours (repeated spatial intersections)
 - **Precomputed mode** (10,000 simulations): ~5 minutes (arithmetic only)
 - **Speedup**: ~1000x for batch scenarios
 
 **When to use precomputed mode:**
+
 - Evaluating hundreds/thousands of zoning parameter combinations
 - Optimization workflows (finding optimal zoning parameters)
 - Monte Carlo simulations for sensitivity analysis
 - Scenarios where municipality parcels and spatial layers are fixed
 
 **When NOT to use precomputed mode:**
+
 - Single or few evaluations (overhead not worth it)
 - Changing district boundaries between evaluations
 - Different municipalities each iteration
@@ -359,6 +376,7 @@ The package has ~4,000 lines of test code across multiple test files:
 ### Test Fixtures
 
 Located in `tests/testthat/fixtures/`:
+
 - Excel calculation data from 7 communities: Chelsea, Somerville, Cambridge, Wellesley, Newton, Lincoln, Maynard
 - Each fixture is an RDS file containing zoning parameters and reference calculations
 - Format: `{community}_district{N}.rds`
@@ -375,6 +393,7 @@ The package implements comprehensive regression testing against Excel model outp
 ### Example Data
 
 Located in `inst/extdata/`:
+
 - **`parcels/`**: 7 municipality parcel shapefiles (ZIP format)
   - Chelsea, Somerville, Cambridge, Wellesley, Newton, Lincoln, Maynard
 - **`community_info.csv`**: Community metadata and compliance requirements
@@ -383,6 +402,7 @@ Located in `inst/extdata/`:
 ## Package Dependencies
 
 **Core Dependencies** (from DESCRIPTION):
+
 - `cli`: User-facing messages and error handling
 - `data.table`: High-performance data manipulation
 - `purrr`: Functional programming utilities
@@ -393,9 +413,11 @@ Located in `inst/extdata/`:
 - `utils`: General utilities (zip extraction, etc.)
 
 **Suggested Dependencies:**
+
 - `testthat` (>= 3.0.0): Testing framework
 
 **Note**: The package does NOT use:
+
 - `targets`: No automated pipeline (standard R package workflow)
 - `shiny`: Interactive app not yet implemented (planned for future)
 - `tidyverse`: Uses `data.table` for performance
@@ -427,10 +449,12 @@ The compliance model calculates housing unit capacity through a 17-step process 
 ### Key Concepts
 
 - **Zoning Parameters**: District-specific rules (min lot size, FAR, height, etc.)
+
   - Extracted from Excel "Checklist Parameters" sheet
   - Can be created manually for testing or new districts
 
 - **District Assignment**: Parcels assigned to compliance districts using area-weighted intersection
+
   - Uses `sf::st_intersection()` to calculate actual spatial overlaps
   - Each parcel assigned to district containing majority of its area
   - Correctly handles boundary-straddling parcels and complex geometries (holes, narrow sections)
@@ -438,10 +462,12 @@ The compliance model calculates housing unit capacity through a 17-step process 
   - Aligns with MBTA regulation that "entire parcel capacity counts" in assigned district
 
 - **Excluded/Sensitive Land**: Areas that cannot be developed
+
   - Public institutions, water bodies, wetlands, etc.
   - Measured via GIS overlay analysis or pre-calculated in parcel data
 
 - **Station Area Overlap**: Parcels within 0.5 mile of MBTA stations
+
   - Affects compliance requirements for certain community types
   - Calculated using spatial intersection
 
@@ -463,6 +489,7 @@ See `dev/compliance_model_docs/Compliance_Model_User_Guide_Summary.md` for detai
 ## Project Management
 
 ### Linear Integration
+
 This project uses Linear for issue tracking and progress management. Key information:
 
 - **Team:** Hidalgo Research (ID: `5f1d6e78-3907-430b-a5c4-d98b592374e7`)
@@ -470,6 +497,7 @@ This project uses Linear for issue tracking and progress management. Key informa
 - **Assignee:** fdhidalgo / Daniel Hidalgo (ID: `93d9c10a-bad2-4baf-9fbd-47d65cfc4871`)
 
 **Linear Usage Guidelines:**
+
 - **ALWAYS** update Linear issues with progress comments as work proceeds
 - Use Linear as the primary source of truth for development notes and decisions
 - Create new issues for any significant features or bug fixes discovered
@@ -491,6 +519,7 @@ When developing new features:
 ### Common Development Tasks
 
 **Adding a new calculation function:**
+
 1. Add function to appropriate R file (e.g., `unit_capacity_calculations.R`)
 2. Add `#' @export` to Roxygen documentation
 3. Run `devtools::document()` to update NAMESPACE
@@ -499,12 +528,14 @@ When developing new features:
 6. Update this CLAUDE.md if it represents a new calculation step
 
 **Modifying Excel model correspondence:**
+
 1. Update fixture generation if Excel structure changes
 2. Regenerate fixtures: `source("tests/testthat/generate-fixtures.R")`
 3. Run regression tests: `devtools::test(filter = "excel-regression")`
 4. Document any intentional deviations from Excel model
 
 **Troubleshooting test failures:**
+
 1. Check for CRS issues (all spatial data must be EPSG:26986)
 2. Verify NA handling (R preserves NA; Excel may convert to 0)
 3. Review tolerance settings for numeric comparisons (typically 1 sq ft)
@@ -519,7 +550,7 @@ The `dev/compliance_model_docs/` directory contains critical reference materials
 - **`Compliance_Model_User_Guide.pdf`**: Official EOHLC Excel model documentation
 - **`Compliance_Model_User_Guide_Summary.md`**: Comprehensive markdown summary of the user guide covering:
   - Model components and workflow
-  - GIS calculation requirements  
+  - GIS calculation requirements
   - Excel model structure and logic
   - Unit capacity calculation methods
   - Compliance evaluation criteria
@@ -528,66 +559,23 @@ The `dev/compliance_model_docs/` directory contains critical reference materials
 ### Using Proof of Concept as Reference
 
 The `dev/proof_of_concept/` directory contains student-written prototype code. Use this as a reference for:
+
 - Understanding the Excel model calculations
 - Identifying required GIS operations
 - Learning the compliance logic flow
 
 **Do not directly copy** proof of concept code. Instead:
+
 1. Understand the underlying algorithms
 2. Rewrite using proper R package conventions
 3. Add comprehensive input validation
 4. Implement robust error handling
 5. Create thorough unit tests
 
-
 ## Spatial Data Standards
 
 ### Coordinate Reference System
+
 - **Always use EPSG:26986** (NAD83 Massachusetts State Plane, Mainland zone)
 - All calculations assume planar coordinates in US Survey Feet
 - Validate CRS on input: `stopifnot(sf::st_crs(data)$epsg == 26986)`
-
-### Avoid Escaping Issues
-
-
-#### ✅ **RECOMMENDED: Use Write Tool for Complex Scripts**
-```bash
-# BEST: Create R scripts with Write tool (avoids ALL escape issues)
-Write /tmp/analysis.R
-Rscript /tmp/analysis.R
-```
-
-#### ✅ **RECOMMENDED: Direct Commands for Simple Operations**
-```bash
-# GOOD: Simple operations with -e flag
-R -e "library(targets); tar_load('data'); cat('Records:', nrow(data))"
-```
-
-#### ✅ **RECOMMENDED: Alternative Syntax to Avoid Special Characters**
-```r
-# AVOID: result <- data[!is.na(column)]     # ! causes bash issues
-# USE:   result <- data[is.na(column) == FALSE]
-# OR:    result <- data[complete.cases(column)]
-# OR:    result <- subset(data, is.na(column) == FALSE)
-```
-
-#### ✅ **RECOMMENDED: Incremental Testing Approach**
-```bash
-# Instead of one 30-line diagnostic script, use 3 focused scripts:
-Write /tmp/step1_load.R      # Test data loading only
-Write /tmp/step2_process.R   # Test processing only  
-Write /tmp/step3_analyze.R   # Test analysis only
-```
-
-#### ❌ **AVOID: Bash Heredocs with Special Characters**
-```bash
-# PROBLEMATIC: Even quoted heredocs process some escapes
-cat > /tmp/script.R <<'EOF'
-data[!is.na(x)]  # This ! can still cause issues
-EOF
-```
-
-#### **Why These Practices Matter**
-- **Escape Character Issues**: `!`, `$`, `\` in bash heredocs cause failures
-- **Debug Difficulty**: Large failing scripts are hard to troubleshoot
-- **Reliability**: Write tool and simple -e commands eliminate bash interaction issues
