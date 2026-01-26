@@ -1,0 +1,1269 @@
+---
+title: "MCMC Zoning Analysis: Diagnostic Results"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+library(targets)
+library(data.table)
+library(ggplot2)
+library(knitr)
+library(scales)
+library(sf)
+library(coda)
+library(igraph)
+library(mapgl)
+
+
+# Find targets store - works whether quarto runs from project root or reports/
+store_path <- if (dir.exists("_targets")) "_targets" else "../_targets"
+tar_config_set(store = store_path)
+
+# Source R functions for stickiness analysis
+source_path <- if (dir.exists("R")) "R" else "../R"
+source(file.path(source_path, "parcel_metrics.R"))
+source(file.path(source_path, "parcel_multichain.R"))
+
+# Load all data upfront
+norwood_data <- tar_read(norwood_data)
+parcel_graph_result <- tar_read(parcel_graph_result)
+discovered_lcc_library <- tar_read(discovered_lcc_library)
+discovered_secondary_library <- tar_read(discovered_secondary_library)
+parcel_metrics <- tar_read(parcel_metrics)
+constraints <- tar_read(constraints)
+parcel_rhat_table <- tar_read(parcel_rhat_table)
+parcel_chain_results <- tar_read(all_parcel_chain_results)
+parcel_separation <- tar_read(parcel_chain_separation)
+parcel_coverage <- tar_read(parcel_geographic_coverage)
+parcel_irreducibility_report <- tar_read(parcel_irreducibility_report)
+# Derived values
+pg <- parcel_graph_result$parcel_graph
+pa <- parcel_graph_result$parcel_attributes
+sec <- discovered_secondary_library
+lcc <- discovered_lcc_library
+
+# Get diagnostics from first valid chain (for trajectory plots)
+first_valid_chain <- Filter(
+  function(x) !isTRUE(x$initialization_failed),
+  parcel_chain_results
+)[[1]]
+diag <- first_valid_chain$diagnostics
+
+# Use aggregated stats from multi-chain metrics
+stats_dt <- parcel_metrics$stats
+```
+
+## Overview
+
+This report presents diagnostic results for MCMC sampling of feasible zoning plans for Norwood, MA. The sampler explores parcel configurations satisfying statutory constraints.
+
+### Parcel Zoning Potential
+
+These maps show each parcel's potential contribution to zoning capacity under the MBTA Communities Act. The capacity is calculated based on zoning parameters (FAR, height limits, parking requirements, etc.).
+
+```{r}
+#| label: parcel_data_prep
+
+# Load adopted district boundary for overlay
+# Path relative to project root (works whether quarto runs from root or reports/)
+data_path <- if (dir.exists("data")) "data" else "../data"
+adopted <- sf::read_sf(
+  file.path(
+    data_path,
+    "mbta_district_shapefiles/Norwood/Norwood_MBTAcommDistricts_20240723.shp"
+  )
+) |>
+  sf::st_simplify(dTolerance = 10) |> # Simplify before transform (10 ft tolerance)
+  sf::st_transform(4326)
+
+# Load raw parcel data to get institutional use info
+devtools::load_all(
+  file.path(if (dir.exists("R")) ".." else "../..", "mbtazone"),
+  quiet = TRUE
+)
+raw_parcels <- load_municipality(
+  shapefile = file.path(
+    data_path,
+    "land_record_shapefiles/basic/220_NORWOOD_basic.zip"
+  ),
+  community_name = "Norwood",
+  projection = 26986,
+  validate = TRUE
+)
+
+# Prepare parcel data with capacity (simplify geometry to reduce file size)
+norwood_parcels <- norwood_data$norwood_geometry |>
+  sf::st_simplify(dTolerance = 10) |> # Simplify before transform (10 ft tolerance)
+  sf::st_transform(4326)
+
+# Add institutional flag from raw data
+inst_lookup <- data.frame(
+  LOC_ID = raw_parcels$LOC_ID,
+  is_institutional = raw_parcels$PublicInst > 0,
+  use_desc = raw_parcels$UseDesc
+)
+norwood_parcels <- merge(
+  norwood_parcels,
+  inst_lookup,
+  by = "LOC_ID",
+  all.x = TRUE
+)
+norwood_parcels <- sf::st_as_sf(norwood_parcels)
+norwood_parcels$is_institutional[is.na(
+  norwood_parcels$is_institutional
+)] <- FALSE
+
+# Create opacity column (0 for institutional, 0.8 for others)
+norwood_parcels$fill_opacity <- ifelse(norwood_parcels$is_institutional, 0, 0.8)
+
+# Calculate density metrics
+TARGET_DENSITY <- 15
+norwood_parcels$raw_density <- norwood_parcels$capacity / norwood_parcels$area
+norwood_parcels$raw_density[
+  is.na(norwood_parcels$raw_density) |
+    is.infinite(norwood_parcels$raw_density)
+] <- 0
+norwood_parcels$density_contribution <- norwood_parcels$raw_density -
+  TARGET_DENSITY
+
+# Pre-compute rounded values for tooltips
+norwood_parcels$raw_density_rounded <- round(norwood_parcels$raw_density, 1)
+norwood_parcels$density_contribution_rounded <- round(
+  norwood_parcels$density_contribution,
+  1
+)
+```
+
+#### Housing Unit Capacity
+
+Parcels shaded by total housing units they can support. Zero-capacity parcels are transparent.
+
+```{r}
+#| label: capacity_map
+#| fig-height: 6
+#| fig-width: 10
+
+# Filter to positive capacity for palette calculation
+positive_cap <- norwood_parcels[norwood_parcels$capacity > 0, ]
+
+# Cap color scale at 95th percentile to handle outliers
+cap_95 <- quantile(positive_cap$capacity, 0.95)
+norwood_parcels$capacity_capped <- pmin(norwood_parcels$capacity, cap_95)
+
+# Create palette using capped values
+capped_data <- norwood_parcels[norwood_parcels$capacity_capped > 0, ]
+capacity_palette <- interpolate_palette(
+  data = capped_data,
+  column = "capacity_capped",
+  palette = colorRampPalette(c(
+    "#f7fbff",
+    "#c6dbef",
+    "#6baed6",
+    "#2171b5",
+    "#084594"
+  ))
+)
+
+maplibre(
+  style = carto_style("positron"),
+  bounds = norwood_parcels
+) |>
+  add_fill_layer(
+    id = "capacity_fill",
+    source = norwood_parcels,
+    fill_color = capacity_palette$expression,
+    fill_opacity = interpolate(
+      column = "fill_opacity",
+      values = c(0, 0.8),
+      stops = c(0, 0.8)
+    ),
+    tooltip = concat(
+      "Parcel: ",
+      get_column("LOC_ID"),
+      "<br>Capacity: ",
+      get_column("capacity"),
+      " units",
+      "<br>Use: ",
+      get_column("use_desc")
+    )
+  ) |>
+  add_line_layer(
+    id = "parcel_outline",
+    source = norwood_parcels,
+    line_color = "#333333",
+    line_width = 0.2,
+    line_opacity = 0.5
+  ) |>
+  add_line_layer(
+    id = "adopted_boundary",
+    source = adopted,
+    line_color = "purple",
+    line_width = 4
+  ) |>
+  add_legend(
+    "Housing Unit Capacity",
+    values = c(
+      paste0(round(min(positive_cap$capacity)), " units"),
+      paste0(round(cap_95), "+ units")
+    ),
+    colors = c("#f7fbff", "#084594")
+  ) |>
+  add_fullscreen_control(position = "top-left") |>
+  add_navigation_control()
+```
+
+#### Density Contribution vs Target
+
+The zone must meet a minimum density of 15 units/acre. This map shows how each parcel would affect that target:
+
+- **Blue**: Parcel helps meet density target (density > 15 u/ac)
+- **White**: Parcel is at threshold (density ≈ 15 u/ac)
+- **Red**: Parcel would dilute zone density below target (density < 15 u/ac)
+
+```{r}
+#| label: density_map
+#| fig-height: 6
+#| fig-width: 10
+
+# Create diverging palette (red-white-blue) centered at 0
+density_palette <- interpolate_palette(
+  data = norwood_parcels,
+  column = "density_contribution",
+  palette = colorRampPalette(c(
+    "#b2182b",
+    "#f4a582",
+    "#f7f7f7",
+    "#92c5de",
+    "#2166ac"
+  )),
+  na_color = "#cccccc"
+)
+
+maplibre(
+  style = carto_style("positron"),
+  bounds = norwood_parcels
+) |>
+  add_fill_layer(
+    id = "density_fill",
+    source = norwood_parcels,
+    fill_color = density_palette$expression,
+    fill_opacity = interpolate(
+      column = "fill_opacity",
+      values = c(0, 0.8),
+      stops = c(0, 0.7)
+    ),
+    tooltip = concat(
+      "Parcel: ",
+      get_column("LOC_ID"),
+      "<br>Raw density: ",
+      get_column("raw_density_rounded"),
+      " u/ac",
+      "<br>vs Target: ",
+      get_column("density_contribution_rounded"),
+      " u/ac",
+      "<br>Use: ",
+      get_column("use_desc")
+    )
+  ) |>
+  add_line_layer(
+    id = "parcel_outline",
+    source = norwood_parcels,
+    line_color = "#333333",
+    line_width = 0.2,
+    line_opacity = 0.5
+  ) |>
+  add_line_layer(
+    id = "adopted_boundary",
+    source = adopted,
+    line_color = "purple",
+    line_width = 4
+  ) |>
+  add_legend(
+    "Density vs 15 u/ac Target",
+    values = c(
+      paste0(round(min(norwood_parcels$density_contribution)), " u/ac"),
+      "0 (at target)",
+      paste0("+", round(max(norwood_parcels$density_contribution)), " u/ac")
+    ),
+    colors = c("#b2182b", "#f7f7f7", "#2166ac")
+  ) |>
+  add_fullscreen_control(position = "top-left") |>
+  add_navigation_control()
+```
+
+
+### Constraints
+
+| Constraint | Value | Description |
+|--------------------------|------------------|----------------------------|
+| Minimum capacity | 2,045 units | Total housing units the district must support |
+| Maximum capacity | \~3,068 units | Upper bound (150% of minimum) for exploration |
+| Minimum area | 50 acres | Total land area in the overlay district |
+| Minimum density | 15 units/acre | Gross density across the district |
+| LCC fraction | ≥50% | At least half of capacity in the largest connected component |
+| Secondary area | ≥5 acres | Any disconnected component must be at least 5 acres |
+
+### Glossary
+
+| Term | Definition |
+|------------------------|-----------------------------------------------|
+| **LCC** | Largest Connected Component: the largest contiguous group of selected parcels |
+| **Secondary** | A connected component other than the LCC; must have area ≥5 acres |
+
+## Parcel Graph Summary
+
+The parcel graph represents adjacency relationships between parcels.
+
+### Graph Statistics
+
+**Parcels:** `r scales::comma(nrow(parcel_graph_result$parcel_assignments))`
+
+**Parcel units:** `r scales::comma(igraph::vcount(pg))`
+
+**Edges:** `r scales::comma(igraph::ecount(pg))`
+
+**Average degree:** `r round(mean(igraph::degree(pg)), 1)`
+
+**Parcel area range:** `r round(min(pa$area), 2)` – `r round(max(pa$area), 1)` acres
+
+**Parcel capacity range:** `r scales::comma(min(pa$capacity))` – `r scales::comma(max(pa$capacity))` units
+
+### Disconnected Parcels
+
+```{r}
+#| label: connectivity-analysis
+#| include: false
+
+# Analyze graph connectivity
+comp <- igraph::components(pg)
+n_components <- comp$no
+largest_component_size <- max(comp$csize)
+largest_component_id <- which.max(comp$csize)
+
+# Find disconnected parcels (not in largest component)
+disconnected_mask <- comp$membership != largest_component_id
+disconnected_parcels <- igraph::V(pg)$name[disconnected_mask]
+n_disconnected <- length(disconnected_parcels)
+
+# Get properties of disconnected parcels
+if (n_disconnected > 0) {
+  disconnected_dt <- data.table::data.table(
+    parcel_id = disconnected_parcels,
+    capacity = igraph::V(pg)$capacity[disconnected_mask],
+    area = igraph::V(pg)$area[disconnected_mask],
+    degree = igraph::degree(pg)[disconnected_mask],
+    component = comp$membership[disconnected_mask]
+  )
+  disconnected_dt[, density := round(capacity / area, 1)]
+  disconnected_total_cap <- sum(disconnected_dt$capacity)
+  disconnected_total_area <- sum(disconnected_dt$area)
+} else {
+  disconnected_dt <- NULL
+  disconnected_total_cap <- 0
+  disconnected_total_area <- 0
+}
+```
+
+**Graph components:** `r n_components` (largest has `r scales::comma(largest_component_size)` of `r scales::comma(igraph::vcount(pg))` parcel units)
+
+This map shows the disconnected parcels in red.
+```{r}
+#| label: disconnected-map
+#| fig-height: 5
+#| fig-width: 8
+
+if (n_disconnected > 0) {
+  # Get parcel geometries for disconnected parcels
+  parcel_assign <- parcel_graph_result$parcel_assignments
+
+  # All parcels with connectivity status
+  all_parcels_dt <- data.table::data.table(
+    unit_id = igraph::V(pg)$name,
+    connected = comp$membership == largest_component_id
+  )
+
+  # Join to parcel assignments
+  parcel_connectivity <- merge(
+    parcel_assign[, .(parcel_id, unit_id)],
+    all_parcels_dt,
+    by = "unit_id"
+  )
+
+  # Merge with geometry (simplify to reduce file size)
+  parcel_geom <- sf::st_simplify(norwood_data$norwood_geometry, dTolerance = 10)
+  parcel_geom$parcel_id <- parcel_geom$LOC_ID
+  plot_sf <- merge(
+    parcel_geom,
+    parcel_connectivity,
+    by = "parcel_id",
+    all.x = FALSE
+  )
+  plot_sf <- sf::st_as_sf(plot_sf)
+  plot_sf$status <- ifelse(plot_sf$connected, "Connected", "Disconnected")
+
+  # Static ggplot2 map
+  ggplot() +
+    geom_sf(
+      data = plot_sf,
+      aes(fill = status),
+      color = "gray40",
+      linewidth = 0.1
+    ) +
+    scale_fill_manual(
+      values = c("Connected" = "gray90", "Disconnected" = "firebrick"),
+      name = "Status"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      panel.grid = element_blank(),
+      legend.position = "bottom"
+    ) +
+    labs(title = "Parcel Graph Connectivity")
+}
+
+
+```
+
+
+
+
+## Multi-Chain Mixing Diagnostics
+
+These diagnostics assess how well the 4 MCMC chains explore the state space.
+
+### Effective Sample Size (ESS)
+
+ESS measures the number of independent samples after accounting for autocorrelation. Multi-chain ESS is computed within each chain first, then pooled.
+
+```{r}
+#| label: parcel-mixing-metrics
+ess_df <- data.table::data.table(
+  Metric = c("Capacity", "N Components", "N Secondaries", "LCC Capacity"),
+  ESS = c(
+    round(parcel_metrics$ess_capacity, 1),
+    round(parcel_metrics$ess_n_components, 1),
+    round(parcel_metrics$ess_n_secondaries, 1),
+    round(parcel_metrics$ess_lcc_capacity, 1)
+  )
+)
+
+if (!is.na(parcel_metrics$ess_centroid_x)) {
+  ess_df <- rbind(
+    ess_df,
+    data.table::data.table(
+      Metric = c("Centroid X", "Centroid Y"),
+      ESS = c(
+        round(parcel_metrics$ess_centroid_x, 1),
+        round(parcel_metrics$ess_centroid_y, 1)
+      )
+    )
+  )
+}
+
+kable(ess_df, caption = "Effective Sample Size by Metric")
+```
+
+### Sample Summary
+
+**Total chains:** `r parcel_metrics$n_chains`
+
+**Total steps:** `r scales::comma(parcel_metrics$total_steps)` (`r scales::comma(parcel_metrics$n_steps_per_chain[1])` per chain)
+
+### Parcel Inclusion Frequency
+
+This histogram shows the distribution of inclusion frequencies across all parcels.
+
+```{r}
+#| label: stickiness-histogram
+#| fig-height: 4
+#| fig-width: 8
+stickiness <- compute_multichain_stickiness(parcel_chain_results)
+
+ggplot(stickiness, aes(x = inclusion_fraction * 100)) +
+  geom_histogram(
+    binwidth = 1,
+    fill = "steelblue",
+    color = "white",
+    boundary = 0
+  ) +
+  scale_x_continuous() +
+  labs(
+    x = "Inclusion Frequency (%)",
+    y = "Number of Parcels",
+    title = "Distribution of Parcel Inclusion Frequencies"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r}
+#| label: stickiness-map
+#| fig-height: 6
+#| fig-width: 10
+
+# Join stickiness to parcel geometry
+parcel_assign <- parcel_graph_result$parcel_assignments
+
+# Average inclusion fraction per parcel (parcels may map to same unit)
+parcel_stickiness <- merge(
+  parcel_assign[, .(parcel_id, unit_id)],
+  stickiness[, .(unit_id = parcel_id, inclusion_fraction)],
+  by = "unit_id"
+)
+
+# Merge with geometry (simplify to reduce file size)
+parcel_geom <- sf::st_simplify(norwood_data$norwood_geometry, dTolerance = 10)
+parcel_geom$parcel_id <- parcel_geom$LOC_ID
+plot_sf <- merge(
+  parcel_geom,
+  parcel_stickiness,
+  by = "parcel_id",
+  all.x = FALSE
+)
+plot_sf <- sf::st_as_sf(plot_sf)
+
+# Convert to percentage for display
+plot_sf$inclusion_pct <- plot_sf$inclusion_fraction * 100
+
+# Create yellow-to-red color palette (0% is transparent, >0% starts yellow)
+yellow_to_red <- colorRampPalette(c("#FFFF00", "#FF8C00", "#FF0000", "#8B0000"))
+palette <- interpolate_palette(
+  data = plot_sf,
+  column = "inclusion_pct",
+  palette = yellow_to_red
+)
+
+# Plot choropleth
+maplibre(
+  style = carto_style("positron"),
+  bounds = plot_sf
+) |>
+  add_fill_layer(
+    id = "inclusion_fill",
+    source = plot_sf,
+    fill_color = palette$expression,
+    fill_opacity = interpolate(
+      column = "inclusion_pct",
+      values = c(0, 1),
+      stops = c(0, 0.8)
+    ),
+    tooltip = concat(
+      "Parcel: ",
+      get_column("unit_id"),
+      "<br>Inclusion: ",
+      get_column("inclusion_pct"),
+      "%"
+    )
+  ) |>
+  add_line_layer(
+    id = "parcel_outline",
+    source = plot_sf,
+    line_color = "#333333",
+    line_width = 0.2,
+    line_opacity = 0.7
+  ) |>
+  add_legend(
+    "Inclusion Frequency (%)",
+    values = get_legend_labels(palette, digits = 0, suffix = "%"),
+    colors = get_legend_colors(palette)
+  ) |>
+  add_fullscreen_control(position = "top-left") |>
+  add_navigation_control()
+```
+
+### Secondary Component Dynamics
+
+Birth and death moves add/remove secondary components.
+
+**Births:** `r scales::comma(parcel_metrics$secondary_births)`
+
+**Deaths:** `r scales::comma(parcel_metrics$secondary_deaths)`
+
+```{r}
+#| label: parcel-secondary-distribution
+#| fig-height: 4
+#| fig-width: 8
+# Combine n_secondaries trajectories from all chains
+valid_chains <- Filter(
+  function(x) !isTRUE(x$initialization_failed),
+  parcel_chain_results
+)
+all_n_sec <- unlist(lapply(valid_chains, function(x) {
+  x$diagnostics$n_secondaries_trajectory
+}))
+
+sec_df <- data.table::data.table(n_secondaries = all_n_sec)
+
+ggplot(sec_df, aes(x = n_secondaries)) +
+  geom_histogram(
+    binwidth = 1,
+    boundary = 0,
+    fill = "steelblue",
+    color = "white",
+    alpha = 0.8
+  ) +
+  scale_x_continuous(breaks = scales::breaks_width(1)) +
+  labs(
+    title = "Secondary Component Count Distribution (All Chains)",
+    x = "Number of Secondaries",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+**Range:** `r min(all_n_sec)` – `r max(all_n_sec)` secondaries
+
+**Mean:** `r round(mean(all_n_sec), 2)` secondaries
+
+**Fraction with 0 secondaries:** `r scales::percent(mean(all_n_sec == 0), accuracy = 0.1)`
+
+### Example Sampled Plans
+
+These panels show three randomly selected plans from the MCMC posterior, illustrating what feasible zoning configurations look like. The largest connected component (LCC) is shown in teal; secondary components in orange.
+
+```{r}
+#| label: sampled-plans-prep
+#| include: false
+
+# Get samples from main MCMC chains (thinned samples stored during run)
+# Combine samples from all valid chains
+valid_chains <- Filter(
+  function(x) !isTRUE(x$initialization_failed) && !is.null(x$parcel_samples),
+  parcel_chain_results
+)
+valid_samples <- do.call(c, lapply(valid_chains, function(x) x$parcel_samples))
+valid_samples <- Filter(Negate(is.null), valid_samples)
+
+# Sample 3 random plans
+sample_idx <- sample(seq_along(valid_samples), 3)
+
+# Helper to expand a state to parcel-level data (with separate secondary blocks)
+expand_state_to_parcels <- function(state, sec_library, parcel_assign) {
+  lcc_units <- state$lcc_parcels
+  lcc_parcels <- parcel_assign[unit_id %in% lcc_units, parcel_id]
+
+  # Build list: LCC + each secondary block separately
+  result <- list(data.table::data.table(
+    LOC_ID = lcc_parcels,
+    component = "LCC",
+    zone_id = "LCC"
+  ))
+
+  if (length(state$secondary_blocks) > 0) {
+    for (k in seq_along(state$secondary_blocks)) {
+      block_id <- state$secondary_blocks[k]
+      block_indices <- sec_library$blocks[[block_id]]
+      block_units <- sec_library$parcel_names[block_indices]
+      block_parcels <- parcel_assign[unit_id %in% block_units, parcel_id]
+      result[[k + 1]] <- data.table::data.table(
+        LOC_ID = block_parcels,
+        component = "Secondary",
+        zone_id = paste0("Sec_", k)
+      )
+    }
+  }
+
+  data.table::rbindlist(result)
+}
+
+# Build per-sample sf objects for mapgl visualization
+base_geom <- norwood_data$norwood_geometry |>
+  sf::st_simplify(dTolerance = 10) # Simplify to reduce file size
+
+sample_maps_data <- lapply(seq_along(sample_idx), function(i) {
+  state <- valid_samples[[sample_idx[i]]]
+  dt <- expand_state_to_parcels(
+    state,
+    sec,
+    parcel_graph_result$parcel_assignments
+  )
+
+  # Merge with geometry
+  parcels_sf <- merge(
+    base_geom,
+    dt,
+    by = "LOC_ID",
+    all.x = FALSE
+  )
+  parcels_sf <- sf::st_as_sf(parcels_sf)
+
+  # Compute concave hull for each zone_id (LCC gets one hull, each Secondary block gets one hull)
+  boundary_list <- lapply(split(parcels_sf, parcels_sf$zone_id), function(grp) {
+    if (nrow(grp) == 0) {
+      return(NULL)
+    }
+    # Extract all vertices as points
+    pts <- sf::st_coordinates(sf::st_union(grp))
+    pts_multipoint <- sf::st_multipoint(pts[, 1:2])
+    pts_sfc <- sf::st_sfc(pts_multipoint, crs = sf::st_crs(grp))
+    # Compute concave hull on points (ratio closer to 0 = tighter hull)
+    hull <- sf::st_concave_hull(pts_sfc, ratio = 0.2, allow_holes = FALSE)
+    sf::st_sf(
+      component = grp$component[1],
+      zone_id = grp$zone_id[1],
+      geometry = hull
+    )
+  })
+  boundaries_sf <- do.call(rbind, Filter(Negate(is.null), boundary_list))
+
+  list(
+    parcels = parcels_sf,
+    boundaries = boundaries_sf,
+    sample_id = paste0("Sample ", i)
+  )
+})
+```
+
+```{r}
+#| label: sampled-plans-maps
+#| results: asis
+
+# Transform base geometry to WGS84 for consistent bounds
+base_geom_wgs84 <- sf::st_transform(base_geom, 4326)
+
+make_sample_map <- function(sample_data, bounds, all_parcels) {
+  parcels <- sf::st_transform(sample_data$parcels, 4326)
+  boundaries <- sf::st_transform(sample_data$boundaries, 4326)
+
+  maplibre(style = carto_style("positron"), bounds = bounds) |>
+    add_line_layer(
+      id = "all_parcels",
+      source = all_parcels,
+      line_color = "#999999",
+      line_width = 0.3,
+      line_opacity = 0.5
+    ) |>
+    add_fill_layer(
+      id = "hull_fill",
+      source = boundaries,
+      fill_color = match_expr(
+        column = "component",
+        values = c("LCC", "Secondary"),
+        stops = c("#1b9e77", "#d95f02")
+      ),
+      fill_opacity = 0.25
+    ) |>
+    add_fill_layer(
+      id = "parcels",
+      source = parcels,
+      fill_color = match_expr(
+        column = "component",
+        values = c("LCC", "Secondary"),
+        stops = c("#1b9e77", "#d95f02")
+      ),
+      fill_opacity = 0.8,
+      tooltip = concat(
+        "Zone: ",
+        get_column("zone_id"),
+        "<br>Component: ",
+        get_column("component")
+      )
+    ) |>
+    add_line_layer(
+      id = "boundaries",
+      source = boundaries,
+      line_color = match_expr(
+        column = "component",
+        values = c("LCC", "Secondary"),
+        stops = c("#0d5c49", "#a34702")
+      ),
+      line_width = 1
+    ) |>
+    add_categorical_legend(
+      legend_title = paste0(sample_data$sample_id, " - Components"),
+      values = c("LCC", "Secondary"),
+      colors = c("#1b9e77", "#d95f02")
+    ) |>
+    add_fullscreen_control(position = "top-left") |>
+    add_navigation_control()
+}
+
+make_sample_map(sample_maps_data[[1]], base_geom_wgs84, base_geom_wgs84)
+make_sample_map(sample_maps_data[[2]], base_geom_wgs84, base_geom_wgs84)
+make_sample_map(sample_maps_data[[3]], base_geom_wgs84, base_geom_wgs84)
+```
+
+## Trajectory Plots
+
+Time-series views of key metrics during sampling (all chains).
+
+### Capacity Trajectory
+
+```{r}
+#| label: parcel-capacity-trajectory
+#| fig-height: 4
+#| fig-width: 10
+
+# Extract capacity trajectories from all valid chains
+valid_chains <- Filter(
+  function(x) !isTRUE(x$initialization_failed),
+  parcel_chain_results
+)
+
+# Build combined data.table for all chains
+traj_list <- lapply(seq_along(valid_chains), function(i) {
+  cap_traj <- valid_chains[[i]]$diagnostics$capacity_trajectory
+  n_steps <- length(cap_traj)
+  idx <- seq(1, n_steps, by = max(1, n_steps %/% 1000))
+  data.table::data.table(
+    step = idx,
+    capacity = cap_traj[idx],
+    chain = factor(i)
+  )
+})
+traj_df <- data.table::rbindlist(traj_list)
+
+chain_colors <- c("#1b9e77", "#d95f02", "#7570b3", "#e7298a")
+
+ggplot(traj_df, aes(x = step, y = capacity, color = chain)) +
+  geom_line(alpha = 0.6, linewidth = 0.4) +
+  geom_hline(
+    yintercept = constraints$min_capacity,
+    linetype = "dashed",
+    color = "red",
+    alpha = 0.7
+  ) +
+  scale_color_manual(values = chain_colors, name = "Chain") +
+  labs(
+    title = "Capacity Trajectory",
+    x = "MCMC Step",
+    y = "Total Capacity"
+  ) +
+  theme_minimal()
+```
+
+### Secondary Count Trajectory
+
+```{r}
+#| label: parcel-secondary-trajectory
+#| fig-height: 4
+#| fig-width: 10
+
+# Build combined data.table for secondary counts from all chains
+traj_sec_list <- lapply(seq_along(valid_chains), function(i) {
+  n_sec_traj <- valid_chains[[i]]$diagnostics$n_secondaries_trajectory
+  n_steps <- length(n_sec_traj)
+  idx <- seq(1, n_steps, by = max(1, n_steps %/% 1000))
+  data.table::data.table(
+    step = idx,
+    n_secondaries = n_sec_traj[idx],
+    chain = factor(i)
+  )
+})
+traj_sec_df <- data.table::rbindlist(traj_sec_list)
+
+ggplot(traj_sec_df, aes(x = step, y = n_secondaries, color = chain)) +
+  geom_line(alpha = 0.7, linewidth = 0.4) +
+  scale_color_manual(values = chain_colors, name = "Chain") +
+  labs(
+    title = "Secondary Component Count Over Time",
+    x = "MCMC Step",
+    y = "Number of Secondaries"
+  ) +
+  theme_minimal()
+```
+
+## Move Acceptance Diagnostics
+
+
+### Move Statistics
+
+```{r}
+#| label: parcel-move-stats
+# Filter to active move types only (n_attempted > 0)
+move_stats <- copy(stats_dt)[n_attempted > 0]
+
+# Compute rates
+move_stats[,
+  feasibility := ifelse(
+    n_attempted > 0,
+    round(100 * n_feasible / n_attempted, 1),
+    NA_real_
+  )
+]
+move_stats[,
+  mh_accept := ifelse(
+    n_feasible > 0,
+    round(100 * n_accepted / n_feasible, 1),
+    NA_real_
+  )
+]
+move_stats[, overall := round(100 * n_accepted / n_attempted, 1)]
+
+
+# Reshape to long format for faceted/grouped display
+move_long <- melt(
+  move_stats[, .(move_type, n_attempted, feasibility, mh_accept, overall)],
+  id.vars = c("move_type", "n_attempted"),
+  variable.name = "rate_type",
+  value.name = "rate"
+)
+
+# Clean up labels
+move_long[,
+  rate_type := factor(
+    rate_type,
+    levels = c("feasibility", "mh_accept", "overall"),
+    labels = c("Feasible %", "MH Accept %", "Overall %")
+  )
+]
+move_long[, move_label := gsub("_", " ", move_type)]
+move_long[, move_label := tools::toTitleCase(move_label)]
+
+# Order
+move_order <- move_stats[order(overall), move_type]
+move_long[,
+  move_label := factor(
+    move_label,
+    levels = tools::toTitleCase(gsub("_", " ", move_order))
+  )
+]
+
+ggplot(move_long, aes(x = move_label, y = rate, fill = rate_type)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = ifelse(is.na(rate), "", sprintf("%.0f", rate))),
+    position = position_dodge(width = 0.8),
+    hjust = -0.2,
+    size = 3
+  ) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(limits = c(0, 115), breaks = seq(0, 100, 25)) +
+  labs(
+    title = "Move Acceptance Rates by Type",
+    subtitle = paste0(
+      scales::comma(parcel_metrics$total_steps),
+      " total steps across ",
+      parcel_metrics$n_chains,
+      " chains"
+    ),
+    x = NULL,
+    y = "Rate (%)",
+    fill = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+
+
+```
+
+### Successful Move Breakdown
+
+This chart shows what proportion of all accepted moves came from each kernel type.
+
+```{r}
+#| label: move-success-breakdown
+#| fig-height: 5
+#| fig-width: 8
+success_stats <- copy(stats_dt)[n_accepted > 0]
+
+# Calculate proportions
+total_accepted <- sum(success_stats$n_accepted)
+success_stats[, proportion := n_accepted / total_accepted]
+success_stats[, pct := round(100 * proportion, 1)]
+
+# Create readable labels
+success_stats[, label := gsub("_", " ", move_type)]
+success_stats[, label := tools::toTitleCase(label)]
+
+# Order by proportion for cleaner display
+success_stats <- success_stats[order(-proportion)]
+success_stats[, label := factor(label, levels = label)]
+
+ggplot(success_stats, aes(x = label, y = pct, fill = label)) +
+  geom_col(alpha = 0.8, show.legend = FALSE) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", pct)),
+    vjust = -0.5,
+    size = 3.5
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Successful Move Breakdown by Type",
+    subtitle = paste("Total accepted moves:", scales::comma(total_accepted)),
+    x = NULL,
+    y = "Percentage of Successful Moves"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    plot.title = element_text(face = "bold")
+  ) +
+  ylim(0, max(success_stats$pct) * 1.15)
+```
+
+
+## Multi-Chain Convergence
+
+Multi-chain diagnostics test whether chains from different starting regions converge to the same distribution.
+
+### R-hat Convergence
+
+R-hat compares between-chain to within-chain variance. Values below 1.1 indicate convergence across chains (Gelman & Rubin, 1992).
+
+```{r}
+#| label: parcel-rhat-plot
+#| fig-height: 5
+#| fig-width: 7
+tar_read(parcel_rhat_plot_obj)
+```
+
+### Rolling R-hat Over Time
+
+This plot shows how R-hat evolves as more samples are collected. Early in the chain, R-hat may be high as chains explore different regions. Convergence is indicated by all metrics dropping below 1.1.
+
+```{r}
+#| label: rolling-rhat-compute
+
+# Helper function to compute rolling R-hat at regular intervals
+compute_rolling_rhat <- function(chain_results, metrics, eval_points = 20) {
+  # Extract valid chains
+  valid_chains <- Filter(
+    function(x) !isTRUE(x$initialization_failed),
+    chain_results
+  )
+
+  if (length(valid_chains) < 2) {
+    return(data.table::data.table(
+      metric = character(0),
+      step = numeric(0),
+      rhat = numeric(0)
+    ))
+  }
+
+  # Map metric names to trajectory names
+  traj_names <- c(
+    capacity = "capacity_trajectory",
+    centroid_x = "centroid_x_trajectory",
+    centroid_y = "centroid_y_trajectory",
+    lcc_capacity = "lcc_capacity_trajectory",
+    n_components = "n_components_trajectory"
+  )
+
+  # Get chain length from first valid chain
+  n_steps <- length(valid_chains[[1]]$diagnostics$capacity_trajectory)
+
+  # Create evaluation points (e.g., 5%, 10%, ... 100% of chain)
+  eval_steps <- round(seq(
+    n_steps / eval_points,
+    n_steps,
+    length.out = eval_points
+  ))
+
+  # Compute R-hat at each evaluation point for each metric
+  results <- list()
+  for (metric in metrics) {
+    for (step in eval_steps) {
+      # Extract truncated trajectories
+      chain_values <- lapply(valid_chains, function(r) {
+        r$diagnostics[[traj_names[[metric]]]][1:step]
+      })
+
+      # Compute R-hat using existing function
+      rhat <- compute_gelman_rubin(chain_values)
+
+      results[[length(results) + 1]] <- data.table::data.table(
+        metric = metric,
+        step = step,
+        rhat = rhat$rhat
+      )
+    }
+  }
+
+  data.table::rbindlist(results)
+}
+```
+
+```{r}
+#| label: rolling-rhat-plot
+#| fig-height: 5
+#| fig-width: 10
+
+# Compute rolling R-hat
+rolling_rhat <- compute_rolling_rhat(
+  parcel_chain_results,
+  metrics = c(
+    "capacity",
+    "centroid_x",
+    "centroid_y",
+    "lcc_capacity",
+    "n_components"
+  ),
+  eval_points = 20
+)
+
+# Get endpoint labels for direct labeling
+endpoint_labels <- rolling_rhat[, .SD[.N], by = metric]
+
+# Define colors (colorblind-friendly palette)
+metric_colors <- c(
+  "capacity" = "#1b9e77",
+  "centroid_x" = "#d95f02",
+  "centroid_y" = "#7570b3",
+  "lcc_capacity" = "#e7298a",
+  "n_components" = "#66a61e"
+)
+
+# Create plot with direct labels
+ggplot(rolling_rhat, aes(x = step, y = rhat, color = metric)) +
+  geom_line(linewidth = 0.8) +
+  geom_hline(
+    yintercept = 1.1,
+    linetype = "dashed",
+    color = "red",
+    alpha = 0.7
+  ) +
+  geom_text(
+    data = endpoint_labels,
+    aes(label = metric, x = step, y = rhat),
+    hjust = -0.1,
+    size = 3.5,
+    fontface = "bold"
+  ) +
+  scale_color_manual(values = metric_colors, guide = "none") +
+  scale_x_continuous(
+    labels = scales::comma,
+    expand = expansion(mult = c(0.02, 0.15))
+  ) +
+  labs(
+    title = "Rolling R-hat Convergence",
+    subtitle = "R-hat computed at increasing chain lengths (dashed line = 1.1 threshold)",
+    x = "MCMC Step",
+    y = "R-hat"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank()
+  )
+```
+
+### Chain Trajectories
+
+Centroid trajectories visualize geographic exploration. Each panel shows one chain's path through the state space, with markers for start (hollow) and end (filled) positions.
+
+```{r}
+#| label: parcel-chain-trajectories
+#| fig-height: 8
+#| fig-width: 10
+
+chain_results <- tar_read(all_parcel_chain_results)
+
+# Filter valid chains
+valid_chains <- Filter(
+  function(x) !isTRUE(x$initialization_failed),
+  chain_results
+)
+
+# Build trajectory data
+traj_data <- lapply(names(valid_chains), function(chain_name) {
+  result <- valid_chains[[chain_name]]
+  if (is.null(result$diagnostics)) {
+    return(NULL)
+  }
+  cx <- result$diagnostics$centroid_x_trajectory
+  cy <- result$diagnostics$centroid_y_trajectory
+  if (is.null(cx) || is.null(cy) || length(cx) == 0) {
+    return(NULL)
+  }
+  subsample <- 10
+  n <- length(cx)
+  indices <- seq(1, n, by = subsample)
+  data.table(
+    chain = chain_name,
+    step = indices,
+    centroid_x = cx[indices],
+    centroid_y = cy[indices]
+  )
+})
+traj_df <- rbindlist(Filter(Negate(is.null), traj_data))
+
+# Create start/end points for markers
+endpoints <- traj_df[,
+  .(
+    start_x = centroid_x[1],
+    start_y = centroid_y[1],
+    end_x = centroid_x[.N],
+    end_y = centroid_y[.N]
+  ),
+  by = chain
+]
+
+# Chain colors
+chain_colors <- c(
+  chain_1 = "#e41a1c",
+  chain_2 = "#377eb8",
+  chain_3 = "#4daf4a",
+  chain_4 = "#984ea3"
+)
+
+# Make nice chain labels
+traj_df[, chain_label := gsub("_", " ", chain)]
+traj_df[, chain_label := tools::toTitleCase(chain_label)]
+endpoints[, chain_label := gsub("_", " ", chain)]
+endpoints[, chain_label := tools::toTitleCase(chain_label)]
+
+# Load parcel geometry for background (keep in State Plane CRS to match trajectories)
+parcel_bg <- sf::st_simplify(norwood_data$norwood_geometry, dTolerance = 10)
+
+# Static 4-panel ggplot
+ggplot(traj_df, aes(x = centroid_x, y = centroid_y)) +
+  # Parcel background
+  geom_sf(
+    data = parcel_bg,
+    fill = "gray95",
+    color = "gray70",
+    linewidth = 0.1,
+    inherit.aes = FALSE
+  ) +
+  geom_path(aes(color = chain), alpha = 0.6, linewidth = 0.4) +
+  # Start markers (hollow circles)
+  geom_point(
+    data = endpoints,
+    aes(x = start_x, y = start_y, color = chain),
+    shape = 21,
+    size = 3,
+    fill = "white",
+    stroke = 1.5
+  ) +
+  # End markers (filled circles)
+  geom_point(
+    data = endpoints,
+    aes(x = end_x, y = end_y, color = chain),
+    shape = 19,
+    size = 3
+  ) +
+  scale_color_manual(values = chain_colors, guide = "none") +
+  facet_wrap(~chain_label, nrow = 2) +
+  coord_sf(crs = 26986) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_line(color = "gray90"),
+    strip.text = element_text(face = "bold", size = 11)
+  ) +
+  labs(
+    title = "Chain Centroid Trajectories",
+    subtitle = "Hollow = start, Filled = end",
+    x = NULL,
+    y = NULL
+  )
+```
+

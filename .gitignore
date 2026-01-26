@@ -28,3 +28,7 @@ inst/extdata/statewide/Density_Denominator_Deductions.zip
 # Validation results (large binary data)
 dev/validation/validation_results.rds
 dev/archive/*.rds
+
+# Targets
+_targets
+worker_logs
