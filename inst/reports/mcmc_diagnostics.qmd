@@ -22,16 +22,12 @@ library(sf)
 library(coda)
 library(igraph)
 library(mapgl)
-
+library(mbtazone)
 
 # Find targets store - works whether quarto runs from project root or reports/
-store_path <- if (dir.exists("_targets")) "_targets" else "../_targets"
+store_path <- if (dir.exists("_targets")) "_targets" else "../../_targets"
 tar_config_set(store = store_path)
 
-# Source R functions for stickiness analysis
-source_path <- if (dir.exists("R")) "R" else "../R"
-source(file.path(source_path, "parcel_metrics.R"))
-source(file.path(source_path, "parcel_multichain.R"))
 
 # Load all data upfront
 norwood_data <- tar_read(norwood_data)
@@ -75,10 +71,11 @@ These maps show each parcel's potential contribution to zoning capacity under th
 
 # Load adopted district boundary for overlay
 # Path relative to project root (works whether quarto runs from root or reports/)
-data_path <- if (dir.exists("data")) "data" else "../data"
+
+#data_path <- if (dir.exists("data")) "data" else "../data"
 adopted <- sf::read_sf(
   file.path(
-    data_path,
+    "~/code/zoning_mcmc/data/",
     "mbta_district_shapefiles/Norwood/Norwood_MBTAcommDistricts_20240723.shp"
   )
 ) |>
@@ -86,13 +83,9 @@ adopted <- sf::read_sf(
   sf::st_transform(4326)
 
 # Load raw parcel data to get institutional use info
-devtools::load_all(
-  file.path(if (dir.exists("R")) ".." else "../..", "mbtazone"),
-  quiet = TRUE
-)
 raw_parcels <- load_municipality(
   shapefile = file.path(
-    data_path,
+    "~/code/zoning_mcmc/data/",
     "land_record_shapefiles/basic/220_NORWOOD_basic.zip"
   ),
   community_name = "Norwood",

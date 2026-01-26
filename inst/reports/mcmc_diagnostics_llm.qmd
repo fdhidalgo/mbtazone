@@ -15,14 +15,13 @@ library(knitr)
 library(coda)
 
 # Find targets store - works whether quarto runs from project root or reports/
-store_path <- if (dir.exists("_targets")) "_targets" else "../_targets"
+store_path <- if (dir.exists("_targets")) "_targets" else "../../_targets"
 tar_config_set(store = store_path)
 
-# Source R functions
-source_path <- if (dir.exists("R")) "R" else "../R"
-source(file.path(source_path, "config.R"))
-source(file.path(source_path, "parcel_metrics.R"))
-source(file.path(source_path, "parcel_multichain.R"))
+# Source config (functions loaded through package)
+library(mbtazone)
+source("../targets/temp_targets_config.R", local = TRUE)
+source("../targets/temp_targets_parcel_config.R", local = TRUE)
 
 # Load targets
 parcel_chain_results <- tar_read(all_parcel_chain_results)
@@ -744,9 +743,6 @@ kable(
 
 ```{r}
 #| label: region-diagnostics
-# Load parcel library module for region partitioning
-source(file.path(source_path, "parcel_library.R"))
-source(file.path(source_path, "bfs_utils.R"))
 
 pg <- parcel_graph_result$parcel_graph
 

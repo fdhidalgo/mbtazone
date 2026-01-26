@@ -30,6 +30,7 @@ compute_ess_parcel <- function(x, lag_max = 50) {
 #'
 #' @param parcel_samples List of parcel states
 #' @return Integer count
+#' @export
 count_unique_parcel_states <- function(parcel_samples) {
   state_keys <- vapply(parcel_samples, function(s) {
     digest::digest(sort(s$X), algo = "xxhash64")
@@ -219,6 +220,7 @@ compute_parcel_stickiness <- function(
 #'
 #' @param stickiness_dt data.table from compute_parcel_stickiness()
 #' @return list with always_in and rarely_in parcel IDs and counts
+#' @export
 get_sticky_parcels <- function(stickiness_dt) {
   list(
     always_in = stickiness_dt[stickiness == "always_in", parcel_id],
@@ -527,6 +529,7 @@ compute_multichain_parcel_metrics <- function(chain_results, parcel_graph) {
 #' @param high_threshold Fraction for "always in" (default 0.95)
 #' @param low_threshold Fraction for "rarely in" (default 0.05)
 #' @return data.table with parcel_id, inclusion_fraction, stickiness
+#' @export
 compute_multichain_stickiness <- function(
     chain_results,
     high_threshold = 0.95,
