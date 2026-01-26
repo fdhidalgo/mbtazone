@@ -85,8 +85,8 @@ list(
   tar_target(
     norwood_data,
     load_norwood_data(
-      data_root = "E:/dropbox/mbta_communities/code/zoning_mcmc/data",
-      row_path = "E:/dropbox/mbta_communities/code/zoning_mcmc/data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
+      data_root = "~/code/zoning_mcmc/data",
+      row_path = "~/code/zoning_mcmc/data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
       )
   ),
 
