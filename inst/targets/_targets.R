@@ -364,7 +364,7 @@ list(
     ),
     pattern = map(parcel_chain_grid),
     iteration = "list",
-    packages = c("data.table", "igraph", "purrr", "cli")
+    packages = c("data.table", "igraph", "purrr", "cli", "mbtazone")
   ),
 
   # Combine all parcel chain results into named list
