@@ -421,19 +421,21 @@ list(
   tar_target(
     parcel_rhat_plot_obj,
     plot_parcel_rhat_summary(parcel_rhat_table)
-  )#,
+  ),
 
   # ============================================================================
   # TIER 5: QUARTO REPORT
   # ============================================================================
 
-  #tar_quarto(
-  #  mcmc_diagnostics_report,
-  #  system.file("reports/mcmc_diagnostics.qmd")
-  #),
+  tar_quarto(
+    mcmc_diagnostics_report,
+    system.file("reports/mcmc_diagnostics.qmd", package = "mbtazone"),
+    quiet = FALSE
+  ),
 
-  #tar_quarto(
-  #  mcmc_diagnostics_llm_report,
-  #  system.file("reports/mcmc_diagnostics_llm.qmd")
-  #)
+  tar_quarto(
+    mcmc_diagnostics_llm_report,
+    system.file("reports/mcmc_diagnostics_llm.qmd", package = "mbtazone"),
+    quiet = FALSE
+  )
 )

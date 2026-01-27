@@ -23,6 +23,7 @@
 #'
 #' @param chain_values List of numeric vectors (one per chain)
 #' @return List with rhat, rhat_upper (97.5% CI), n_eff
+#' @export
 compute_gelman_rubin <- function(chain_values) {
   # Filter out NULL/empty/short chains
 

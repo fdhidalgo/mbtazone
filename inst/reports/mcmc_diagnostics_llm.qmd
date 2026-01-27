@@ -15,13 +15,14 @@ library(knitr)
 library(coda)
 
 # Find targets store - works whether quarto runs from project root or reports/
-store_path <- if (dir.exists("_targets")) "_targets" else "../../_targets"
+store_path <- if (dir.exists("./_targets")) "_targets" else "../../_targets"
 tar_config_set(store = store_path)
 
-# Source config (functions loaded through package)
+# Source functions through package
 library(mbtazone)
-source("../targets/temp_targets_config.R", local = TRUE)
-source("../targets/temp_targets_parcel_config.R", local = TRUE)
+
+# Temp: defining globals:
+CAPACITY_PRIOR_LAMBDA <- 0.005
 
 # Load targets
 parcel_chain_results <- tar_read(all_parcel_chain_results)
