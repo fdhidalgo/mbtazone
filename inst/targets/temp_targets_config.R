@@ -97,17 +97,3 @@ MCMC_STEPS_MACRO <- 5000L
 # Chains start from different regions and need time to reach stationary distribution
 # Set to 0 to disable burn-in
 MCMC_BURN_IN <- 1000L
-
-# Constraint names for rejection tracking
-CONSTRAINT_NAMES <- c(
-  "empty_plan",
-  "capacity_low",
-  "secondary_area",
-  "total_area",
-  "density",
-  "lcc_fraction",
-  "mh_reject",
-  "station_area_pct",
-  "station_capacity_pct",
-  "unknown"
-)
