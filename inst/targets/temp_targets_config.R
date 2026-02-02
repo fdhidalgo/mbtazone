@@ -10,12 +10,6 @@
 # Secondary component area threshold (acres)
 SECONDARY_AREA_THRESHOLD <- 5
 
-# System resource allocation
-DEFAULT_CREW_WORKERS <- max(
-  1L,
-  10L
-)
-
 # Right-of-way (ROW) parameters for adjacency graph
 ROW_PROXIMITY_THRESHOLD <- 180 # feet
 ROW_MIN_CROSSING_LENGTH <- 20 # feet

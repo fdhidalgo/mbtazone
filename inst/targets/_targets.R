@@ -49,6 +49,12 @@ library(mbtazone)
 source("inst/targets/temp_targets_config.R", local = TRUE)
 source("inst/targets/temp_targets_parcel_config.R", local = TRUE)
 
+# System resource allocation
+DEFAULT_CREW_WORKERS <- max(
+  1L,
+  10L
+)
+
 # Global options with crew controller for parallel execution
 tar_option_set(
   packages = c(
