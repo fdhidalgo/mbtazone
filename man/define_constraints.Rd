@@ -2,16 +2,16 @@
 % Please edit documentation in R/mcmc_config.R
 \name{define_constraints}
 \alias{define_constraints}
-\title{Define constraints from Norwood requirements}
+\title{Define constraints from district requirements}
 \usage{
-define_constraints(norwood_data)
+define_constraints(district_data)
 }
 \arguments{
-\item{norwood_data}{List containing norwood_requirements from data loading}
+\item{district_data}{List containing district_requirements from data loading}
 }
 \value{
 List of constraints for MCMC
 }
 \description{
-Define constraints from Norwood requirements
+Define constraints from district requirements
 }

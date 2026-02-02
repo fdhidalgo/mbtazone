@@ -9,13 +9,13 @@
 # CONSTRAINTS
 # ============================================================================
 
-#' Define constraints from Norwood requirements
+#' Define constraints from district requirements
 #'
-#' @param norwood_data List containing norwood_requirements from data loading
+#' @param district_data List containing district_requirements from data loading
 #' @return List of constraints for MCMC
 #' @export
-define_constraints <- function(norwood_data) {
-  req <- norwood_data$norwood_requirements
+define_constraints <- function(district_data) {
+  req <- district_data$district_requirements
   list(
     min_capacity = req$min_units,
     min_area = req$min_acres,
