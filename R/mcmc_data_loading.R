@@ -259,7 +259,27 @@ load_district_data <- function(
   )
 
   # Step 2: Load MBTA District Boundary
-  district_sf <- sf::st_read(paths$district, quiet = TRUE)
+  district_path = paths$district
+  # Handle zip files
+  if (tools::file_ext(district_path) == "zip") {
+    # Create unique temp directory for this extraction
+    temp_dir <- file.path(tempdir(), basename(tempfile()))
+    dir.create(temp_dir, showWarnings = FALSE)
+    utils::unzip(district_path, exdir = temp_dir)
+
+    # Find the .shp file in extracted contents
+    shp_files <- list.files(temp_dir, pattern = "\\.shp$", full.names = TRUE, recursive = TRUE)
+    if (length(shp_files) == 0) {
+      cli::cli_abort("No .shp file found in zip archive: {.file {district_path}}")
+    }
+    if (length(shp_files) > 1) {
+      cli::cli_warn("Multiple .shp files found, using: {.file {basename(shp_files[1])}}")
+    }
+
+    district_path <- shp_files[1]
+  }
+
+  district_sf <- sf::st_read(district_path, quiet = TRUE)
   if (
     is.na(sf::st_crs(district_sf)$epsg) ||
     sf::st_crs(district_sf)$epsg != 26986
