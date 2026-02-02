@@ -160,6 +160,7 @@ load_norwood_data <- function(
 #' @param district_name Name of district (e.g., "Norwood")
 #' @param data_root Path to data directory (default: "data")
 #' @return Named list with paths
+#' @export
 get_district_paths <- function(
     district_name,
     data_root = "data")

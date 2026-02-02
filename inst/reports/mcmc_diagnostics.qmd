@@ -72,7 +72,7 @@ These maps show each parcel's potential contribution to zoning capacity under th
 # Load adopted district boundary for overlay
 # Path relative to project root (works whether quarto runs from root or reports/)
 
-#data_path <- if (dir.exists("data")) "data" else "../data"
+#data_path <- if (dir.exists("data")) "data" else "../../data"
 adopted <- sf::read_sf(
   file.path(
     "~/code/zoning_mcmc/data/",

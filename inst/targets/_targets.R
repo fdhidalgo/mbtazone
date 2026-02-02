@@ -87,27 +87,37 @@ list(
   # ============================================================================
   # TIER 1: DATA PREPARATION
   # ============================================================================
+  tar_target(
+    district_paths,
+    get_district_paths(
+      district_name = "Norwood",
+      data_root = '../../data'
+    )
+  ),
 
   tar_target(
-    norwood_data,
-    load_norwood_data(
-      data_root = "~/code/zoning_mcmc/data",
-      row_path = "~/code/zoning_mcmc/data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
-      )
+    district_data,
+    load_district_data(
+      district_name = "Norwood",
+      parcels = district_paths$parcels,
+      district = district_paths$district,
+      excel_model = district_paths$excel_model,
+      right_of_way = "../../data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
+    )
   ),
 
   tar_target(
     adjacency_graph,
     build_adjacency_graph(
-      geometry_sf = norwood_data$norwood_geometry,
-      right_of_way_sf = norwood_data$norwood_right_of_way,
+      geometry_sf = district_data$district_geometry,
+      right_of_way_sf = district_data$district_right_of_way,
       row_proximity_ft = ROW_PROXIMITY_THRESHOLD
     )
   ),
 
   tar_target(
     constraints,
-    define_constraints(norwood_data)
+    define_constraints(district_data)
   ),
 
   # ============================================================================
