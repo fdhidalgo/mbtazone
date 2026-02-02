@@ -30,7 +30,7 @@ tar_config_set(store = store_path)
 
 
 # Load all data upfront
-norwood_data <- tar_read(norwood_data)
+district_data <- tar_read(district_data)
 parcel_graph_result <- tar_read(parcel_graph_result)
 discovered_lcc_library <- tar_read(discovered_lcc_library)
 discovered_secondary_library <- tar_read(discovered_secondary_library)
@@ -94,7 +94,7 @@ raw_parcels <- load_municipality(
 )
 
 # Prepare parcel data with capacity (simplify geometry to reduce file size)
-norwood_parcels <- norwood_data$norwood_geometry |>
+district_parcels <- district_data$district_geometry |>
   sf::st_simplify(dTolerance = 10) |> # Simplify before transform (10 ft tolerance)
   sf::st_transform(4326)
 
@@ -104,34 +104,34 @@ inst_lookup <- data.frame(
   is_institutional = raw_parcels$PublicInst > 0,
   use_desc = raw_parcels$UseDesc
 )
-norwood_parcels <- merge(
-  norwood_parcels,
+district_parcels <- merge(
+  district_parcels,
   inst_lookup,
   by = "LOC_ID",
   all.x = TRUE
 )
-norwood_parcels <- sf::st_as_sf(norwood_parcels)
-norwood_parcels$is_institutional[is.na(
-  norwood_parcels$is_institutional
+district_parcels <- sf::st_as_sf(district_parcels)
+district_parcels$is_institutional[is.na(
+  district_parcels$is_institutional
 )] <- FALSE
 
 # Create opacity column (0 for institutional, 0.8 for others)
-norwood_parcels$fill_opacity <- ifelse(norwood_parcels$is_institutional, 0, 0.8)
+district_parcels$fill_opacity <- ifelse(district_parcels$is_institutional, 0, 0.8)
 
 # Calculate density metrics
 TARGET_DENSITY <- 15
-norwood_parcels$raw_density <- norwood_parcels$capacity / norwood_parcels$area
-norwood_parcels$raw_density[
-  is.na(norwood_parcels$raw_density) |
-    is.infinite(norwood_parcels$raw_density)
+district_parcels$raw_density <- district_parcels$capacity / district_parcels$area
+district_parcels$raw_density[
+  is.na(district_parcels$raw_density) |
+    is.infinite(district_parcels$raw_density)
 ] <- 0
-norwood_parcels$density_contribution <- norwood_parcels$raw_density -
+district_parcels$density_contribution <- district_parcels$raw_density -
   TARGET_DENSITY
 
 # Pre-compute rounded values for tooltips
-norwood_parcels$raw_density_rounded <- round(norwood_parcels$raw_density, 1)
-norwood_parcels$density_contribution_rounded <- round(
-  norwood_parcels$density_contribution,
+district_parcels$raw_density_rounded <- round(district_parcels$raw_density, 1)
+district_parcels$density_contribution_rounded <- round(
+  district_parcels$density_contribution,
   1
 )
 ```
@@ -146,14 +146,14 @@ Parcels shaded by total housing units they can support. Zero-capacity parcels ar
 #| fig-width: 10
 
 # Filter to positive capacity for palette calculation
-positive_cap <- norwood_parcels[norwood_parcels$capacity > 0, ]
+positive_cap <- district_parcels[district_parcels$capacity > 0, ]
 
 # Cap color scale at 95th percentile to handle outliers
 cap_95 <- quantile(positive_cap$capacity, 0.95)
-norwood_parcels$capacity_capped <- pmin(norwood_parcels$capacity, cap_95)
+district_parcels$capacity_capped <- pmin(district_parcels$capacity, cap_95)
 
 # Create palette using capped values
-capped_data <- norwood_parcels[norwood_parcels$capacity_capped > 0, ]
+capped_data <- district_parcels[district_parcels$capacity_capped > 0, ]
 capacity_palette <- interpolate_palette(
   data = capped_data,
   column = "capacity_capped",
@@ -168,11 +168,11 @@ capacity_palette <- interpolate_palette(
 
 maplibre(
   style = carto_style("positron"),
-  bounds = norwood_parcels
+  bounds = district_parcels
 ) |>
   add_fill_layer(
     id = "capacity_fill",
-    source = norwood_parcels,
+    source = district_parcels,
     fill_color = capacity_palette$expression,
     fill_opacity = interpolate(
       column = "fill_opacity",
@@ -191,7 +191,7 @@ maplibre(
   ) |>
   add_line_layer(
     id = "parcel_outline",
-    source = norwood_parcels,
+    source = district_parcels,
     line_color = "#333333",
     line_width = 0.2,
     line_opacity = 0.5
@@ -229,7 +229,7 @@ The zone must meet a minimum density of 15 units/acre. This map shows how each p
 
 # Create diverging palette (red-white-blue) centered at 0
 density_palette <- interpolate_palette(
-  data = norwood_parcels,
+  data = district_parcels,
   column = "density_contribution",
   palette = colorRampPalette(c(
     "#b2182b",
@@ -243,11 +243,11 @@ density_palette <- interpolate_palette(
 
 maplibre(
   style = carto_style("positron"),
-  bounds = norwood_parcels
+  bounds = district_parcels
 ) |>
   add_fill_layer(
     id = "density_fill",
-    source = norwood_parcels,
+    source = district_parcels,
     fill_color = density_palette$expression,
     fill_opacity = interpolate(
       column = "fill_opacity",
@@ -269,7 +269,7 @@ maplibre(
   ) |>
   add_line_layer(
     id = "parcel_outline",
-    source = norwood_parcels,
+    source = district_parcels,
     line_color = "#333333",
     line_width = 0.2,
     line_opacity = 0.5
@@ -283,9 +283,9 @@ maplibre(
   add_legend(
     "Density vs 15 u/ac Target",
     values = c(
-      paste0(round(min(norwood_parcels$density_contribution)), " u/ac"),
+      paste0(round(min(district_parcels$density_contribution)), " u/ac"),
       "0 (at target)",
-      paste0("+", round(max(norwood_parcels$density_contribution)), " u/ac")
+      paste0("+", round(max(district_parcels$density_contribution)), " u/ac")
     ),
     colors = c("#b2182b", "#f7f7f7", "#2166ac")
   ) |>
@@ -392,7 +392,7 @@ if (n_disconnected > 0) {
   )
 
   # Merge with geometry (simplify to reduce file size)
-  parcel_geom <- sf::st_simplify(norwood_data$norwood_geometry, dTolerance = 10)
+  parcel_geom <- sf::st_simplify(district_data$district_geometry, dTolerance = 10)
   parcel_geom$parcel_id <- parcel_geom$LOC_ID
   plot_sf <- merge(
     parcel_geom,
@@ -518,7 +518,7 @@ parcel_stickiness <- merge(
 )
 
 # Merge with geometry (simplify to reduce file size)
-parcel_geom <- sf::st_simplify(norwood_data$norwood_geometry, dTolerance = 10)
+parcel_geom <- sf::st_simplify(district_data$district_geometry, dTolerance = 10)
 parcel_geom$parcel_id <- parcel_geom$LOC_ID
 plot_sf <- merge(
   parcel_geom,
@@ -673,7 +673,7 @@ expand_state_to_parcels <- function(state, sec_library, parcel_assign) {
 }
 
 # Build per-sample sf objects for mapgl visualization
-base_geom <- norwood_data$norwood_geometry |>
+base_geom <- district_data$district_geometry |>
   sf::st_simplify(dTolerance = 10) # Simplify to reduce file size
 
 sample_maps_data <- lapply(seq_along(sample_idx), function(i) {
@@ -1213,7 +1213,7 @@ endpoints[, chain_label := gsub("_", " ", chain)]
 endpoints[, chain_label := tools::toTitleCase(chain_label)]
 
 # Load parcel geometry for background (keep in State Plane CRS to match trajectories)
-parcel_bg <- sf::st_simplify(norwood_data$norwood_geometry, dTolerance = 10)
+parcel_bg <- sf::st_simplify(district_data$district_geometry, dTolerance = 10)
 
 # Static 4-panel ggplot
 ggplot(traj_df, aes(x = centroid_x, y = centroid_y)) +
