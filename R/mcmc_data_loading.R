@@ -170,12 +170,12 @@ get_district_paths <- function(
                                 pattern = paste0("^\\d{1,3}_", toupper(district_name), "_basic\\.zip$"),
                                 full.names = TRUE)
   if (length(parcels_matches) == 0) {
-    stop(paste0("No parcels data found for district ", district_name))
+    cli::cli_abort('No parcels data found for district {district_name}')
   }
   if (length(parcels_matches) > 1) {
-    stop(paste0("Multiple parcels data files found for district ", district_name))
+    cli::cli_warn('Multiple parcels data files found for district {district_name}.')
   }
-  message(paste0("Loading parcels data from ", parcels_matches[1]))
+  cli::cli_alert_info('Using parcels data: {parcels_matches[1]}')
   parcels <- parcels_matches[1]
 
   # district data
@@ -191,26 +191,26 @@ get_district_paths <- function(
   }
 
   if (length(district_matches) == 0) {
-    stop(paste0("No district data found for district ", district_name))
+    cli::cli_abort('No district data found for district {district_name}')
   }
   if (length(district_matches) > 1) {
-    stop(paste0("Multiple district data files found for district ", district_name))
+    cli::cli_warn('Multiple district data files found for district {district_name}.')
   }
-  message(paste0("Loading district data from ", district_matches[1]))
+  cli::cli_alert_info('Using district data: {district_matches[1]}')
   district <- district_matches[1]
 
   # district model
   excel_matches <- list.files(file.path(data_root, "mbta_district_models/", district_name),
-                              pattern = paste0("^", district_name, " - CM\\.xlsx$"),
+                              pattern = paste0("^", district_name, " - CM.*\\.xlsx$"),
                               full.names = TRUE)
 
   if (length(excel_matches) == 0) {
-    stop(paste0("No district model found for district ", district_name))
+    cli::cli_abort('No district model found for district {district_name}')
   }
   if (length(excel_matches) > 1) {
-    stop(paste0("Multiple district models found for district ", district_name))
+    cli::cli_warn('Multiple district models found for district {district_name}.')
   }
-  message(paste0("Loading district model from ", excel_matches[1]))
+  cli::cli_alert_info('Using district model: {excel_matches[1]}')
   excel_model <- excel_matches[1]
 
   # Return paths
