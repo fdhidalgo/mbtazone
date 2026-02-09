@@ -221,9 +221,9 @@ get_district_paths <- function(
   )
 }
 
-
 #' Load data for a single district
 #' @param district_name Name of district (e.g., "Norwood")
+#' @param district_type Community type, must be one of "rapid_transit", "commuter_rail", "adjacent" or "adjacent_small_town"
 #' @param parcels Path to parcel shapefile or zip file
 #' @param district Path to district shapefile
 #' @param excel_model Path to district model
@@ -238,6 +238,7 @@ get_district_paths <- function(
 #' @export
 load_district_data <- function(
     district_name,
+    district_type,
     parcels,
     district,
     excel_model,
@@ -299,7 +300,7 @@ load_district_data <- function(
   # Step 5: Load Requirements
   district_requirements <- get_community_requirements(
     community_name = district_name,
-    community_type = "commuter_rail"
+    community_type = district_type
   )
 
   # Step 6: Pre-compute Station Area Attributes

@@ -99,6 +99,7 @@ list(
     district_data,
     load_district_data(
       district_name = "Norwood",
+      district_type = "commuter_rail",
       parcels = district_paths$parcels,
       district = district_paths$district,
       excel_model = district_paths$excel_model,
