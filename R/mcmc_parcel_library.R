@@ -685,8 +685,8 @@ build_lcc_library <- function(parcel_graph,
 
     # Validate (no max_capacity - capacity prior handles preference)
     if (current_capacity < min_capacity) next
-    if (current_area < min_area) next
 
+    # no min area - density check prevents degenerate LCCs
     density <- current_capacity / current_area
     if (density < min_density) next
 
@@ -1482,7 +1482,7 @@ run_bfs_lcc_supplement <- function(
       # Validate against LCC constraints
       if (candidate_capacity < min_lcc_capacity) next
       if (candidate_capacity > max_target) next  # Discovery bound
-      if (candidate_area < min_area) next
+
       if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
 
       # Note: BFS guarantees connectivity by construction, no check needed
@@ -1605,7 +1605,6 @@ discover_lccs_by_capacity_bands <- function(
   min_capacity <- constraints$min_capacity
   min_lcc_fraction <- constraints$min_lcc_fraction %||% 0.5
   min_lcc_capacity <- min_capacity * min_lcc_fraction
-  min_area <- constraints$min_area
   min_density <- constraints$min_density
 
   # Convert relative bands to absolute capacity ranges
@@ -1709,9 +1708,6 @@ discover_lccs_by_capacity_bands <- function(
 
       # Validate capacity within band
       if (candidate_capacity < cap_low || candidate_capacity > cap_high) next
-
-      # Validate area
-      if (candidate_area < min_area) next
 
       # Validate density
       if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
@@ -1980,7 +1976,7 @@ run_bfs_secondary_supplement <- function(
 #' @param max_library_size Maximum number of LCCs to include (default 5000)
 #' @param bfs_reservation Slots to reserve for BFS-only discoveries (default 500)
 #' @return Block library structure matching build_lcc_library() output
-#' @export 
+#' @export
 build_lcc_library_from_tree_discovery <- function(discovered_lccs,
                                                    parcel_graph,
                                                    max_library_size = 5000,
@@ -2808,7 +2804,7 @@ partition_parcels_by_quadrant <- function(parcel_graph, n_regions = 4) {
 #'   - viable_components: data.table of viable components (NULL if quadrant fallback)
 #'   - selected_indices: which components were selected (NULL if quadrant fallback)
 #'   - n_regions: actual number of regions created
-#' @export 
+#' @export
 partition_parcels_by_station_feasibility <- function(parcel_graph, constraints, n_regions = 4) {
   # Find viable station components (returns NULL if station constraint not active)
   viable <- find_viable_station_components(parcel_graph, constraints)
