@@ -2,34 +2,42 @@
 % Please edit documentation in R/mcmc_spanning_tree.R
 \name{compute_subtree_aggregates}
 \alias{compute_subtree_aggregates}
-\title{Root a tree and compute subtree aggregates via BFS + bottom-up pass}
+\title{Compute subtree aggregates via BFS and bottom-up aggregation}
 \usage{
-compute_subtree_aggregates(tree, root, parcel_graph, forbidden_parcels)
+compute_subtree_aggregates(
+  tree,
+  root,
+  capacity_aligned,
+  area_aligned,
+  forbidden_mask
+)
 }
 \arguments{
 \item{tree}{igraph tree object}
 
 \item{root}{Integer vertex index to use as root}
 
-\item{parcel_graph}{Original parcel graph (for capacity/area attributes)}
+\item{capacity_aligned}{Numeric vector of capacities aligned to tree vertices}
 
-\item{forbidden_parcels}{Character vector of parcel IDs that cannot be in LCC}
+\item{area_aligned}{Numeric vector of areas aligned to tree vertices}
+
+\item{forbidden_mask}{Logical vector (TRUE if vertex is forbidden)}
 }
 \value{
 List with:
 \itemize{
 \item parent: integer vector of parent indices (root has parent = root)
-\item children: list of integer vectors (children of each vertex)
+\item bfs_order: integer vector of vertices in BFS order
 \item subtree_capacity: numeric vector of subtree capacities
 \item subtree_area: numeric vector of subtree areas
 \item subtree_forbidden_count: integer vector of forbidden parcels in each subtree
-\item bfs_order: integer vector of vertices in BFS order
 \item total_capacity: total capacity of all vertices
 \item total_area: total area of all vertices
 \item total_forbidden: total number of forbidden parcels
 }
 }
 \description{
-Computes capacity, area, and forbidden-zone membership for each subtree.
-Used to efficiently enumerate valid cuts.
+Roots a tree at the specified vertex and computes cumulative statistics
+(capacity, area, forbidden-zone membership) for each subtree. Uses igraph's
+C-level BFS for efficient traversal.
 }

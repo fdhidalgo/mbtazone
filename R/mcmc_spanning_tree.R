@@ -7,319 +7,31 @@
 # the same spanning tree, the proposal ratio is exactly 1.
 
 # ============================================================================
-# WILSON'S ALGORITHM FOR UNIFORM SPANNING TREES
-# ============================================================================
-
-#' Sample a uniform random spanning tree using Wilson's algorithm
-#'
-#' Uses loop-erased random walks to generate a spanning tree uniformly
-#' at random from the set of all spanning trees of the graph.
-#'
-#' @param graph igraph object (should be connected; disconnected vertices skipped)
-#' @return List with:
-#'   - tree: igraph tree object with connected vertices
-#'   - success: TRUE if spanning tree was built successfully
-#'   - n_in_tree: Number of vertices in tree
-#' @references Wilson, D.B. (1996). Generating random spanning trees
-#'   more quickly than the cover time.
-sample_uniform_spanning_tree <- function(graph) {
-  n <- igraph::vcount(graph)
-  if (n == 0) {
-    return(list(
-      tree = igraph::make_empty_graph(0),
-      success = TRUE,
-      n_in_tree = 0L
-    ))
-  }
-  if (n == 1) {
-    tree <- igraph::make_empty_graph(1) |>
-      igraph::set_vertex_attr("name", value = igraph::V(graph)$name)
-    return(list(tree = tree, success = TRUE, n_in_tree = 1L))
-  }
-
-  # Work with vertex indices (1-based)
-  # parent[v] = u means edge (v, u) is in tree; root has parent[root] = root
-
-  parent <- integer(n)
-  in_tree <- logical(n)
-
-  # Build adjacency list for fast neighbor lookup
-  adj_list <- lapply(seq_len(n), function(v) {
-    as.integer(igraph::neighbors(graph, v))
-  })
-
-  # Find first non-isolated vertex as root
-  root <- NA_integer_
-  for (v in seq_len(n)) {
-    if (length(adj_list[[v]]) > 0) {
-      root <- v
-      break
-    }
-  }
-
-  if (is.na(root)) {
-    # All vertices isolated - cannot build spanning tree
-    return(list(
-      tree = igraph::make_empty_graph(n),
-      success = FALSE,
-      n_in_tree = 0L
-    ))
-  }
-
-  in_tree[root] <- TRUE
-  parent[root] <- root
-
-  # Pre-allocate path array and position-in-path tracker for O(1) loop detection
-  path <- integer(n)
-  path_pos <- integer(n) # path_pos[v] = position of v in path (0 if not in path)
-  path_len <- 0L
-
-  # Count non-isolated vertices (vertices with at least one neighbor)
-  # For a connected graph, we must reach all of these
-  n_non_isolated <- sum(vapply(adj_list, function(x) length(x) > 0, logical(1)))
-
-  # Step limit: O(n * log(n)) for typical connected graphs
-  # This is generous enough for most graph structures while avoiding
-  # pathological cases that would take O(n²) steps
-  max_walk_steps <- as.integer(n * log(n + 1) * 10)
-
-  for (start in seq_len(n)) {
-    if (in_tree[start]) next
-    if (length(adj_list[[start]]) == 0) next # Skip isolated vertices
-
-    # Initialize path
-    path_len <- 1L
-    path[1L] <- start
-    path_pos[start] <- 1L
-    current <- start
-    walk_steps <- 0L
-
-    while (!in_tree[current]) {
-      neighbors <- adj_list[[current]]
-
-      if (length(neighbors) == 0) {
-        # Hit isolated vertex - clear path and break
-        break
-      }
-
-      walk_steps <- walk_steps + 1L
-      if (walk_steps > max_walk_steps) {
-        # Likely in a different connected component - skip this vertex
-        break
-      }
-
-      next_vertex <- neighbors[sample.int(length(neighbors), 1L)]
-
-      # O(1) loop detection using path_pos
-      if (path_pos[next_vertex] > 0L) {
-        # Loop detected: erase loop by resetting path_pos for erased vertices
-        loop_idx <- path_pos[next_vertex]
-        for (i in (loop_idx + 1L):path_len) {
-          path_pos[path[i]] <- 0L
-        }
-        path_len <- loop_idx
-        current <- next_vertex
-      } else if (in_tree[next_vertex]) {
-        # Reached tree - DON'T add to path, just record where we landed
-        current <- next_vertex
-        # Loop will exit on next iteration
-      } else {
-        # Extend path with non-tree vertex
-        path_len <- path_len + 1L
-        path[path_len] <- next_vertex
-        path_pos[next_vertex] <- path_len
-        current <- next_vertex
-      }
-    }
-
-    # Add loop-erased path to tree
-    # current is in tree; path[1:path_len] are NEW vertices to add
-    if (in_tree[current] && path_len > 0) {
-      for (i in seq_len(path_len)) {
-        v <- path[i]
-        if (i < path_len) {
-          u <- path[i + 1L]
-        } else {
-          # Last vertex in path connects to current (the tree vertex we landed on)
-          u <- current
-        }
-        parent[v] <- u
-        in_tree[v] <- TRUE
-        path_pos[v] <- 0L # Reset for next walk
-      }
-    }
-    # Reset path_pos for all vertices in current path
-    for (i in seq_len(path_len)) {
-      path_pos[path[i]] <- 0L
-    }
-    path_len <- 0L
-  }
-
-  # Convert parent array to edge list (vectorized)
-  tree_vertices <- which(in_tree & (seq_len(n) != root))
-  if (length(tree_vertices) > 0) {
-    edges <- as.integer(rbind(tree_vertices, parent[tree_vertices]))
-  } else {
-    edges <- integer(0)
-  }
-
-  # Build tree igraph
-  tree <- igraph::make_empty_graph(n, directed = FALSE)
-  igraph::V(tree)$name <- igraph::V(graph)$name
-  if (length(edges) > 0) {
-    tree <- igraph::add_edges(tree, edges)
-  }
-
-  n_in_tree <- sum(in_tree)
-
-  # Verify tree is complete: must have all non-isolated vertices
-  # If not, random walk likely hit step limit (disconnected component or pathological case)
-  if (n_in_tree < n_non_isolated) {
-    return(list(
-      tree = tree,
-      success = FALSE,
-      n_in_tree = n_in_tree,
-      n_expected = n_non_isolated,
-      reason = "incomplete_tree"
-    ))
-  }
-
-  list(
-    tree = tree,
-    success = TRUE,
-    n_in_tree = n_in_tree,
-    in_tree = in_tree,
-    root = root
-  )
-}
-
-
-# ============================================================================
 # SUBTREE AGGREGATES
 # ============================================================================
 
-#' Root a tree and compute subtree aggregates via BFS + bottom-up pass
+#' Compute subtree aggregates via BFS and bottom-up aggregation
 #'
-#' Computes capacity, area, and forbidden-zone membership for each subtree.
-#' Used to efficiently enumerate valid cuts.
-#'
-#' @param tree igraph tree object
-#' @param root Integer vertex index to use as root
-#' @param parcel_graph Original parcel graph (for capacity/area attributes)
-#' @param forbidden_parcels Character vector of parcel IDs that cannot be in LCC
-#' @return List with:
-#'   - parent: integer vector of parent indices (root has parent = root)
-#'   - children: list of integer vectors (children of each vertex)
-#'   - subtree_capacity: numeric vector of subtree capacities
-#'   - subtree_area: numeric vector of subtree areas
-#'   - subtree_forbidden_count: integer vector of forbidden parcels in each subtree
-#'   - bfs_order: integer vector of vertices in BFS order
-#'   - total_capacity: total capacity of all vertices
-#'   - total_area: total area of all vertices
-#'   - total_forbidden: total number of forbidden parcels
-compute_subtree_aggregates <- function(tree, root, parcel_graph, forbidden_parcels) {
-  n <- igraph::vcount(tree)
-  parcel_names <- igraph::V(parcel_graph)$name
-  tree_names <- igraph::V(tree)$name
-
-  # Get capacity and area from parcel_graph
-  capacity <- igraph::V(parcel_graph)$capacity
-  area <- igraph::V(parcel_graph)$area
-
-  # Map tree vertices to parcel_graph vertices
-  tree_to_parcel <- match(tree_names, parcel_names)
-
-  # Initialize arrays
-
-  parent <- integer(n)
-  parent[root] <- root
-  children <- vector("list", n)
-  for (i in seq_len(n)) children[[i]] <- integer(0)
-
-  subtree_capacity <- numeric(n)
-  subtree_area <- numeric(n)
-  subtree_forbidden_count <- integer(n)
-
-  # Build adjacency list for tree
-  tree_adj <- lapply(seq_len(n), function(v) {
-    as.integer(igraph::neighbors(tree, v))
-  })
-
-  # BFS to establish parent/children structure
-  visited <- logical(n)
-  visited[root] <- TRUE
-  queue <- root
-  bfs_order <- root
-
-  head <- 1L
-  while (head <= length(queue)) {
-    v <- queue[head]
-    head <- head + 1L
-
-    for (u in tree_adj[[v]]) {
-      if (!visited[u]) {
-        visited[u] <- TRUE
-        parent[u] <- v
-        children[[v]] <- c(children[[v]], u)
-        queue <- c(queue, u)
-        bfs_order <- c(bfs_order, u)
-      }
-    }
-  }
-
-  # Mark forbidden vertices with integer flag for counting
-  forbidden_set <- which(tree_names %in% forbidden_parcels)
-  is_forbidden <- integer(n)
-  is_forbidden[forbidden_set] <- 1L
-  total_forbidden <- length(forbidden_set)
-
-  # Bottom-up aggregation (reverse BFS order)
-  for (v in rev(bfs_order)) {
-    parcel_idx <- tree_to_parcel[v]
-
-    # Start with own values
-    subtree_capacity[v] <- capacity[parcel_idx]
-    subtree_area[v] <- area[parcel_idx]
-    subtree_forbidden_count[v] <- is_forbidden[v]
-
-    # Add children's values
-    for (child in children[[v]]) {
-      subtree_capacity[v] <- subtree_capacity[v] + subtree_capacity[child]
-      subtree_area[v] <- subtree_area[v] + subtree_area[child]
-      subtree_forbidden_count[v] <- subtree_forbidden_count[v] + subtree_forbidden_count[child]
-    }
-  }
-
-  list(
-    parent = parent,
-    children = children,
-    subtree_capacity = subtree_capacity,
-    subtree_area = subtree_area,
-    subtree_forbidden_count = subtree_forbidden_count,
-    bfs_order = bfs_order,
-    total_capacity = subtree_capacity[root],
-    total_area = subtree_area[root],
-    total_forbidden = total_forbidden
-  )
-}
-
-
-# ============================================================================
-# OPTIMIZED SUBTREE AGGREGATES (FAST VERSION)
-# ============================================================================
-
-#' Compute subtree aggregates using igraph C-level BFS (optimized)
-#'
-#' Faster version that uses igraph::bfs() and preallocated vectors.
-#' Accepts precomputed aligned vectors to avoid repeated match() calls.
+#' Roots a tree at the specified vertex and computes cumulative statistics
+#' (capacity, area, forbidden-zone membership) for each subtree. Uses igraph's
+#' C-level BFS for efficient traversal.
 #'
 #' @param tree igraph tree object
 #' @param root Integer vertex index to use as root
 #' @param capacity_aligned Numeric vector of capacities aligned to tree vertices
 #' @param area_aligned Numeric vector of areas aligned to tree vertices
 #' @param forbidden_mask Logical vector (TRUE if vertex is forbidden)
-#' @return List with aggregates and traversal metadata
-compute_subtree_aggregates_fast <- function(
+#' @return List with:
+#'   - parent: integer vector of parent indices (root has parent = root)
+#'   - bfs_order: integer vector of vertices in BFS order
+#'   - subtree_capacity: numeric vector of subtree capacities
+#'   - subtree_area: numeric vector of subtree areas
+#'   - subtree_forbidden_count: integer vector of forbidden parcels in each subtree
+#'   - total_capacity: total capacity of all vertices
+#'   - total_area: total area of all vertices
+#'   - total_forbidden: total number of forbidden parcels
+#'
+compute_subtree_aggregates <- function(
     tree,
     root,
     capacity_aligned,
@@ -423,18 +135,21 @@ compute_tree_dfs_metadata <- function(tree, root) {
   )
 }
 
+# ============================================================================
+# EXTRACT PARCEL SET FROM CUT
+# ============================================================================
 
-#' Extract parcel IDs using precomputed DFS metadata (O(k) instead of O(n))
+#' Extract parcel IDs for a cut using precomputed DFS metadata
 #'
-#' Uses DFS property: subtree vertices are contiguous in DFS order.
-#' This enables O(k) extraction via array slicing instead of O(n) BFS.
+#' Uses the DFS property that subtree vertices are contiguous in DFS order,
+#' enabling O(k) extraction via array slicing.
 #'
 #' @param tree_names Character vector of all vertex names
 #' @param cut_vertex Integer vertex defining the cut
 #' @param cut_side "subtree" or "complement"
 #' @param dfs_metadata Output from compute_tree_dfs_metadata()
 #' @return Character vector of parcel IDs
-extract_cut_parcels_fast <- function(tree_names, cut_vertex, cut_side, dfs_metadata) {
+extract_cut_parcels <- function(tree_names, cut_vertex, cut_side, dfs_metadata) {
   entry_pos <- dfs_metadata$entry[cut_vertex]
   size <- dfs_metadata$subtree_size[cut_vertex]
 
@@ -542,72 +257,6 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
 
   valid_cuts
 }
-
-
-# ============================================================================
-# EXTRACT PARCEL SET FROM CUT
-# ============================================================================
-
-#' Extract parcel IDs for a given cut specification
-#'
-#' @param tree igraph tree object
-#' @param cut_vertex Integer vertex defining the cut
-#' @param cut_side "subtree" or "complement"
-#' @param root Integer root vertex
-#' @return Character vector of parcel IDs
-extract_cut_parcels <- function(tree, cut_vertex, cut_side, root = 1L) {
-  tree_names <- igraph::V(tree)$name
-  n <- length(tree_names)
-
-  # Build parent array via BFS from root
-  parent <- integer(n)
-  parent[root] <- root
-  visited <- logical(n)
-  visited[root] <- TRUE
-  queue <- root
-
-  tree_adj <- lapply(seq_len(n), function(x) {
-    as.integer(igraph::neighbors(tree, x))
-  })
-
-  head <- 1L
-  while (head <= length(queue)) {
-    curr <- queue[head]
-    head <- head + 1L
-    for (neighbor in tree_adj[[curr]]) {
-      if (!visited[neighbor]) {
-        visited[neighbor] <- TRUE
-        parent[neighbor] <- curr
-        queue <- c(queue, neighbor)
-      }
-    }
-  }
-
-  # Get subtree of cut_vertex via BFS
-  subtree_vertices <- cut_vertex
-  sub_queue <- cut_vertex
-  sub_head <- 1L
-
-  while (sub_head <= length(sub_queue)) {
-    curr <- sub_queue[sub_head]
-    sub_head <- sub_head + 1L
-    for (neighbor in tree_adj[[curr]]) {
-      if (parent[neighbor] == curr) {
-        subtree_vertices <- c(subtree_vertices, neighbor)
-        sub_queue <- c(sub_queue, neighbor)
-      }
-    }
-  }
-
-  if (cut_side == "subtree") {
-    return(tree_names[subtree_vertices])
-  } else {
-    # complement
-    complement_vertices <- setdiff(seq_len(n), subtree_vertices)
-    return(tree_names[complement_vertices])
-  }
-}
-
 
 # ============================================================================
 # LCC DISCOVERY VIA SPANNING TREE ENUMERATION
@@ -837,7 +486,7 @@ discover_lccs_from_trees <- function(
       root <- sample.int(n_tree, 1L)
 
       # Compute subtree aggregates using fast BFS
-      aggregates <- compute_subtree_aggregates_fast(
+      aggregates <- compute_subtree_aggregates(
         tree = tree,
         root = root,
         capacity_aligned = capacity_aligned,
@@ -863,7 +512,7 @@ discover_lccs_from_trees <- function(
 
       # Extract parcels for each valid cut using O(k) array slicing
       for (cut in valid_cuts) {
-        lcc_parcels <- extract_cut_parcels_fast(
+        lcc_parcels <- extract_cut_parcels(
           tree_names = tree_names,
           cut_vertex = cut$vertex,
           cut_side = cut$side,
@@ -958,7 +607,7 @@ discover_lccs_from_trees <- function(
 #'
 #' @param tree igraph tree object
 #' @param root Integer root vertex
-#' @param aggregates Output from compute_subtree_aggregates_fast()
+#' @param aggregates Output from compute_subtree_aggregates()
 #' @param size_bands List of c(min_area, max_area) tuples in acres
 #' @param density_threshold Minimum density (units/acre) required
 #' @return List of valid cut specifications, each containing:
@@ -1237,7 +886,7 @@ discover_secondaries_from_trees <- function(
 
       root <- sample.int(n_tree, 1L)
 
-      aggregates <- compute_subtree_aggregates_fast(
+      aggregates <- compute_subtree_aggregates(
         tree = tree,
         root = root,
         capacity_aligned = capacity_aligned,
@@ -1261,7 +910,7 @@ discover_secondaries_from_trees <- function(
       dfs_metadata <- compute_tree_dfs_metadata(tree, root)
 
       for (cut in valid_cuts) {
-        sec_parcels <- extract_cut_parcels_fast(
+        sec_parcels <- extract_cut_parcels(
           tree_names = tree_names,
           cut_vertex = cut$vertex,
           cut_side = cut$side,

@@ -17,7 +17,7 @@ find_valid_secondary_cuts(
 
 \item{root}{Integer root vertex}
 
-\item{aggregates}{Output from compute_subtree_aggregates_fast()}
+\item{aggregates}{Output from compute_subtree_aggregates()}
 
 \item{size_bands}{List of c(min_area, max_area) tuples in acres}
 
