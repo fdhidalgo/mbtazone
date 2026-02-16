@@ -24,8 +24,8 @@ library(igraph)
 library(mapgl)
 library(mbtazone)
 
-# Find targets store - works whether quarto runs from project root or reports/
-store_path <- if (dir.exists("./_targets")) "_targets" else "../../_targets"
+# Find targets store
+store_path <- if (dir.exists("./ext/_targets")) "./ext/_targets" else "../../ext/_targets"
 tar_config_set(store = store_path)
 
 

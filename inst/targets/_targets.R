@@ -1,13 +1,14 @@
 # _targets.R - Parcel MCMC pipeline for zoning analysis
 #
 # This file defines the targets pipeline for parcel MCMC analysis
-# on the Norwood zoning data.
+# on zoning data.
 #
-# Usage:
-#   library(targets)
-#   targets::tar_make(script = "inst/targets/_targets.R") # Run the pipeline
-#   tar_visnetwork() # Visualize dependencies
-#   tar_read(parcel_metrics)  # Read a result
+# Run from package root with:
+#   targets::tar_make(script = "inst/targets/_targets.R", store = "ext/_targets")
+#   targets::tar_load(object_name, store = "ext/_targets")
+#   targets::tar_destroy(store = "ext/_targets")
+#
+# The store is kept in ext/_targets/ (excluded from package build via .Rbuildignore)
 #
 # The pipeline has the following structure:
 #
