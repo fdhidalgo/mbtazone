@@ -215,6 +215,7 @@ get_district_paths <- function(
 
   # Return paths
   list(
+    district_name = district_name,
     parcels = parcels,
     district = district,
     excel_model = excel_model

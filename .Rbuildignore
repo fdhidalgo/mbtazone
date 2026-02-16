@@ -4,3 +4,5 @@
 ^LICENSE\.md$
 ^tests/testthat/excel_reference$
 ^ext$
+^inst/reports/.*\.html$
+^inst/reports/.*\.md$
