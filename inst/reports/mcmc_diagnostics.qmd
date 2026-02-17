@@ -63,6 +63,7 @@ stats_dt <- parcel_metrics$stats
 
 This report presents diagnostic results for MCMC sampling of feasible zoning plans. The sampler explores parcel configurations satisfying statutory constraints.
 
+
 ### Parcel Zoning Potential
 
 These maps show each parcel's potential contribution to zoning capacity under the MBTA Communities Act. The capacity is calculated based on zoning parameters (FAR, height limits, parking requirements, etc.).
@@ -284,14 +285,45 @@ maplibre(
 
 ### Constraints
 
-| Constraint | Value | Description |
-|--------------------------|------------------|----------------------------|
-| Minimum capacity | 2,045 units | Total housing units the district must support |
-| Maximum capacity | \~3,068 units | Upper bound (150% of minimum) for exploration |
-| Minimum area | 50 acres | Total land area in the overlay district |
-| Minimum density | 15 units/acre | Gross density across the district |
-| LCC fraction | ≥50% | At least half of capacity in the largest connected component |
-| Secondary area | ≥5 acres | Any disconnected component must be at least 5 acres |
+### District Constraints
+
+```{r}
+#| label: district-constraints
+#| include: false
+
+# Print district constraints in a table with labels, value, description and District name in caption
+
+caption <- paste0(
+  "District Constraints for ",
+  district_paths$district_name
+)
+
+# Create a data table with constraint descriptions
+constraints_dt <- data.table::data.table(
+  Constraint = c("Minimum capacity", "Minimum area", "Minimum density", "LCC fraction", "Station Capacity %", "Station Area %"),
+  Value = constraints,
+  Description = c(
+    "Total housing units the district must support",
+    "Total land area in the overlay district",
+    "Gross density across the district",
+    "At least half of capacity in the largest connected component",
+    "Percentage of total capacity that must be within half mile radius of a station",
+    "Percentage of total area that must be within half mile radius of a station"
+  )
+)
+
+knitr::kable(
+  data.table::data.table(
+    Constraint = names(constraints),
+    Value = constraints_dt$Value,
+    Description = constraints_dt$Description
+  ),
+  caption = caption,
+  booktabs = TRUE,
+  escape = FALSE
+)
+
+```
 
 ### Glossary
 
