@@ -32,6 +32,7 @@ tar_config_set(store = store_path)
 # Load all data upfront
 district_paths <- tar_read(district_paths)
 district_data <- tar_read(district_data)
+adjacency_graph <- tar_read(adjacency_graph)
 parcel_graph_result <- tar_read(parcel_graph_result)
 discovered_lcc_library <- tar_read(discovered_lcc_library)
 discovered_secondary_library <- tar_read(discovered_secondary_library)
@@ -366,7 +367,87 @@ The parcel graph represents adjacency relationships between parcels.
 
 **Parcel capacity range:** `r scales::comma(min(pa$capacity))` – `r scales::comma(max(pa$capacity))` units
 
-### Disconnected Parcels
+### Parcel Connectivity
+
+The map below shows which parcels are connected to each other. A line between two parcels indicates they are considered adjacent.
+
+```{r}
+#| label: parcel-connectivity-map
+#| fig-height: 6
+#| fig-width: 10
+#| eval: false # large map mostly only needed for debugging, can be re-enabled to render the map
+
+# Build points from stored projected centroids, then reproject to WGS84
+parcel_centroids <- district_parcels |>
+  sf::st_drop_geometry() |>
+  dplyr::select(LOC_ID, centroid_x, centroid_y) |>
+  sf::st_as_sf(coords = c("centroid_x", "centroid_y"), crs = 26986) |>  # replace 26986 with your actual CRS
+  sf::st_transform(4326) |>
+  dplyr::mutate(
+    centroid_lon = sf::st_coordinates(geometry)[, 1],
+    centroid_lat = sf::st_coordinates(geometry)[, 2]
+  ) |>
+  sf::st_drop_geometry() |>
+  dplyr::select(LOC_ID, centroid_lon, centroid_lat)
+
+# Build a linestring for each edge connecting two adjacent parcel centroids
+edge_list <- igraph::as_edgelist(adjacency_graph)
+
+# Pre-index district_parcels by parcel_id for fast lookup
+parcels_indexed <- district_parcels |>
+  dplyr::select(LOC_ID, centroid_x, centroid_y) |>
+  sf::st_drop_geometry()
+
+edge_df <- data.frame(
+  id_from = edge_list[, 1],
+  id_to   = edge_list[, 2]
+) |>
+  dplyr::left_join(parcel_centroids, by = c("id_from" = "LOC_ID")) |>
+  dplyr::rename(x_from = centroid_lon, y_from = centroid_lat) |>
+  dplyr::left_join(parcel_centroids, by = c("id_to" = "LOC_ID")) |>
+  dplyr::rename(x_to = centroid_lon, y_to = centroid_lat) |>
+  tidyr::drop_na()
+
+edge_long <- edge_df |>
+  dplyr::mutate(linestring_id = dplyr::row_number()) |>
+  tidyr::pivot_longer(
+    cols = c(x_from, y_from, x_to, y_to),
+    names_to = c(".value", "point"),
+    names_pattern = "(x|y)_(from|to)"
+  ) |>
+  dplyr::arrange(linestring_id, point)
+
+adjacency_sf <- sfheaders::sf_linestring(
+  obj          = edge_long,
+  x            = "x",
+  y            = "y",
+  linestring_id = "linestring_id",
+  keep         = FALSE
+) |>
+  sf::st_set_crs(sf::st_crs(district_parcels))
+
+# --- Map ---
+maplibre(
+  style = carto_style("positron"),
+  bounds = district_parcels
+) |>
+  add_line_layer(
+    id = "parcel_outline",
+    source = district_parcels,
+    line_color = "#333333",
+    line_width = 0.2,
+    line_opacity = 0.5
+  ) |>
+  add_line_layer(
+    id = "parcel_connectivity",
+    source = adjacency_sf,
+    line_color = "#1b9e77",
+    line_width = 0.3,
+    line_opacity = 0.4
+  )
+
+
+```
 
 ```{r}
 #| label: connectivity-analysis
@@ -404,7 +485,7 @@ if (n_disconnected > 0) {
 
 **Graph components:** `r n_components` (largest has `r scales::comma(largest_component_size)` of `r scales::comma(igraph::vcount(pg))` parcel units)
 
-This map shows the disconnected parcels in red.
+If there are disconnected parcels, they are shown in red on the map below.
 ```{r}
 #| label: disconnected-map
 #| fig-height: 5
