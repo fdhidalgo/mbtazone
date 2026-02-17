@@ -91,15 +91,15 @@ list(
   tar_target(
     district_paths,
     get_district_paths(
-      district_name = "Norwood",
-      data_root = '../../data'
+      district_name = "Abington",
+      data_root = '/home/k.conyngham/data' # should be an absolute path not relative so that it can be called from the qmds
     )
   ),
 
   tar_target(
     district_data,
     load_district_data(
-      district_name = "Norwood",
+      district_name = "Abington",
       district_type = "commuter_rail",
       parcels = district_paths$parcels,
       district = district_paths$district,
@@ -341,7 +341,7 @@ list(
   # Run chains seeded from viable station components as the main MCMC result.
   # All chains share the discovered LCC library and are used for both sampling
   # and convergence diagnostics. Uses station-feasibility partitioning to guarantee
-  # each chain can satisfy the 90% station capacity constraint.
+  # each chain can satisfy the station capacity constraint.
 
   # Region partition for parcels (uses station-feasibility partitioning)
   tar_target(

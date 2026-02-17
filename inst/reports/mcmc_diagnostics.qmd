@@ -61,7 +61,7 @@ stats_dt <- parcel_metrics$stats
 
 ## Overview
 
-This report presents diagnostic results for MCMC sampling of feasible zoning plans for Norwood, MA. The sampler explores parcel configurations satisfying statutory constraints.
+This report presents diagnostic results for MCMC sampling of feasible zoning plans. The sampler explores parcel configurations satisfying statutory constraints.
 
 ### Parcel Zoning Potential
 
@@ -75,8 +75,7 @@ adopted <- district_data$district_boundary
 
 # Load raw parcel data to get institutional use info
 raw_parcels <- load_municipality(
-  shapefile = file.path(district_paths$parcels
-  ),
+  shapefile = file.path(district_paths$parcels),
   community_name = district_paths$district_name,
   projection = 26986,
   validate = TRUE
