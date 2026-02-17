@@ -57,6 +57,8 @@ diag <- first_valid_chain$diagnostics
 
 # Use aggregated stats from multi-chain metrics
 stats_dt <- parcel_metrics$stats
+
+#
 ```
 
 ## Overview
@@ -200,7 +202,14 @@ maplibre(
     colors = c("#f7fbff", "#084594")
   ) |>
   add_fullscreen_control(position = "top-left") |>
-  add_navigation_control()
+  add_navigation_control() |>
+  # Adding station areas as a transparent layer
+  add_fill_layer(
+    id = "station_areas",
+    source = district_data$transit_stations,
+    fill_color = "orange",
+    fill_opacity = 0.2
+  )
 ```
 
 #### Density Contribution vs Target
@@ -279,7 +288,14 @@ maplibre(
     colors = c("#b2182b", "#f7f7f7", "#2166ac")
   ) |>
   add_fullscreen_control(position = "top-left") |>
-  add_navigation_control()
+  add_navigation_control() |>
+  # Adding station areas as a transparent layer
+  add_fill_layer(
+    id = "station_areas",
+    source = district_data$transit_stations,
+    fill_color = "orange",
+    fill_opacity = 0.2
+  )
 ```
 
 
@@ -801,7 +817,14 @@ make_sample_map <- function(sample_data, bounds, all_parcels) {
       colors = c("#1b9e77", "#d95f02")
     ) |>
     add_fullscreen_control(position = "top-left") |>
-    add_navigation_control()
+    add_navigation_control()  |>
+    # Adding station areas as a transparent layer
+    add_fill_layer(
+      id = "station_areas",
+      source = district_data$transit_stations,
+      fill_color = "orange",
+      fill_opacity = 0.2
+    )
 }
 
 make_sample_map(sample_maps_data[[1]], base_geom_wgs84, base_geom_wgs84)

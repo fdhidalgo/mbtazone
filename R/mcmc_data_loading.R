@@ -224,6 +224,11 @@ load_district_data <- function(
   )
   district_right_of_way <- sf::st_make_valid(district_right_of_way)
 
+  district_station_areas <- sf::st_intersection(
+    transit_stations,
+    district_bbox_poly
+  )
+
   # Return all components
   list(
     district_parcels = district_parcels,
@@ -231,7 +236,7 @@ load_district_data <- function(
     district_right_of_way = district_right_of_way,
     zoning_params = zoning_params,
     district_requirements = district_requirements,
-    transit_stations = transit_stations,
+    transit_stations = district_station_areas,
     district_boundary = district_sf
   )
 }
