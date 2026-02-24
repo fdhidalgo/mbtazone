@@ -35,20 +35,21 @@
 library(targets)
 library(tarchetypes)
 library(crew)
-
-
-
-# Delete old worker logs
-if (dir.exists("worker_logs")) {
-  unlink("worker_logs", recursive = TRUE)
-}
-
-# As we are in a package we no longer source the functions with tar_source() here. Instead, we
-# load the package and then source only the config files.
 library(mbtazone)
 
+# Choosing district (Allows for automated calling of this script by setting these variables in environment)
+district_name <- Sys.getenv("DISTRICT_NAME", unset = "Newton")
+district_type <- Sys.getenv("DISTRICT_TYPE", unset = "rapid_transit")
+#One of: "rapid_transit", "commuter_rail", "adjacent", and "adjacent_small_town
+
+# Sourcing config files
 source("inst/targets/temp_targets_config.R", local = TRUE)
 source("inst/targets/temp_targets_parcel_config.R", local = TRUE)
+
+# Deleting old worker logs
+if (dir.exists("./ext/worker_logs")) {
+  unlink("worker_logs", recursive = TRUE)
+}
 
 # System resource allocation
 DEFAULT_CREW_WORKERS <- max(
@@ -78,7 +79,7 @@ tar_option_set(
     workers = DEFAULT_CREW_WORKERS, # Auto-detect cores, leave reserve for system
     seconds_idle = 60, # Shut down idle workers after 60s
     options_local = crew_options_local(
-      log_directory = "worker_logs" # Capture worker stdout/stderr for monitoring
+      log_directory = "./ext/worker_logs" # Capture worker stdout/stderr for monitoring
     )
   )
 )
@@ -91,7 +92,7 @@ list(
   tar_target(
     district_paths,
     get_district_paths(
-      district_name = "Abington",
+      district_name = district_name,
       data_root = '/home/k.conyngham/data' # should be an absolute path not relative so that it can be called from the qmds
     )
   ),
@@ -99,8 +100,8 @@ list(
   tar_target(
     district_data,
     load_district_data(
-      district_name = "Abington",
-      district_type = "commuter_rail",
+      district_name = district_name,
+      district_type = district_type,
       parcels = district_paths$parcels,
       district = district_paths$district,
       excel_model = district_paths$excel_model,
