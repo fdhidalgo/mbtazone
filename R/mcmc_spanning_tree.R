@@ -174,7 +174,7 @@ extract_cut_parcels <- function(tree_names, cut_vertex, cut_side, dfs_metadata) 
 #' Each non-root vertex v defines a potential cut: removing edge (v, parent[v])
 #' splits the tree into the subtree rooted at v and its complement.
 #' A cut is valid if the resulting component can serve as an LCC candidate
-#' (min_area, min_density, and capacity >= min_capacity * min_lcc_fraction).
+#' (density >= min_density, and capacity >= min_capacity * min_lcc_fraction).
 #' Note: LCC candidates need not be standalone-feasible; secondaries may
 #' supply capacity to reach min_capacity in the final plan.
 #'
@@ -205,7 +205,6 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
   # min_lcc_capacity = min_capacity * min_lcc_fraction (default 0.5)
   min_lcc_fraction <- constraints$min_lcc_fraction %||% 0.5
   min_lcc_capacity <- constraints$min_capacity * min_lcc_fraction
-  min_area <- constraints$min_area
   min_density <- constraints$min_density
 
   # Total forbidden count for computing complement forbidden
@@ -230,7 +229,6 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
     if (sub_forbidden_count == 0L &&
       sub_cap >= min_lcc_capacity &&
       (is.null(max_discovery_capacity) || sub_cap <= max_discovery_capacity) &&
-      sub_area >= min_area &&
       (sub_area <= 0 || sub_cap / sub_area >= min_density)) {
       valid_cuts[[length(valid_cuts) + 1L]] <- list(
         vertex = v,
@@ -244,7 +242,6 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
     if (comp_forbidden_count == 0L &&
       comp_cap >= min_lcc_capacity &&
       (is.null(max_discovery_capacity) || comp_cap <= max_discovery_capacity) &&
-      comp_area >= min_area &&
       (comp_area <= 0 || comp_cap / comp_area >= min_density)) {
       valid_cuts[[length(valid_cuts) + 1L]] <- list(
         vertex = v,
