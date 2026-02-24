@@ -9,6 +9,8 @@ execute:
   echo: false
   warning: false
   message: false
+params:
+  temp_store_path: "/ext/_targets_Norwood"
 ---
 
 ```{r}
@@ -25,7 +27,7 @@ library(mapgl)
 library(mbtazone)
 
 # Find targets store
-store_path <- if (dir.exists("./ext/_targets")) "./ext/_targets" else "../../ext/_targets"
+store_path <- if (dir.exists(params$temp_store_path)) params$temp_store_path else paste0("../../", params$temp_store_path)
 tar_config_set(store = store_path)
 
 

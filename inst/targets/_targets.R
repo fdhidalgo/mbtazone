@@ -3,10 +3,7 @@
 # This file defines the targets pipeline for parcel MCMC analysis
 # on zoning data.
 #
-# Run from package root with:
-#   targets::tar_make(script = "inst/targets/_targets.R", store = "ext/_targets")
-#   targets::tar_load(object_name, store = "ext/_targets")
-#   targets::tar_destroy(store = "ext/_targets")
+# Run from package root using the commands in run_single_district.R
 #
 # The store is kept in ext/_targets/ (excluded from package build via .Rbuildignore)
 #
@@ -38,9 +35,14 @@ library(crew)
 library(mbtazone)
 
 # Choosing district (Allows for automated calling of this script by setting these variables in environment)
-district_name <- Sys.getenv("DISTRICT_NAME", unset = "Newton")
-district_type <- Sys.getenv("DISTRICT_TYPE", unset = "rapid_transit")
+district_name <- Sys.getenv("DISTRICT_NAME", unset = "Norwood")
+district_type <- Sys.getenv("DISTRICT_TYPE", unset = "commuter_rail")
 #One of: "rapid_transit", "commuter_rail", "adjacent", and "adjacent_small_town
+
+store_path <- paste0("ext/_targets_", gsub(" ", "_", district_name))
+
+#Creating the directory for the reports output if it does not already exist.
+dir.create("ext/reports", recursive = TRUE, showWarnings = FALSE)
 
 # Sourcing config files
 source("inst/targets/temp_targets_config.R", local = TRUE)
@@ -448,13 +450,22 @@ list(
 
   tar_quarto(
     mcmc_diagnostics_report,
-    system.file("reports/mcmc_diagnostics.qmd", package = "mbtazone"),
-    quiet = FALSE
+    "inst/reports/mcmc_diagnostics.qmd",
+    quiet = FALSE,
+    execute_params = list(temp_store_path = store_path)
   ),
-
   tar_quarto(
     mcmc_diagnostics_llm_report,
-    system.file("reports/mcmc_diagnostics_llm.qmd", package = "mbtazone"),
-    quiet = FALSE
+    "inst/reports/mcmc_diagnostics_llm.qmd",
+    quiet = FALSE,
+    execute_params = list(temp_store_path = store_path)#
+  ),
+  tar_target(
+    mcmc_diagnostics_report_copy,
+    file.copy(
+      "inst/reports/mcmc_diagnostics.html",
+      paste0("ext/reports/", district_name, "_mcmc_diagnostics.html"),
+      overwrite = TRUE
+    )
   )
 )
