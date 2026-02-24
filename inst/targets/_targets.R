@@ -462,10 +462,13 @@ list(
   ),
   tar_target(
     mcmc_diagnostics_report_copy,
-    file.copy(
-      "inst/reports/mcmc_diagnostics.html",
-      paste0("ext/reports/", district_name, "_mcmc_diagnostics.html"),
-      overwrite = TRUE
-    )
+    {
+      mcmc_diagnostics_report  # declare dependency
+      file.copy(
+        "inst/reports/mcmc_diagnostics.html",
+        paste0("ext/reports/", district_name, "_mcmc_diagnostics.html"),
+        overwrite = TRUE
+      )
+    }
   )
 )
