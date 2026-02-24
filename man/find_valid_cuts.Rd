@@ -37,7 +37,7 @@ List of valid cut specifications, each containing:
 Each non-root vertex v defines a potential cut: removing edge (v, parent\link{v})
 splits the tree into the subtree rooted at v and its complement.
 A cut is valid if the resulting component can serve as an LCC candidate
-(min_area, min_density, and capacity >= min_capacity * min_lcc_fraction).
+(density >= min_density, and capacity >= min_capacity * min_lcc_fraction).
 Note: LCC candidates need not be standalone-feasible; secondaries may
 supply capacity to reach min_capacity in the final plan.
 }
