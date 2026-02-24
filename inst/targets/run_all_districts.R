@@ -52,3 +52,7 @@ cat("\n\n=== SUMMARY ===\n")
 print(summary_dt[, .(district_name, district_type, status)])
 cat(sprintf("\nSucceeded: %d / %d\n", sum(summary_dt$status == "success"), nrow(summary_dt)))
 cat(sprintf("Failed:    %d / %d\n", sum(summary_dt$status == "failed"), nrow(summary_dt)))
+
+# Make sure to run this after to prevent manual runs from defaulting to the last district you ran
+Sys.unsetenv("DISTRICT_NAME")
+Sys.unsetenv("DISTRICT_TYPE")
