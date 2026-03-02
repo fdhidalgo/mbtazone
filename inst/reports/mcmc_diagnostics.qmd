@@ -308,7 +308,6 @@ maplibre(
 
 ```{r}
 #| label: district-constraints
-#| include: false
 
 # Print district constraints in a table with labels, value, description and District name in caption
 
