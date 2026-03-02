@@ -9,7 +9,9 @@ compute_subtree_aggregates(
   root,
   capacity_aligned,
   area_aligned,
-  forbidden_mask
+  forbidden_mask,
+  capacity_in_station_aligned,
+  area_in_station_aligned
 )
 }
 \arguments{
