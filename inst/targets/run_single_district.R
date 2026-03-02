@@ -14,6 +14,10 @@ tar_make(
   store = store
 )
 
+# Make sure to run this after to prevent manual runs from defaulting to the last district you ran
+Sys.unsetenv("DISTRICT_NAME")
+Sys.unsetenv("DISTRICT_TYPE")
+
 #targets::tar_make(script = "inst/targets/_targets.R", store = store)
 #   targets::tar_load(object_name, store = store)
 #   targets::tar_destroy(store = store)
