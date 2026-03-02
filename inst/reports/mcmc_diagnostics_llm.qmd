@@ -605,7 +605,9 @@ kable(parcel_rhat_table, digits = 3)
 **Overlap Matrix:**
 
 ```{r}
-kable(round(parcel_separation$overlap_matrix, 3))
+if (!is.null(parcel_separation$overlap_matrix)){
+  kable(round(parcel_separation$overlap_matrix, 3))
+}
 ```
 
 ### Chain-Specific Statistics

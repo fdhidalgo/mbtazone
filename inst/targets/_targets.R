@@ -458,7 +458,7 @@ list(
     mcmc_diagnostics_llm_report,
     "inst/reports/mcmc_diagnostics_llm.qmd",
     quiet = FALSE,
-    execute_params = list(temp_store_path = store_path)#
+    execute_params = list(temp_store_path = store_path)
   ),
   tar_target(
     mcmc_diagnostics_report_copy,
