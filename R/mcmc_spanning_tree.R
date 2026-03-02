@@ -209,6 +209,9 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
   total_capacity <- aggregates$total_capacity
   total_area <- aggregates$total_area
 
+  total_capacity_in_station <- aggregates$total_capacity_in_station
+  total_area_in_station <- aggregates$total_area_in_station
+
   # Constraints
   # NOTE: For LCC discovery, we use min_lcc_capacity (not min_capacity) because
   # LCCs can have lower capacity when secondaries contribute to total capacity.
@@ -229,8 +232,11 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
   excess_station_cap_pct  <- max(0, constraints$station_capacity_pct - 50)
   excess_station_area_pct <- max(0, constraints$station_area_pct - 50)
 
-  station_cap_fraction  <- excess_station_cap_pct  / 100
-  station_area_fraction <- excess_station_area_pct / 100
+  station_cap_fraction  <- if (check_station_cap)  (constraints$station_capacity_pct - 50) / 100 else 0
+  station_area_fraction <- if (check_station_area) (constraints$station_area_pct     - 50) / 100 else 0
+
+  station_cap_min <- constraints$min_capacity * station_cap_fraction
+  station_area_min <- constraints$min_area * station_area_fraction
 
   # Total forbidden count for computing complement forbidden
   total_forbidden <- aggregates$total_forbidden
@@ -259,10 +265,8 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
         sub_cap >= min_lcc_capacity &&
         (is.null(max_discovery_capacity) || sub_cap <= max_discovery_capacity) &&
         (sub_area <= 0 || sub_cap / sub_area >= min_density) &&
-        # Station capacity: LCC must hold >= station_cap_fraction of its own capacity
-        (!check_station_cap  || sub_cap_in_station  >= station_cap_fraction  * sub_cap) &&
-        # Station area: LCC must hold >= station_area_fraction of its own area
-        (!check_station_area || sub_area_in_station >= station_area_fraction * sub_area)) {
+        (!check_station_cap  || sub_cap_in_station  >= station_cap_min) &&
+        (!check_station_area || sub_area_in_station >= station_area_min)) {
       valid_cuts[[length(valid_cuts) + 1L]] <- list(
         vertex   = v,
         side     = "subtree",
@@ -276,8 +280,8 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
         comp_cap >= min_lcc_capacity &&
         (is.null(max_discovery_capacity) || comp_cap <= max_discovery_capacity) &&
         (comp_area <= 0 || comp_cap / comp_area >= min_density) &&
-        (!check_station_cap  || comp_cap_in_station  >= station_cap_fraction  * comp_cap) &&
-        (!check_station_area || comp_area_in_station >= station_area_fraction * comp_area)) {
+        (!check_station_cap  || comp_cap_in_station  >= station_cap_min) &&
+        (!check_station_area || comp_area_in_station >= station_area_min)) {
       valid_cuts[[length(valid_cuts) + 1L]] <- list(
         vertex   = v,
         side     = "complement",
@@ -935,7 +939,9 @@ discover_secondaries_from_trees <- function(
         root = root,
         capacity_aligned = capacity_aligned,
         area_aligned = area_aligned,
-        forbidden_mask = forbidden_mask
+        forbidden_mask = forbidden_mask,
+        capacity_in_station_aligned = capacity_in_station_aligned,
+        area_in_station_aligned = area_in_station_aligned
       )
 
       valid_cuts <- find_valid_secondary_cuts(
