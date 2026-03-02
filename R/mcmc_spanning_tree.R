@@ -910,6 +910,9 @@ discover_secondaries_from_trees <- function(
     # No forbidden mask for secondaries
     forbidden_mask <- rep(FALSE, n_tree)
 
+    cap_in_station_attr  <- igraph::V(parcel_graph)$capacity_in_station
+    area_in_station_attr <- igraph::V(parcel_graph)$area_in_station
+
     capacity_in_station_aligned <- if (!is.null(cap_in_station_attr))
       cap_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
 
