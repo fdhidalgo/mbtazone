@@ -910,6 +910,12 @@ discover_secondaries_from_trees <- function(
     # No forbidden mask for secondaries
     forbidden_mask <- rep(FALSE, n_tree)
 
+    capacity_in_station_aligned <- if (!is.null(cap_in_station_attr))
+      cap_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
+
+    area_in_station_aligned <- if (!is.null(area_in_station_attr))
+      area_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
+
     # =========================================================================
     # SAMPLE TREES FOR THIS COMPONENT
     # =========================================================================
