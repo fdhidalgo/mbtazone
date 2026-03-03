@@ -1269,6 +1269,8 @@ discover_lccs_by_capacity_bands <- function(
       candidate_parcels <- result$block
       candidate_capacity <- result$metric_total
       candidate_area <- sum(area_lookup[candidate_parcels])
+      candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
+      candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
 
       # Reject if contains forbidden parcels
       if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) next
