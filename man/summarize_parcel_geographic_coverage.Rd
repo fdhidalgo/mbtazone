@@ -7,7 +7,7 @@
 summarize_parcel_geographic_coverage(
   chain_results,
   parcel_graph,
-  region_assignments
+  region_assignments = NULL
 )
 }
 \arguments{

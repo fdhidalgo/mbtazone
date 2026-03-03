@@ -167,17 +167,6 @@ list(
   # Tree enumeration finds ~100 valid cuts per tree, much faster than MCMC.
   # BFS supplement explores boundary perturbations to find multi-crossing LCCs.
 
-  # Compute station-feasibility regions for MCMC seeding
-  # Finds viable station components and selects maximally distant seeds
-  tar_target(
-    parcel_station_regions,
-    partition_parcels_by_station_feasibility(
-      parcel_graph_result$parcel_graph,
-      constraints,
-      n_regions = 4
-    )
-  ),
-
   # LCC Stage 1: Tree enumeration
   # Each tree yields multiple valid cuts; n_trees controls coverage
   # Fast: ~30s for 500 trees, finds ~5000 LCCs
@@ -346,21 +335,39 @@ list(
   # and convergence diagnostics. Uses station-feasibility partitioning to guarantee
   # each chain can satisfy the station capacity constraint.
 
-  # Region partition for parcels (uses station-feasibility partitioning)
+
   tar_target(
-    parcel_region_assignments,
-    parcel_station_regions$region_assignments
+    parcel_initial_states,
+    generate_initial_states_from_lccs(
+      lcc_library   = discovered_lcc_library,
+      libraries     = list(
+        secondary_library = discovered_secondary_library,
+        lcc_library       = discovered_lcc_library
+      ),
+      parcel_graph  = parcel_graph_result$parcel_graph,
+      constraints   = constraints,
+      n_chains      = 4L
+    )
+  ),
+
+  # Splits the list into branchable elements
+  tar_target(
+    parcel_initial_state,          # singular — one per branch
+    parcel_initial_states,
+    pattern = map(parcel_initial_states),
+    iteration = "list"
   ),
 
   # Configuration for parcel multi-chain analysis
   # Uses actual region IDs from station-feasibility partitioning
+  # Now derived from parcel_initial_states INSTEAD OF parcel_station_regions
   tar_target(
     parcel_multichain_config,
     define_parcel_multichain_configs(
       base_config = parcel_main_config,
-      n_chains = parcel_station_regions$n_regions,
-      n_steps = MCMC_STEPS_MACRO,
-      region_ids = names(parcel_station_regions$seed_pools)
+      n_chains    = length(parcel_initial_states),
+      n_steps     = MCMC_STEPS_MACRO,
+      region_ids  = paste0("chain_", seq_along(parcel_initial_states))
     )
   ),
 
@@ -374,18 +381,17 @@ list(
   tar_target(
     parcel_chain_results,
     run_parcel_chain_from_region(
-      config = parcel_multichain_config[[parcel_chain_grid$chain_id]],
+      config              = parcel_multichain_config[[parcel_chain_grid$chain_id]],
       parcel_graph_result = parcel_graph_result,
-      constraints = constraints,
-      secondary_library = discovered_secondary_library,
-      lcc_library = discovered_lcc_library,
-      region_assignments = parcel_region_assignments,
-      seed_pools = parcel_station_regions$seed_pools,
-      verbose = TRUE
+      constraints         = constraints,
+      secondary_library   = discovered_secondary_library,
+      lcc_library         = discovered_lcc_library,
+      initial_state       = parcel_initial_state,  # now a single state per branch
+      verbose             = TRUE
     ),
-    pattern = map(parcel_chain_grid),
+    pattern   = map(parcel_chain_grid, parcel_initial_state),
     iteration = "list",
-    packages = c("data.table", "igraph", "purrr", "cli", "mbtazone")
+    packages  = c("data.table", "igraph", "purrr", "cli", "mbtazone")
   ),
 
   # Combine all parcel chain results into named list
@@ -412,12 +418,13 @@ list(
     compute_parcel_multichain_rhat(all_parcel_chain_results)
   ),
 
+  # parcel_geographic_coverage — drop region_assignments argument
   tar_target(
     parcel_geographic_coverage,
     summarize_parcel_geographic_coverage(
       all_parcel_chain_results,
-      parcel_graph_result$parcel_graph,
-      parcel_region_assignments
+      parcel_graph_result$parcel_graph
+      # region_assignments omitted — defaults to NULL
     )
   ),
 
@@ -429,12 +436,13 @@ list(
     )
   ),
 
+  # parcel_irreducibility_report — drop region_assignments argument
   tar_target(
     parcel_irreducibility_report,
     create_parcel_irreducibility_report(
       all_parcel_chain_results,
-      parcel_graph_result$parcel_graph,
-      parcel_region_assignments
+      parcel_graph_result$parcel_graph
+      # region_assignments omitted — defaults to NULL
     )
   ),
 

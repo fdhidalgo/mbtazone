@@ -8,7 +8,7 @@ define_parcel_multichain_configs(
   base_config,
   n_chains = DEFAULT_N_CHAINS,
   n_steps = MCMC_STEPS_MACRO,
-  region_ids = c("R1", "R2", "R3", "R4")
+  region_ids = paste0("chain_", seq_len(n_chains))
 )
 }
 \arguments{
@@ -18,9 +18,8 @@ define_parcel_multichain_configs(
 
 \item{n_steps}{Number of MCMC steps per chain (default MCMC_STEPS_MACRO)}
 
-\item{region_ids}{Character vector of region identifiers. Use
-names(partition_parcels_by_station_feasibility(...)$seed_pools) to get regions.
-Default c("R1", "R2", "R3", "R4") assumes 4 viable station components.}
+\item{region_ids}{Character vector of region identifiers for labelling chains.
+Defaults to "chain_1", "chain_2", etc.}
 }
 \value{
 List of chain configurations with unique seeds and region assignments

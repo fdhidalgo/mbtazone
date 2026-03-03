@@ -90,7 +90,7 @@ get_dominant_region <- function(parcel_ids, region_assignments) {
 #' @param verbose Print progress messages (default TRUE)
 #' @return data.table of selected blocks
 select_blocks_by_coverage <- function(candidate_blocks, max_size, parcel_names,
-                                       verbose = TRUE) {
+                                      verbose = TRUE) {
   n_parcels <- length(parcel_names)
   n_candidates <- nrow(candidate_blocks)
 
@@ -217,9 +217,9 @@ select_blocks_by_coverage <- function(candidate_blocks, max_size, parcel_names,
 #' @param verbose Print progress messages (default TRUE)
 #' @return data.table of selected blocks from all bands
 select_blocks_by_coverage_per_band <- function(candidate_blocks, max_total,
-                                                parcel_names,
-                                                band_column = "size_band",
-                                                verbose = TRUE) {
+                                               parcel_names,
+                                               band_column = "size_band",
+                                               verbose = TRUE) {
   # Early return for empty input or zero quota
   if (nrow(candidate_blocks) == 0 || max_total <= 0) {
     return(candidate_blocks[0])
@@ -401,9 +401,9 @@ get_parcel_set_neighbors <- function(parcel_ids, parcel_graph, neighbor_cache = 
 #'   station_cap_min, station_area_min
 compute_station_lcc_thresholds <- function(constraints) {
   check_station_cap  <- !is.na(constraints$station_capacity_pct) &&
-                         constraints$station_capacity_pct > 50
+    constraints$station_capacity_pct > 50
   check_station_area <- !is.na(constraints$station_area_pct) &&
-                         constraints$station_area_pct > 50
+    constraints$station_area_pct > 50
 
   station_cap_fraction  <- if (check_station_cap)
     (constraints$station_capacity_pct - 50) / 100 else 0
@@ -1551,9 +1551,9 @@ run_bfs_secondary_supplement <- function(
 #' @return Block library structure matching build_lcc_library() output
 #' @export
 build_lcc_library_from_tree_discovery <- function(discovered_lccs,
-                                                   parcel_graph,
-                                                   max_library_size = 5000,
-                                                   bfs_reservation = 500) {
+                                                  parcel_graph,
+                                                  max_library_size = 5000,
+                                                  bfs_reservation = 500) {
   # Handle both list wrapper (from discover_lccs_from_trees/combine_discovered_lccs)
 
   # and direct data.table input
@@ -1579,7 +1579,8 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
         block_id = integer(0), area = numeric(0), capacity = integer(0),
         n_parcels = integer(0), size_band = character(0), density = numeric(0),
         source = character(0), spectral_region = character(0),
-        area_in_station = numeric(0), capacity_in_station = numeric(0)
+        area_in_station = numeric(0), capacity_in_station = numeric(0),
+        centroid_x = numeric(0), centroid_y = numeric(0)
       ),
       neighbor_indices = list(),
       n_blocks = 0L,
@@ -1737,6 +1738,15 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     sum(igraph::V(parcel_graph)[parcel_ids]$capacity_in_station)
   }, numeric(1))
 
+  # Compute centroids for max-min seed selection
+  centroid_x <- vapply(blocks, function(parcel_ids) {
+    mean(igraph::V(parcel_graph)[parcel_ids]$centroid_x)
+  }, numeric(1))
+
+  centroid_y <- vapply(blocks, function(parcel_ids) {
+    mean(igraph::V(parcel_graph)[parcel_ids]$centroid_y)
+  }, numeric(1))
+
   # Build metadata
   metadata <- data.table::data.table(
     block_id = seq_len(n_blocks),
@@ -1748,7 +1758,9 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     source = block_sources,
     spectral_region = spectral_regions,
     area_in_station = area_in_station,
-    capacity_in_station = capacity_in_station
+    capacity_in_station = capacity_in_station,
+    centroid_x = centroid_x,
+    centroid_y = centroid_y
   )
 
   # Store blocks as integer indices
@@ -2000,8 +2012,8 @@ build_secondary_library_from_discovery <- function(
 #' @param neighbor_cache Optional precomputed neighbor cache for speed
 #' @return List with updated lcc_library and added (logical)
 add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
-                                max_online = ONLINE_MAX_ENTRIES,
-                                neighbor_cache = NULL) {
+                               max_online = ONLINE_MAX_ENTRIES,
+                               neighbor_cache = NULL) {
   all_parcels <- lcc_library$parcel_names
   lcc_indices <- parcel_ids_to_indices(lcc_parcels, all_parcels)
 
@@ -2082,25 +2094,33 @@ add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
   # Update all structures
   lcc_library$blocks[[new_id]] <- sort(lcc_indices)
 
-  # Ensure legacy libraries have station columns before rbind
+  # Ensure legacy libraries have station columns and centroids before rbind
   if (!"area_in_station" %in% names(lcc_library$metadata)) {
     lcc_library$metadata[, area_in_station := NA_real_]
   }
   if (!"capacity_in_station" %in% names(lcc_library$metadata)) {
     lcc_library$metadata[, capacity_in_station := NA_real_]
   }
+  if (!"centroid_x" %in% names(lcc_library$metadata)) {
+    lcc_library$metadata[, centroid_x := NA_real_]
+  }
+  if (!"centroid_y" %in% names(lcc_library$metadata)) {
+    lcc_library$metadata[, centroid_y := NA_real_]
+  }
 
   lcc_library$metadata <- rbind(lcc_library$metadata, data.table::data.table(
-    block_id = new_id,
-    area = area,
-    capacity = as.integer(capacity),
-    n_parcels = length(lcc_indices),
-    size_band = "online",
-    density = capacity / area,
-    source = "online",
-    spectral_region = NA_character_,
-    area_in_station = area_in_station,
-    capacity_in_station = capacity_in_station
+    block_id            = new_id,
+    area                = area,
+    capacity            = as.integer(capacity),
+    n_parcels           = length(lcc_indices),
+    size_band           = "online",
+    density             = capacity / area,
+    source              = "online",
+    spectral_region     = NA_character_,
+    area_in_station     = area_in_station,
+    capacity_in_station = capacity_in_station,
+    centroid_x          = mean(igraph::V(parcel_graph)[lcc_parcels]$centroid_x, na.rm = TRUE),
+    centroid_y          = mean(igraph::V(parcel_graph)[lcc_parcels]$centroid_y, na.rm = TRUE)
   ))
   neighbors <- get_parcel_set_neighbors(lcc_parcels, parcel_graph, neighbor_cache)
   lcc_library$neighbor_indices[[new_id]] <- parcel_ids_to_indices(neighbors, all_parcels)
@@ -2230,47 +2250,234 @@ find_viable_station_components <- function(parcel_graph, constraints) {
   data.table::rbindlist(viable_list)
 }
 
-#' Select k maximally distant seed components using greedy max-min algorithm
+#' Select k maximally distant items using greedy max-min algorithm
 #'
-#' @param viable_components data.table from find_viable_station_components()
-#' @param k Number of seeds to select
-#' @return Integer vector of row indices in viable_components
-select_maxmin_distant_seeds <- function(viable_components, k) {
-  n <- nrow(viable_components)
-  if (k > n) k <- n
+#' Vectorized implementation using dist() — O(n^2) memory but avoids
+#' the O(n^2 * k) nested loop of the naive implementation.
+#'
+#' @param coords Numeric matrix with columns x, y (one row per candidate)
+#' @param k Number of items to select
+#' @return Integer vector of selected row indices
+select_maxmin_distant_seeds <- function(coords, k) {
+  n <- nrow(coords)
+  if (k >= n) return(seq_len(n))
 
-  # Compute pairwise distance matrix
-  dist_matrix <- matrix(0, n, n)
-  for (i in seq_len(n)) {
-    for (j in seq_len(n)) {
-      dist_matrix[i, j] <- sqrt(
-        (viable_components$centroid_x[i] - viable_components$centroid_x[j])^2 +
-        (viable_components$centroid_y[i] - viable_components$centroid_y[j])^2
+  # Compute full pairwise distance matrix once (vectorized)
+  dist_matrix <- as.matrix(dist(coords))
+
+  # Start with the most peripheral point (maximizes sum of distances to all others)
+  selected <- which.max(rowSums(dist_matrix))
+
+  # min_dist[i] = distance from i to its nearest selected point
+  min_dist <- dist_matrix[, selected]
+
+  for (iter in seq_len(k - 1)) {
+    # Pick the unselected point with the largest min-distance to selected set
+    min_dist[selected] <- -Inf
+    next_idx <- which.max(min_dist)
+    selected <- c(selected, next_idx)
+
+    # Incrementally update min_dist — only need new column
+    min_dist <- pmin(min_dist, dist_matrix[, next_idx])
+  }
+
+  selected
+}
+
+
+#' Select seed LCCs from library for MCMC chain initialisation
+#'
+#' Picks n_chains maximally distant LCCs from the library using centroid
+#' coordinates stored in library metadata. All LCCs in the library already
+#' satisfy station constraints by construction, so no further filtering
+#' is needed.
+#'
+#' @param lcc_library LCC library from build_lcc_library_from_tree_discovery()
+#' @param n_chains Number of chains (seeds) to select (default 4)
+#' @return Integer vector of block_ids (length <= n_chains)
+#' @export
+select_seed_lccs <- function(lcc_library, n_chains = 4L) {
+  meta <- lcc_library$metadata
+
+  # Filter to active, non-evicted blocks with valid centroids
+  active <- lcc_library$active_mask %||% rep(TRUE, nrow(meta))
+  valid_centroid <- !is.na(meta$centroid_x) & !is.na(meta$centroid_y)
+  candidates <- meta[active & valid_centroid]
+
+  n_available <- nrow(candidates)
+
+  if (n_available == 0) {
+    cli::cli_abort("LCC library has no blocks with valid centroids for seeding")
+  }
+
+  if (n_available <= n_chains) {
+    cli::cli_alert_warning(
+      "Only {n_available} LCCs available, requested {n_chains} chains — using all"
+    )
+    return(candidates$block_id)
+  }
+
+  cli::cli_alert_info(
+    "Selecting {n_chains} maximally distant seed LCCs from {n_available} candidates"
+  )
+
+  coords <- cbind(candidates$centroid_x, candidates$centroid_y)
+  selected_rows <- select_maxmin_distant_seeds(coords, k = n_chains)
+
+  selected_ids <- candidates$block_id[selected_rows]
+
+  # Log selected LCC summaries
+  for (i in seq_along(selected_ids)) {
+    bid <- selected_ids[i]
+    row <- candidates[block_id == bid]
+    cli::cli_alert_info(
+      "  Seed {i}: block_id={bid}, capacity={row$capacity}, area={round(row$area, 1)}, source={row$source}"
+    )
+  }
+
+  selected_ids
+}
+
+
+#' Generate initial MCMC states from library LCCs
+#'
+#' Replaces generate_initial_parcel_state_in_region(). Selects n_chains
+#' maximally distant LCCs from the library and uses each directly as the
+#' initial LCC state, then adds compatible secondary blocks.
+#'
+#' All constraint satisfaction (capacity, area, density, station proximity)
+#' is guaranteed by library construction — no BFS expansion needed.
+#'
+#' @param lcc_library LCC library from build_lcc_library_from_tree_discovery()
+#' @param libraries Full libraries list (needs secondary_library)
+#' @param parcel_graph igraph object
+#' @param constraints MBTA constraints list
+#' @param n_chains Number of chains to initialise (default 4)
+#' @return List of length n_chains, each an initialised parcel MCMC state
+#' @export
+generate_initial_states_from_lccs <- function(
+    lcc_library,
+    libraries,
+    parcel_graph,
+    constraints,
+    n_chains = 4L
+) {
+  cli::cli_h2("Generating Initial MCMC States from LCC Library")
+
+  # Hydrate before use
+  lcc_library                 <- hydrate_library(lcc_library)
+  libraries$lcc_library       <- lcc_library
+  libraries$secondary_library <- hydrate_library(libraries$secondary_library)
+
+  # Full station thresholds for pre-filtering candidates
+  required_station_cap  <- if (!is.null(constraints$station_capacity_pct) &&
+                               !is.na(constraints$station_capacity_pct))
+    (constraints$station_capacity_pct / 100) * constraints$min_capacity else 0
+  required_station_area <- if (!is.null(constraints$station_area_pct) &&
+                               !is.na(constraints$station_area_pct))
+    (constraints$station_area_pct / 100) * constraints$min_area else 0
+
+  check_station_cap  <- required_station_cap  > 0
+  check_station_area <- required_station_area > 0
+
+  # Filter library to station-valid candidates before max-min selection
+  meta           <- lcc_library$metadata
+  active         <- lcc_library$active_mask %||% rep(TRUE, nrow(meta))
+  valid_centroid <- !is.na(meta$centroid_x) & !is.na(meta$centroid_y)
+  station_valid  <- (!check_station_cap  | meta$capacity_in_station >= required_station_cap) &
+    (!check_station_area | meta$area_in_station     >= required_station_area)
+
+  candidates  <- meta[active & valid_centroid & station_valid]
+  n_available <- nrow(candidates)
+  n_total     <- sum(active & valid_centroid)
+
+  cli::cli_alert_info(
+    "{n_available} of {n_total} library LCCs satisfy full station thresholds for seeding"
+  )
+
+  if (n_available == 0) {
+    cli::cli_abort("No LCCs in library satisfy full station constraints for seeding")
+  }
+
+  # Max-min selection on filtered candidates
+  coords       <- cbind(candidates$centroid_x, candidates$centroid_y)
+  selected_rows <- select_maxmin_distant_seeds(coords, k = min(n_chains, n_available))
+  # Remaining candidates as ordered fallbacks (for post-secondary validation)
+  fallback_rows <- setdiff(seq_len(n_available), selected_rows)
+  ordered_ids   <- candidates$block_id[c(selected_rows, fallback_rows)]
+
+  all_parcels    <- lcc_library$parcel_names
+  initial_states <- vector("list", n_chains)
+  used_block_ids <- integer(0)
+
+  for (i in seq_len(n_chains)) {
+    success <- FALSE
+
+    for (bid in ordered_ids) {
+      if (bid %in% used_block_ids) next
+
+      lcc_indices <- lcc_library$blocks[[bid]]
+      lcc_parcels <- all_parcels[lcc_indices]
+
+      secondary_block_ids <- select_initial_secondary_blocks(
+        lcc_parcels  = lcc_parcels,
+        library      = libraries$secondary_library,
+        parcel_graph = parcel_graph,
+        constraints  = constraints
+      )
+
+      sec_parcels <- library_blocks_parcels(
+        libraries$secondary_library,
+        secondary_block_ids
+      )
+
+      state <- initialize_parcel_state(
+        parcel_ids          = c(lcc_parcels, sec_parcels),
+        secondary_block_ids = secondary_block_ids,
+        library             = libraries$secondary_library,
+        parcel_graph        = parcel_graph
+      )
+
+      # Use the runner's own feasibility check — single source of truth
+      feas <- check_parcel_feasibility(
+        state        = state,
+        library      = libraries$secondary_library,
+        parcel_graph = parcel_graph,
+        constraints  = constraints
+      )
+
+      if (!feas$feasible) {
+        if (!(bid %in% candidates$block_id[selected_rows[-seq_len(i-1)]])) {
+          # Only warn for fallbacks to avoid noise from expected misses
+        } else {
+          cli::cli_alert_warning(
+            "Chain {i}: preferred seed block_id={bid} fails '{feas$constraint_failed}' after secondaries, trying fallbacks..."
+          )
+        }
+        next
+      }
+
+      initial_states[[i]] <- state
+      used_block_ids       <- c(used_block_ids, bid)
+
+      lcc_cap <- sum(igraph::V(parcel_graph)[lcc_parcels]$capacity)
+      cli::cli_alert_success(
+        "  Chain {i}: block_id={bid}, {length(lcc_parcels)} LCC parcels (cap={lcc_cap}), {length(secondary_block_ids)} secondary blocks"
+      )
+
+      success <- TRUE
+      break
+    }
+
+    if (!success) {
+      cli::cli_abort(
+        "Chain {i}: no valid initial state found after trying all {length(ordered_ids)} station-valid LCCs"
       )
     }
   }
 
-  # Greedy max-min selection: start with most peripheral component
-  center_dist <- rowSums(dist_matrix)
-  selected <- which.max(center_dist)
-
-  for (iter in 2:k) {
-    best_idx <- NULL
-    best_min_dist <- -Inf
-
-    for (i in seq_len(n)) {
-      if (i %in% selected) next
-      min_dist_to_selected <- min(dist_matrix[i, selected])
-      if (min_dist_to_selected > best_min_dist) {
-        best_min_dist <- min_dist_to_selected
-        best_idx <- i
-      }
-    }
-    if (is.null(best_idx)) break
-    selected <- c(selected, best_idx)
-  }
-
-  selected
+  cli::cli_alert_success("Initialised {n_chains} chains")
+  initial_states
 }
 
 #' Partition parcels into quadrants for geographic diversity (fallback)
@@ -2398,7 +2605,8 @@ partition_parcels_by_station_feasibility <- function(parcel_graph, constraints, 
   cli::cli_alert_info("Found {nrow(viable)} viable station components")
 
   # Select maximally distant seeds
-  selected_idx <- select_maxmin_distant_seeds(viable, n_regions)
+  coords <- cbind(viable$centroid_x, viable$centroid_y)
+  selected_idx <- select_maxmin_distant_seeds(coords, k = n_regions)
   selected <- viable[selected_idx]
   cli::cli_alert_info("Selected {length(selected_idx)} maximally distant components")
 
@@ -2424,7 +2632,7 @@ partition_parcels_by_station_feasibility <- function(parcel_graph, constraints, 
   unassigned <- all_parcels[is.na(region_assignments)]
   for (p in unassigned) {
     dists <- sqrt((parcel_x[p] - selected$centroid_x)^2 +
-                  (parcel_y[p] - selected$centroid_y)^2)
+                    (parcel_y[p] - selected$centroid_y)^2)
     nearest_idx <- which.min(dists)
     if (length(nearest_idx) == 0 || is.na(nearest_idx)) {
       nearest_idx <- 1  # Fallback if distance calculation fails
@@ -2466,13 +2674,13 @@ partition_parcels_by_station_feasibility <- function(parcel_graph, constraints, 
 #' @param seed_with_secondaries If TRUE, add secondary blocks to enable smaller LCC exploration
 #' @return Parcel MCMC state
 generate_initial_parcel_state_in_region <- function(parcel_graph,
-                                                     constraints,
-                                                     libraries,
-                                                     region_assignments,
-                                                     target_region,
-                                                     seed_pool = NULL,
-                                                     max_restarts = 100,
-                                                     seed_with_secondaries = FALSE) {
+                                                    constraints,
+                                                    libraries,
+                                                    region_assignments,
+                                                    target_region,
+                                                    seed_pool = NULL,
+                                                    max_restarts = 100,
+                                                    seed_with_secondaries = FALSE) {
   # Use seed_pool if provided, otherwise fall back to region parcels
   region_parcels <- if (!is.null(seed_pool)) {
     seed_pool

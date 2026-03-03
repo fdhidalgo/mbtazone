@@ -10,8 +10,7 @@ run_parcel_chain_from_region(
   constraints,
   secondary_library,
   lcc_library,
-  region_assignments,
-  seed_pools = NULL,
+  initial_state,
   verbose = FALSE
 )
 }
@@ -26,14 +25,14 @@ run_parcel_chain_from_region(
 
 \item{lcc_library}{Discovered LCC library (shared across all chains)}
 
-\item{region_assignments}{Named vector from partition_parcels_by_station_feasibility()}
+\item{initial_state}{Pre-generated initial parcel state from
+generate_initial_states_from_lccs(). Replaces region-based BFS seeding.}
 
-\item{seed_pools}{Optional list of parcel ID vectors per region (from station partitioning).
-If provided, seeds BFS from viable station components to guarantee constraint satisfaction.}
+\item{region_assignments}{Ignored, kept for backward compatibility only.}
 }
 \value{
 List with parcel_samples, samples, stats, diagnostics, chain_id,
-region_id, initialization_failed, failure_reason
+initialization_failed, failure_reason
 }
 \description{
 Runs parcel MCMC from a region-seeded initial state using the shared

@@ -7,7 +7,7 @@
 create_parcel_irreducibility_report(
   chain_results,
   parcel_graph,
-  region_assignments
+  region_assignments = NULL
 )
 }
 \arguments{
