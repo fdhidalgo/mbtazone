@@ -391,6 +391,33 @@ get_parcel_set_neighbors <- function(parcel_ids, parcel_graph, neighbor_cache = 
   unique(setdiff(unlist(all_nbrs, use.names = FALSE), parcel_ids))
 }
 
+#' Compute station proximity floor thresholds from constraints
+#'
+#' Returns absolute minimums for capacity_in_station and area_in_station
+#' that an LCC must meet. Only binds when station_*_pct > 50%.
+#'
+#' @param constraints MBTA constraints list
+#' @return List with check_station_cap, check_station_area,
+#'   station_cap_min, station_area_min
+compute_station_lcc_thresholds <- function(constraints) {
+  check_station_cap  <- !is.na(constraints$station_capacity_pct) &&
+                         constraints$station_capacity_pct > 50
+  check_station_area <- !is.na(constraints$station_area_pct) &&
+                         constraints$station_area_pct > 50
+
+  station_cap_fraction  <- if (check_station_cap)
+    (constraints$station_capacity_pct - 50) / 100 else 0
+  station_area_fraction <- if (check_station_area)
+    (constraints$station_area_pct - 50) / 100 else 0
+
+  list(
+    check_station_cap  = check_station_cap,
+    check_station_area = check_station_area,
+    station_cap_min    = constraints$min_capacity * station_cap_fraction,
+    station_area_min   = constraints$min_area     * station_area_fraction
+  )
+}
+
 # ============================================================================
 # LCC LIBRARY FROM TREE DISCOVERY
 # ============================================================================
@@ -865,11 +892,19 @@ run_bfs_lcc_supplement <- function(
   min_area <- constraints$min_area
   min_density <- constraints$min_density
 
+  # Station thresholds
+  st <- compute_station_lcc_thresholds(constraints)
+
   # Precompute lookups
   capacity_lookup <- igraph::V(parcel_graph)$capacity
   area_lookup <- igraph::V(parcel_graph)$area
   names(capacity_lookup) <- all_parcels
   names(area_lookup) <- all_parcels
+
+  cap_in_station_lookup  <- igraph::V(parcel_graph)$capacity_in_station
+  area_in_station_lookup <- igraph::V(parcel_graph)$area_in_station
+  names(cap_in_station_lookup)  <- all_parcels
+  names(area_in_station_lookup) <- all_parcels
 
   if (verbose) {
     cli::cli_h2("BFS LCC Supplement")
@@ -993,6 +1028,8 @@ run_bfs_lcc_supplement <- function(
       candidate_parcels <- result$block
       candidate_capacity <- result$metric_total
       candidate_area <- sum(area_lookup[candidate_parcels])
+      candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
+      candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
 
       # Reject candidates containing forbidden parcels (belt-and-suspenders check)
       if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) next
@@ -1002,6 +1039,10 @@ run_bfs_lcc_supplement <- function(
       if (candidate_capacity > max_target) next  # Discovery bound
 
       if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
+
+      # Check station constraints
+      if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) next
+      if (st$check_station_area && candidate_area_in_station < st$station_area_min) next
 
       # Note: BFS guarantees connectivity by construction, no check needed
 
@@ -1125,6 +1166,9 @@ discover_lccs_by_capacity_bands <- function(
   min_lcc_capacity <- min_capacity * min_lcc_fraction
   min_density <- constraints$min_density
 
+  # Station thresholds
+  st <- compute_station_lcc_thresholds(constraints)
+
   # Convert relative bands to absolute capacity ranges
   bands <- lapply(capacity_bands_relative, function(mult) {
     c(max(min_lcc_capacity, mult[1] * min_capacity),
@@ -1149,6 +1193,11 @@ discover_lccs_by_capacity_bands <- function(
   area_lookup <- igraph::V(parcel_graph)$area
   names(capacity_lookup) <- all_parcels
   names(area_lookup) <- all_parcels
+  cap_in_station_lookup  <- igraph::V(parcel_graph)$capacity_in_station
+  area_in_station_lookup <- igraph::V(parcel_graph)$area_in_station
+  names(cap_in_station_lookup)  <- all_parcels
+  names(area_in_station_lookup) <- all_parcels
+
 
   if (verbose) {
     cli::cli_h2("Capacity-Stratified BFS LCC Discovery")
@@ -1229,6 +1278,10 @@ discover_lccs_by_capacity_bands <- function(
 
       # Validate density
       if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
+
+      # Check station constraints
+      if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) next
+      if (st$check_station_area && candidate_area_in_station < st$station_area_min) next
 
       # Note: BFS guarantees connectivity by construction, no check needed
 
