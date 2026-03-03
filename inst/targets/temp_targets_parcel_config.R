@@ -134,7 +134,8 @@ LCC_BAND_SAMPLES_PER_BAND <- 500L
 
 # Maximum BFS attempts per band before giving up
 # Higher than samples_per_band because many attempts fail validation
-LCC_BAND_MAX_ATTEMPTS <- 2000L
+LCC_BAND_MAX_ATTEMPTS <- 500L
+# Originally 2000, currently 500 as otherwise this step can take over half an hour.
 
 # ============================================================================
 # KERNEL PROBABILITIES
