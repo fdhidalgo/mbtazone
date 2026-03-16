@@ -174,11 +174,12 @@ list(
   tar_target(
     tree_discovered_lccs,
     discover_lccs_from_trees(
-      parcel_graph = parcel_graph_result$parcel_graph,
-      constraints = constraints,
-      n_trees = TREE_LCC_N_TREES,
-      forbidden_parcels = NULL,
-      verbose = TRUE
+      parcel_graph           = parcel_graph_result$parcel_graph,
+      constraints            = constraints,
+      n_trees                = TREE_LCC_N_TREES,
+      forbidden_parcels      = NULL,
+      max_discovery_capacity = constraints$min_capacity * DISCOVERY_CAPACITY_MULTIPLIER,
+      verbose                = TRUE
     )
   ),
 
@@ -485,8 +486,8 @@ list(
     {
       mcmc_diagnostics_llm_report  # declare dependency
       file.copy(
-        "inst/reports/mcmc_diagnostics_llm.html",
-        paste0("ext/llm_reports/", district_name, "_mcmc_diagnostics_llm.html"),
+        "inst/reports/mcmc_diagnostics_llm.md",
+        paste0("ext/llm_reports/", district_name, "_mcmc_diagnostics_llm.md"),
         overwrite = TRUE
       )
     }
