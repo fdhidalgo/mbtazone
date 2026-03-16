@@ -51,7 +51,7 @@ CAPACITY_PRIOR_LAMBDA <- 0.005
 # LCCs with capacity > min_capacity * DISCOVERY_CAPACITY_MULTIPLIER are skipped.
 # This is NOT a constraint - just efficiency optimization since high-capacity
 # LCCs are heavily penalized by the capacity prior anyway.
-DISCOVERY_CAPACITY_MULTIPLIER <- 3
+DISCOVERY_CAPACITY_MULTIPLIER <- 1.5
 
 # ============================================================================
 # K PRIOR CONFIGURATION (Prior on Number of Secondaries)
