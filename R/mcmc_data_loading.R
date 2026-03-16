@@ -6,15 +6,17 @@
 #' Helper function to get paths given a district name
 #'
 #' @param district_name Name of district (e.g., "Norwood")
+#' @param district_type Community type, must be one of "rapid_transit", "commuter_rail", "adjacent" or "adjacent_small_town"
 #' @param data_root Path to data directory (default: "data")
 #' @return Named list with paths
 #' @export
 get_district_paths <- function(
     district_name,
+    district_type,
     data_root = "data")
 {
   # parcels data
-  parcels_matches <- list.files(file.path(data_root, "land_record_shapefiles/basic/"),
+  parcels_matches <- list.files(file.path(data_root, "Municipality_Parcel_Data"),
                                 pattern = paste0("^\\d{1,3}_", toupper(district_name), "_basic\\.zip$"),
                                 full.names = TRUE)
   if (length(parcels_matches) == 0) {
@@ -48,7 +50,7 @@ get_district_paths <- function(
   district <- district_matches[1]
 
   # district model
-  excel_matches <- list.files(file.path(data_root, "mbta_district_models/", district_name),
+  excel_matches <- list.files(file.path(data_root, "mbta_district_models"),
                               pattern = paste0("^", district_name, " - CM.*\\.xlsx$"),
                               full.names = TRUE)
 
@@ -64,6 +66,7 @@ get_district_paths <- function(
   # Return paths
   list(
     district_name = district_name,
+    district_type = district_type,
     parcels = parcels,
     district = district,
     excel_model = excel_model
