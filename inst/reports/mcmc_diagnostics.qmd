@@ -304,11 +304,17 @@ maplibre(
 
 ### Constraints
 
+## Glossary
+
+| Term | Definition |
+|------------------------|-----------------------------------------------|
+| **LCC** | Largest Connected Component: the largest contiguous group of selected parcels |
+| **Secondary** | A connected component other than the LCC; must have area ≥5 acres |
+
 ### District Constraints
 
 ```{r}
 #| label: district-constraints
-#| include: false
 
 # Print district constraints in a table with labels, value, description and District name in caption
 
@@ -343,13 +349,6 @@ knitr::kable(
 )
 
 ```
-
-### Glossary
-
-| Term | Definition |
-|------------------------|-----------------------------------------------|
-| **LCC** | Largest Connected Component: the largest contiguous group of selected parcels |
-| **Secondary** | A connected component other than the LCC; must have area ≥5 acres |
 
 ## Parcel Graph Summary
 
