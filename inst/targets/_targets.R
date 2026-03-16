@@ -43,6 +43,7 @@ store_path <- paste0("ext/_targets_", gsub(" ", "_", district_name))
 
 #Creating the directory for the reports output if it does not already exist.
 dir.create("ext/reports", recursive = TRUE, showWarnings = FALSE)
+dir.create("ext/llm_reports", recursive = TRUE, showWarnings = FALSE)
 
 # Sourcing config files
 source("inst/targets/temp_targets_config.R", local = TRUE)
@@ -475,6 +476,17 @@ list(
       file.copy(
         "inst/reports/mcmc_diagnostics.html",
         paste0("ext/reports/", district_name, "_mcmc_diagnostics.html"),
+        overwrite = TRUE
+      )
+    }
+  ),
+  tar_target(
+    mcmc_diagnostics_llm_report_copy,
+    {
+      mcmc_diagnostics_llm_report  # declare dependency
+      file.copy(
+        "inst/reports/mcmc_diagnostics_llm.html",
+        paste0("ext/llm_reports/", district_name, "_mcmc_diagnostics_llm.html"),
         overwrite = TRUE
       )
     }
