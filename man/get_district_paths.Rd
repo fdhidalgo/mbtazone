@@ -4,10 +4,12 @@
 \alias{get_district_paths}
 \title{Helper function to get paths given a district name}
 \usage{
-get_district_paths(district_name, data_root = "data")
+get_district_paths(district_name, district_type, data_root = "data")
 }
 \arguments{
 \item{district_name}{Name of district (e.g., "Norwood")}
+
+\item{district_type}{Community type, must be one of "rapid_transit", "commuter_rail", "adjacent" or "adjacent_small_town"}
 
 \item{data_root}{Path to data directory (default: "data")}
 }
