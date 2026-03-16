@@ -96,6 +96,7 @@ list(
     district_paths,
     get_district_paths(
       district_name = district_name,
+      district_type = district_type,
       data_root = '/home/k.conyngham/new_data' # should be an absolute path not relative so that it can be called from the qmds
     )
   ),
