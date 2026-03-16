@@ -320,8 +320,12 @@ maplibre(
 
 caption <- paste0(
   "District Constraints for ",
-  district_paths$district_name
+  district_paths$district_name,
+  " - A ",
+  district_paths$district_type,
+  " district"
 )
+
 
 # Create a data table with constraint descriptions
 constraints_dt <- data.table::data.table(
