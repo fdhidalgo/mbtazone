@@ -233,12 +233,12 @@ list(
   ),
 
   # LCC Stage 4: Build LCC library from combined discoveries
-  # Uses coverage-aware selection to ensure geographic diversity
   tar_target(
     discovered_lcc_library,
     build_lcc_library_from_tree_discovery(
       combined_discovered_lccs$discovered_blocks,
       parcel_graph_result$parcel_graph,
+      constraints    = constraints,
       max_library_size = LCC_LIBRARY_MAX_SIZE,
       bfs_reservation = BFS_RESERVATION_LCC
     )

@@ -1542,21 +1542,39 @@ run_bfs_secondary_supplement <- function(
 #' Selection uses coverage-aware greedy algorithm that maximizes geographic
 #' coverage by favoring LCCs that cover under-represented parcels.
 #'
+#' When capacity-stratified discoveries are present, fixed band quotas are used
+#' instead of proportional allocation. This is necessary because tree discovery
+#' is biased toward high-capacity LCCs (cuts near the root of large trees tend
+#' to produce large subtrees). Fixed quotas ensure the library has enough
+#' low-capacity LCCs for good mixing near the posterior mode.
+#'
+#' Band definitions are relative to min_capacity from constraints:
+#'   band_1: < 0.75 * min_capacity  (below LCC minimum - rarely sampled)
+#'   band_2: 0.75x - 1.0x           (near-minimum LCCs, posterior favored)
+#'   band_3: 1.0x - 1.5x            (moderate capacity)
+#'   band_4: > 1.5x                  (high capacity)
+#'
 #' @param discovered_lccs data.table from discover_lccs_from_trees() or
 #'   combine_discovered_lccs(). Expected columns: lcc_key, parcel_ids (list),
 #'   capacity, area, tree_count, source (optional)
 #' @param parcel_graph igraph object
+#' @param constraints MBTA constraints list — must contain min_capacity
 #' @param max_library_size Maximum number of LCCs to include (default 5000)
 #' @param bfs_reservation Slots to reserve for BFS-only discoveries (default 500)
 #' @return Block library structure matching build_lcc_library() output
 #' @export
 build_lcc_library_from_tree_discovery <- function(discovered_lccs,
                                                   parcel_graph,
+                                                  constraints,
                                                   max_library_size = 5000,
                                                   bfs_reservation = 500) {
-  # Handle both list wrapper (from discover_lccs_from_trees/combine_discovered_lccs)
+  if (is.null(constraints) || is.null(constraints$min_capacity)) {
+    cli::cli_abort("constraints$min_capacity is required — something has gone seriously wrong")
+  }
 
-  # and direct data.table input
+  min_cap <- constraints$min_capacity
+
+  # Handle both list wrapper and direct data.table input
   if (is.list(discovered_lccs) && !data.table::is.data.table(discovered_lccs)) {
     if ("discovered_lccs" %in% names(discovered_lccs)) {
       discovered_lccs <- discovered_lccs$discovered_lccs
@@ -1564,6 +1582,7 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
   }
 
   cli::cli_alert_info("Building LCC library from {nrow(discovered_lccs)} discovered configurations")
+  cli::cli_alert_info("min_capacity: {min_cap}")
 
   all_parcels <- igraph::V(parcel_graph)$name
 
@@ -1590,57 +1609,41 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     ))
   }
 
-  # Check if we have source column (hybrid discovery) vs tree-only
-  has_source <- "source" %in% names(valid_lccs)
-
-  # Check if we have capacity-stratified discoveries
-  # If so, use capacity bands for selection to ensure balanced representation
+  has_source     <- "source" %in% names(valid_lccs)
   has_stratified <- has_source && any(grepl("stratified", valid_lccs$source))
 
   if (has_stratified) {
-    # Capacity-stratified library: use FIXED quotas to balance representation
-    # The key insight: proportional allocation gives 80% of slots to high-capacity
-    # LCCs because tree discovery is biased. We need fixed quotas to ensure the
-    # library has enough low-capacity LCCs for good mixing.
+    # Capacity-stratified library: use fixed quotas to balance representation.
+    # Proportional allocation would give most slots to high-capacity LCCs
+    # because tree discovery is biased toward them. Fixed quotas ensure the
+    # library covers the full capacity range the posterior explores.
     cli::cli_alert_info("Using capacity-stratified selection with fixed quotas")
 
-    # Estimate min_capacity from the data (use median of stratified discoveries)
-    strat_cap <- valid_lccs[grepl("stratified", source), capacity]
-    if (length(strat_cap) > 0) {
-      est_min_cap <- median(strat_cap) / 0.75  # Stratified is mostly 0.5-1.5*min_cap
-    } else {
-      cap_q10 <- quantile(valid_lccs$capacity, 0.10)
-      est_min_cap <- cap_q10 / 0.5
-    }
-    est_min_cap <- max(est_min_cap, 1500)
-
-    cli::cli_alert_info("Estimated min_capacity: {round(est_min_cap)}")
-
-    # Add capacity_band column
-    # Bands aligned with posterior preference under capacity prior
+    # Assign bands relative to actual min_capacity
     valid_lccs[, capacity_band := data.table::fcase(
-      capacity < 0.75 * est_min_cap, "band_1",  # 1023-1534
-      capacity < est_min_cap, "band_2",          # 1534-2045
-      capacity < 1.5 * est_min_cap, "band_3",    # 2045-3068
-      default = "band_4"                         # 3068+
+      capacity < 0.75 * min_cap, "band_1",
+      capacity < min_cap,        "band_2",
+      capacity < 1.5 * min_cap,  "band_3",
+      default =                  "band_4"
     )]
 
-    # Fixed quotas: weight heavily toward low-capacity bands
-    # These quotas ensure ~60% of library is in posterior-preferred range (bands 1-3)
+    # Fixed quotas weighted toward lower-capacity bands where the posterior
+    # has most mass (capacity prior penalises excess above min_capacity)
     band_quotas <- list(
-      band_1 = round(max_library_size * 0.20),  # 1000 slots for <1534
-      band_2 = round(max_library_size * 0.25),  # 1250 slots for 1534-2045
-      band_3 = round(max_library_size * 0.20),  # 1000 slots for 2045-3068
-      band_4 = max_library_size - round(max_library_size * 0.65)  # 1750 for 3068+
+      band_1 = round(max_library_size * 0.20),
+      band_2 = round(max_library_size * 0.25),
+      band_3 = round(max_library_size * 0.20),
+      band_4 = max_library_size - round(max_library_size * 0.65)
     )
 
-    cli::cli_alert_info("Fixed quotas: band_1={band_quotas$band_1}, band_2={band_quotas$band_2}, band_3={band_quotas$band_3}, band_4={band_quotas$band_4}")
+    cli::cli_alert_info(
+      "Band quotas: band_1={band_quotas$band_1}, band_2={band_quotas$band_2}, band_3={band_quotas$band_3}, band_4={band_quotas$band_4}"
+    )
 
-    # Select from each band using coverage-aware selection
     selected_list <- list()
     for (band_name in names(band_quotas)) {
-      quota <- band_quotas[[band_name]]
-      band_lccs <- valid_lccs[capacity_band == band_name]
+      quota      <- band_quotas[[band_name]]
+      band_lccs  <- valid_lccs[capacity_band == band_name]
       n_available <- nrow(band_lccs)
 
       if (n_available == 0) {
@@ -1652,60 +1655,52 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
       band_selected <- select_blocks_by_coverage(
         band_lccs, actual_quota, all_parcels, verbose = FALSE
       )
-
       selected_list[[band_name]] <- band_selected
-      cli::cli_alert_info("  {band_name}: {nrow(band_selected)}/{n_available} available (quota: {quota})")
+      cli::cli_alert_info(
+        "  {band_name} (<{round(c(0.75, 1.0, 1.5, Inf)[match(band_name, names(band_quotas))] * min_cap)} cap): {nrow(band_selected)}/{n_available} selected (quota: {quota})"
+      )
     }
 
     selected <- data.table::rbindlist(selected_list, fill = TRUE)
 
-    # Log final distribution
-    cli::cli_alert_success("Library capacity distribution:")
     band_counts <- table(selected$capacity_band)
-    for (band_name in names(band_counts)) {
-      cli::cli_alert_info("  {band_name}: {band_counts[[band_name]]} LCCs")
+    cli::cli_alert_success("Final library capacity distribution:")
+    for (b in names(band_counts)) {
+      cli::cli_alert_info("  {b}: {band_counts[[b]]} LCCs")
     }
 
   } else if (has_source) {
-    # Legacy hybrid discovery: reserve slots for BFS-only LCCs (supplement discoveries)
-    # Note: "bfs" replaced "mcmc" as the supplement source after refactoring
-    tree_lccs <- valid_lccs[source %in% c("tree", "both", "tree+bfs", "tree+stratified", "tree+both")]
+    # Hybrid discovery (tree + BFS): reserve slots for BFS-only LCCs.
+    # BFS discoveries find multi-crossing LCCs that tree enumeration misses.
+    # Without reservation they would be crowded out by the larger tree set.
+    tree_lccs    <- valid_lccs[source %in% c("tree", "both", "tree+bfs",
+                                             "tree+stratified", "tree+both")]
     bfs_only_lccs <- valid_lccs[source == "bfs"]
 
     n_tree <- nrow(tree_lccs)
-    n_bfs <- nrow(bfs_only_lccs)
+    n_bfs  <- nrow(bfs_only_lccs)
 
-    # Calculate slot allocation with safeguards
-    # Cap reservation at max_library_size to prevent negative tree_slots
     safe_reservation <- min(bfs_reservation, max_library_size, n_bfs)
-    tree_slots <- max_library_size - safe_reservation
+    tree_slots       <- max_library_size - safe_reservation
 
-    # Select tree LCCs using coverage-aware selection
-    if (n_tree > 0) {
-      tree_selected <- select_blocks_by_coverage(
-        tree_lccs, tree_slots, all_parcels, verbose = TRUE
-      )
+    tree_selected <- if (n_tree > 0) {
+      select_blocks_by_coverage(tree_lccs, tree_slots, all_parcels, verbose = TRUE)
     } else {
-      tree_selected <- tree_lccs[0]  # Empty data.table with same columns
+      tree_lccs[0]
     }
 
-    # Calculate actual tree slots used
-    tree_slots_used <- nrow(tree_selected)
-
-    # BFS gets: reserved slots + any unused tree slots (backfill)
-    bfs_slots_available <- max(0L, max_library_size - tree_slots_used)
-    if (n_bfs > 0 && bfs_slots_available > 0) {
-      bfs_selected <- bfs_only_lccs[seq_len(min(n_bfs, bfs_slots_available))]
+    bfs_slots_available <- max(0L, max_library_size - nrow(tree_selected))
+    bfs_selected <- if (n_bfs > 0 && bfs_slots_available > 0) {
+      bfs_only_lccs[seq_len(min(n_bfs, bfs_slots_available))]
     } else {
-      bfs_selected <- bfs_only_lccs[0]
+      bfs_only_lccs[0]
     }
 
-    # Combine selections
     selected <- data.table::rbindlist(list(tree_selected, bfs_selected), fill = TRUE)
-
     cli::cli_alert_info(
       "Library allocation: {nrow(tree_selected)} tree slots, {nrow(bfs_selected)} BFS slots"
     )
+
   } else {
     # Tree-only discovery: use coverage-aware selection
     selected <- select_blocks_by_coverage(
@@ -1714,97 +1709,77 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
   }
 
   n_blocks <- nrow(selected)
-  cli::cli_alert_info("Processing {n_blocks} LCCs (capped from {nrow(valid_lccs)} valid)")
+  cli::cli_alert_info("Processing {n_blocks} LCCs (from {nrow(valid_lccs)} valid)")
 
-  # Build blocks list
-  blocks <- selected$parcel_ids
+  blocks        <- selected$parcel_ids
+  block_sources <- if (has_source && "source" %in% names(selected))
+    selected$source else rep("tree_discovered", n_blocks)
+  spectral_regions <- rep(NA_character_, n_blocks)
 
-  # Determine source for each block (preserve original if available)
-  if (has_source && "source" %in% names(selected)) {
-    block_sources <- selected$source
-  } else {
-    block_sources <- rep("tree_discovered", n_blocks)
-  }
+  # Compute station metrics for station constraint pre-filtering in replace-LCC
+  area_in_station <- vapply(blocks, function(pids)
+    sum(igraph::V(parcel_graph)[pids]$area_in_station), numeric(1))
+  capacity_in_station <- vapply(blocks, function(pids)
+    sum(igraph::V(parcel_graph)[pids]$capacity_in_station), numeric(1))
 
-  # Region metadata (kept for backward compatibility with library structure)
-  spectral_regions <- rep(NA_character_, length(blocks))
+  # Compute centroids for max-min seed selection in chain initialisation
+  centroid_x <- vapply(blocks, function(pids)
+    mean(igraph::V(parcel_graph)[pids]$centroid_x), numeric(1))
+  centroid_y <- vapply(blocks, function(pids)
+    mean(igraph::V(parcel_graph)[pids]$centroid_y), numeric(1))
 
-  # Compute station metrics for each LCC (for station constraint pre-filtering)
-  area_in_station <- vapply(blocks, function(parcel_ids) {
-    sum(igraph::V(parcel_graph)[parcel_ids]$area_in_station)
-  }, numeric(1))
-
-  capacity_in_station <- vapply(blocks, function(parcel_ids) {
-    sum(igraph::V(parcel_graph)[parcel_ids]$capacity_in_station)
-  }, numeric(1))
-
-  # Compute centroids for max-min seed selection
-  centroid_x <- vapply(blocks, function(parcel_ids) {
-    mean(igraph::V(parcel_graph)[parcel_ids]$centroid_x)
-  }, numeric(1))
-
-  centroid_y <- vapply(blocks, function(parcel_ids) {
-    mean(igraph::V(parcel_graph)[parcel_ids]$centroid_y)
-  }, numeric(1))
-
-  # Build metadata
   metadata <- data.table::data.table(
-    block_id = seq_len(n_blocks),
-    area = selected$area,
-    capacity = selected$capacity,
-    n_parcels = vapply(blocks, length, integer(1)),
-    size_band = "tree_discovered",
-    density = selected$capacity / selected$area,
-    source = block_sources,
-    spectral_region = spectral_regions,
-    area_in_station = area_in_station,
+    block_id            = seq_len(n_blocks),
+    area                = selected$area,
+    capacity            = selected$capacity,
+    n_parcels           = vapply(blocks, length, integer(1)),
+    size_band           = "tree_discovered",
+    density             = selected$capacity / selected$area,
+    source              = block_sources,
+    spectral_region     = spectral_regions,
+    area_in_station     = area_in_station,
     capacity_in_station = capacity_in_station,
-    centroid_x = centroid_x,
-    centroid_y = centroid_y
+    centroid_x          = centroid_x,
+    centroid_y          = centroid_y
   )
 
-  # Store blocks as integer indices
+  # Store blocks as integer indices into parcel_names
   blocks <- lapply(blocks, parcel_ids_to_indices, parcel_names = all_parcels)
 
-  # Build neighbor indices with precomputed cache
   cli::cli_alert_info("Building neighbor indices ({n_blocks} blocks)...")
-
-  # Precompute neighbor cache once
   cli::cli_alert_info("  Precomputing neighbor cache ({length(all_parcels)} parcels)...")
   neighbor_cache <- setNames(
     lapply(all_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
     all_parcels
   )
 
-  # Build neighbor indices sequentially (with cached lookups)
   cli::cli_alert_info("  Building neighbor indices with cached neighbors...")
   neighbor_indices <- vector("list", n_blocks)
   for (i in seq_len(n_blocks)) {
-    neighbors <- get_parcel_set_neighbors(all_parcels[blocks[[i]]],
-                                          parcel_graph,
-                                          neighbor_cache = neighbor_cache)
+    neighbors <- get_parcel_set_neighbors(
+      all_parcels[blocks[[i]]], parcel_graph, neighbor_cache = neighbor_cache
+    )
     neighbor_indices[[i]] <- parcel_ids_to_indices(neighbors, all_parcels)
-
     if (i %% 2000 == 0 || i == n_blocks) {
-      cli::cli_alert_info("    Progress: {i}/{n_blocks} ({round(100 * i / n_blocks)}%)")
+      cli::cli_alert_info("    Progress: {i}/{n_blocks} ({round(100*i/n_blocks)}%)")
     }
   }
 
   cli::cli_alert_success(
-    "Tree-discovered LCC library: {n_blocks} candidates (from {sum(selected$tree_count)} total tree hits)"
+    "LCC library: {n_blocks} blocks (from {sum(selected$tree_count)} total tree hits)"
   )
 
   list(
-    blocks = blocks,
-    metadata = metadata,
+    blocks           = blocks,
+    metadata         = metadata,
     neighbor_indices = neighbor_indices,
-    n_blocks = n_blocks,
-    parcel_names = all_parcels,
-    active_mask = rep(TRUE, n_blocks),
-    block_hashes = NULL,  # Set to NULL for serialization; rebuilt in hydrate_library
-    # Online enrichment tracking (for O(1) operations)
-    n_online = 0L,           # Count of online entries (avoids O(n) sum() scan)
-    online_queue = integer(0) # FIFO queue of online block IDs for fast eviction
+    n_blocks         = n_blocks,
+    parcel_names     = all_parcels,
+    active_mask      = rep(TRUE, n_blocks),
+    block_hashes     = NULL,  # Set to NULL for serialization; rebuilt in hydrate_library
+    # # Online enrichment tracking (for O(1) operations)
+    n_online         = 0L, # Count of online entries (avoids O(n) sum() scan)
+    online_queue     = integer(0) # FIFO queue of online block IDs for fast eviction
   )
 }
 
