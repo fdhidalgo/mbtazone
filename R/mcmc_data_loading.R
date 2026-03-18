@@ -1,6 +1,6 @@
 # mcmc_data_loading.R - Functions for loading district data for MCMC pipeline
-# 
-# Wrappers for loading district data for MCMC pipeline. Includes helper functions to find files based on district name, 
+#
+# Wrappers for loading district data for MCMC pipeline. Includes helper functions to find files based on district name,
 # and a main function to load all relevant data for a district into a structured format for MCMC processing.
 
 #' Helper function to get paths given a district name
@@ -29,9 +29,11 @@ get_district_paths <- function(
   parcels <- parcels_matches[1]
 
   # district data
-  district_matches <- list.files(file.path(data_root, "mbta_district_shapefiles/", district_name),
-                                 pattern = paste0("^", district_name, "_MBTAcommDistricts_.*\\.shp$"),
-                                 full.names = TRUE)
+  district_matches <- list.files(
+    file.path(data_root, "mbta_district_shapefiles/", district_name),
+    pattern = "\\.shp$",
+    full.names = TRUE
+  )
 
   # If no .shp files found, try any .zip file
   if (length(district_matches) == 0) {
