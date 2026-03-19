@@ -98,6 +98,8 @@ R -e "devtools::check()"
 
 The MCMC pipeline uses `targets` with per-district target stores in `ext/_targets_{DistrictName}/`.
 
+**Machine-specific paths:** Before running `inst/targets/_targets.R`, set `MBTAZONE_DATA_ROOT` (MBTA data tree) and `MBTAZONE_RIGHT_OF_WAY` (absolute path to `Excluded_Land_Right_of_Way.shp`). Optionally set `MBTAZONE_PARCELS_SUBDIR` if parcel ZIPs are not under `land_record_shapefiles/basic` (for example `Municipality_Parcel_Data`). Copy [`inst/targets/.Renviron.example`](inst/targets/.Renviron.example) to the package root as `.Renviron` (gitignored) or to `~/.Renviron`. See `?mbtazone_pipeline_paths`. For `run_all_districts.R`, run from the package root or set `MBTAZONE_PACKAGE_ROOT`.
+
 ```r
 # Run a single district (edit district_name/district_type in the script)
 source("inst/targets/run_single_district.R")

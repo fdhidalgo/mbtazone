@@ -24,7 +24,7 @@ load_district_data(
 
 \item{excel_model}{Path to district model}
 
-\item{row_path}{Path to right-of-way shapefile (default: "data/Right_of_Way/...")}
+\item{right_of_way}{Path to right-of-way shapefile (default: "data/Right_of_Way/...")}
 }
 \value{
 Named list with:

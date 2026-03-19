@@ -34,6 +34,8 @@ library(tarchetypes)
 library(crew)
 library(mbtazone)
 
+source("inst/targets/path_resolution.R", local = TRUE)
+
 # Choosing district (Allows for automated calling of this script by setting these variables in environment)
 district_name <- Sys.getenv("DISTRICT_NAME", unset = "Norwood")
 district_type <- Sys.getenv("DISTRICT_TYPE", unset = "commuter_rail")
@@ -95,23 +97,30 @@ list(
   # ============================================================================
   tar_target(
     district_paths,
-    get_district_paths(
-      district_name = district_name,
-      district_type = district_type,
-      data_root = '/Users/dhidalgo/MIT Dropbox/Fernando Hidalgo/projects/mbta_communities/data' # should be an absolute path not relative so that it can be called from the qmds
-    )
+    {
+      p <- mbtazone_pipeline_paths()
+      get_district_paths(
+        district_name = district_name,
+        district_type = district_type,
+        data_root = p$data_root,
+        parcels_subdir = p$parcels_subdir
+      )
+    }
   ),
 
   tar_target(
     district_data,
-    load_district_data(
-      district_name = district_name,
-      district_type = district_type,
-      parcels = district_paths$parcels,
-      district = district_paths$district,
-      excel_model = district_paths$excel_model,
-      right_of_way = "/Users/dhidalgo/MIT Dropbox/Fernando Hidalgo/projects/mbta_communities/code/zoning_mcmc/data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
-    )
+    {
+      p <- mbtazone_pipeline_paths()
+      load_district_data(
+        district_name = district_name,
+        district_type = district_type,
+        parcels = district_paths$parcels,
+        district = district_paths$district,
+        excel_model = district_paths$excel_model,
+        right_of_way = p$right_of_way
+      )
+    }
   ),
 
   tar_target(

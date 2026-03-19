@@ -1,7 +1,11 @@
 library(data.table)
 library(targets)
 
-districts <- fread("~/code/mbtazone/inst/extdata/community_info.csv")
+# Run from package root, or set MBTAZONE_PACKAGE_ROOT to an absolute path to mbtazone
+pkg_root <- Sys.getenv("MBTAZONE_PACKAGE_ROOT", unset = normalizePath(getwd(), winslash = "/", mustWork = TRUE))
+owd <- setwd(pkg_root)
+on.exit(setwd(owd), add = TRUE)
+districts <- fread("inst/extdata/community_info.csv")
 
 results <- vector("list", nrow(districts))
 
@@ -46,7 +50,8 @@ for (i in seq_len(nrow(districts))) {
 
 # Write summary
 summary_dt <- rbindlist(results)
-fwrite(summary_dt, "~/code/mbtazone/targets/district_run_summary.csv")
+dir.create("targets", recursive = TRUE, showWarnings = FALSE)
+fwrite(summary_dt, "targets/district_run_summary.csv")
 
 cat("\n\n=== SUMMARY ===\n")
 print(summary_dt[, .(district_name, district_type, status)])

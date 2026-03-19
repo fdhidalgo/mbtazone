@@ -1,5 +1,8 @@
 .Rproj.user
 .Rhistory
+
+# Local env (e.g. MBTAZONE_* paths); see inst/targets/.Renviron.example
+.Renviron
 .Rdata
 .httr-oauth
 .DS_Store
@@ -37,3 +40,5 @@ ext/
 # Extra files from generating reports
 inst/reports/_targets.yaml
 _targets.yaml
+CLAUDE.md
+AGENTS.md

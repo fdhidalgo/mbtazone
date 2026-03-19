@@ -8,15 +8,25 @@
 #' @param district_name Name of district (e.g., "Norwood")
 #' @param district_type Community type, must be one of "rapid_transit", "commuter_rail", "adjacent" or "adjacent_small_town"
 #' @param data_root Path to data directory (default: "data")
+#' @param parcels_subdir Subdirectory of `data_root` containing parcel ZIP files.
+#'   If `NULL`, uses \code{Sys.getenv("MBTAZONE_PARCELS_SUBDIR")} when set and
+#'   non-empty, otherwise `"land_record_shapefiles/basic"`.
 #' @return Named list with paths
 #' @export
 get_district_paths <- function(
     district_name,
     district_type,
-    data_root = "data")
+    data_root = "data",
+    parcels_subdir = NULL)
 {
+  if (is.null(parcels_subdir)) {
+    parcels_subdir <- Sys.getenv("MBTAZONE_PARCELS_SUBDIR", unset = "")
+    if (!nzchar(parcels_subdir)) {
+      parcels_subdir <- "land_record_shapefiles/basic"
+    }
+  }
   # parcels data
-  parcels_matches <- list.files(file.path(data_root, "land_record_shapefiles/basic"),
+  parcels_matches <- list.files(file.path(data_root, parcels_subdir),
                                 pattern = paste0("^\\d{1,3}_", toupper(district_name), "_basic\\.zip$"),
                                 full.names = TRUE)
   if (length(parcels_matches) == 0) {
@@ -81,7 +91,7 @@ get_district_paths <- function(
 #' @param parcels Path to parcel shapefile or zip file
 #' @param district Path to district shapefile
 #' @param excel_model Path to district model
-#' @param row_path Path to right-of-way shapefile (default: "data/Right_of_Way/...")
+#' @param right_of_way Path to right-of-way shapefile (default: "data/Right_of_Way/...")
 #' @return Named list with:
 #'   - district_parcels: data.table with LOC_ID, capacity, area_acres, etc.
 #'   - district_geometry: sf object with LOC_ID, geometry, capacity, area
