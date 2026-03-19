@@ -41,9 +41,10 @@ district_type <- Sys.getenv("DISTRICT_TYPE", unset = "commuter_rail")
 
 store_path <- paste0("ext/_targets_", gsub(" ", "_", district_name))
 
-#Creating the directory for the reports output if it does not already exist.
+#Creating the directory for the outputs if they do not already exist.
 dir.create("ext/reports", recursive = TRUE, showWarnings = FALSE)
 dir.create("ext/llm_reports", recursive = TRUE, showWarnings = FALSE)
+dir.create("ext/exports", showWarnings = FALSE, recursive = TRUE)
 
 # Sourcing config files
 source("inst/targets/temp_targets_config.R", local = TRUE)
@@ -456,7 +457,28 @@ list(
   ),
 
   # ============================================================================
-  # TIER 5: QUARTO REPORT
+  # TIER 5A: PLAN EXPORT
+  # ============================================================================
+  tar_target(
+    mcmc_plan_export,
+    {
+      dt <- export_mcmc_plans(
+        chain_results     = all_parcel_chain_results,
+        parcel_graph_result = parcel_graph_result,
+        secondary_library = discovered_secondary_library,
+        district_name     = district_name,
+        n_samples         = 100L,
+        seed              = 42L
+      )
+      out_path <- paste0("ext/exports/",
+                         gsub(" ", "_", district_name), "_plans.csv")
+      data.table::fwrite(dt, out_path)
+      dt  # also store in targets cache for downstream use
+    }
+  ),
+
+  # ============================================================================
+  # TIER 5B: QUARTO REPORT
   # ============================================================================
 
   tar_quarto(
