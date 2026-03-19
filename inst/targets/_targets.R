@@ -98,7 +98,7 @@ list(
     get_district_paths(
       district_name = district_name,
       district_type = district_type,
-      data_root = '/home/k.conyngham/new_data' # should be an absolute path not relative so that it can be called from the qmds
+      data_root = '/Users/dhidalgo/MIT Dropbox/Fernando Hidalgo/projects/mbta_communities/data' # should be an absolute path not relative so that it can be called from the qmds
     )
   ),
 
@@ -110,7 +110,7 @@ list(
       parcels = district_paths$parcels,
       district = district_paths$district,
       excel_model = district_paths$excel_model,
-      right_of_way = "../../data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
+      right_of_way = "/Users/dhidalgo/MIT Dropbox/Fernando Hidalgo/projects/mbta_communities/code/zoning_mcmc/data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
     )
   ),
 

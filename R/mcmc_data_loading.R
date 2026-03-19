@@ -16,7 +16,7 @@ get_district_paths <- function(
     data_root = "data")
 {
   # parcels data
-  parcels_matches <- list.files(file.path(data_root, "Municipality_Parcel_Data"),
+  parcels_matches <- list.files(file.path(data_root, "land_record_shapefiles/basic"),
                                 pattern = paste0("^\\d{1,3}_", toupper(district_name), "_basic\\.zip$"),
                                 full.names = TRUE)
   if (length(parcels_matches) == 0) {

@@ -455,6 +455,8 @@ symmetric_birth_death_move <- function(
   constraints,
   neighbor_idx = NULL
 ) {
+  k_current <- length(state$secondary_blocks)
+
   # Step 1: Identify Universe
   # Addable: blocks that can be added (geometrically valid)
   addable_all <- get_addable_blocks_unconstrained(state, library)
@@ -490,7 +492,18 @@ symmetric_birth_death_move <- function(
       accepted = FALSE,
       proposal_failed = TRUE,
       move_type = "symmetric_birth_death",
-      reason = "empty_universe"
+      reason = "empty_universe",
+      direction = NA_character_,
+      k_before = k_current,
+      k_after = k_current,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      constraint_failed = NA_character_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -537,7 +550,17 @@ symmetric_birth_death_move <- function(
       infeasible = TRUE,
       constraint_failed = feasibility$constraint_failed,
       move_type = "symmetric_birth_death",
-      direction = direction
+      direction = direction,
+      block_id = block_id,
+      k_before = k_current,
+      k_after = length(proposed_state$secondary_blocks),
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -586,11 +609,11 @@ symmetric_birth_death_move <- function(
   # K prior penalty difference (linear: penalizes birth, favors death)
   # Birth: k_proposed = k+1, so (k - (k+1)) = -1, log_k_ratio = -lambda
   # Death: k_proposed = k-1, so (k - (k-1)) = +1, log_k_ratio = +lambda
-  k_current <- length(state$secondary_blocks)
   k_proposed <- length(proposed_state$secondary_blocks)
   log_k_ratio <- K_PRIOR_LAMBDA * (k_current - k_proposed)
 
   log_accept <- log_pi_ratio + log_k_ratio + log_q_ratio
+  accept_prob <- min(1, exp(log_accept))
   accept <- log(runif(1)) < log_accept
 
   if (accept) {
@@ -600,7 +623,17 @@ symmetric_birth_death_move <- function(
       proposal_failed = FALSE,
       move_type = "symmetric_birth_death",
       direction = direction,
-      n_universe = n_add + n_rem
+      block_id = block_id,
+      k_before = k_current,
+      k_after = k_proposed,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = n_add_new,
+      n_rem_new = n_rem_new,
+      n_universe_new = Z_new,
+      constraint_failed = NA_character_,
+      accept_prob = accept_prob
     ))
   } else {
     return(list(
@@ -608,7 +641,18 @@ symmetric_birth_death_move <- function(
       accepted = FALSE,
       proposal_failed = FALSE,
       move_type = "symmetric_birth_death",
-      direction = direction
+      direction = direction,
+      block_id = block_id,
+      k_before = k_current,
+      k_after = k_proposed,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = n_add_new,
+      n_rem_new = n_rem_new,
+      n_universe_new = Z_new,
+      constraint_failed = NA_character_,
+      accept_prob = accept_prob
     ))
   }
 }
@@ -675,7 +719,17 @@ lifted_birth_death_move <- function(
       move_type = "lifted_birth_death",
       direction = direction,
       forced_flip = TRUE,
-      proposal_failed = TRUE
+      proposal_failed = TRUE,
+      k_before = k,
+      k_after = k,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      constraint_failed = NA_character_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -687,7 +741,17 @@ lifted_birth_death_move <- function(
       move_type = "lifted_birth_death",
       direction = direction,
       forced_flip = TRUE,
-      proposal_failed = TRUE
+      proposal_failed = TRUE,
+      k_before = k,
+      k_after = k,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      constraint_failed = NA_character_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -712,7 +776,18 @@ lifted_birth_death_move <- function(
         move_type = "lifted_birth_death",
         direction = direction,
         no_reverse = TRUE,
-        proposal_failed = FALSE
+        proposal_failed = FALSE,
+        block_id = block_id,
+        k_before = k,
+        k_after = length(proposed_state$secondary_blocks),
+        n_add = n_add,
+        n_rem = n_rem,
+        n_universe = n_add + n_rem,
+        n_add_new = NA_integer_,
+        n_rem_new = n_rem_new,
+        n_universe_new = NA_integer_,
+        constraint_failed = NA_character_,
+        accept_prob = NA_real_
       ))
     }
 
@@ -750,7 +825,18 @@ lifted_birth_death_move <- function(
         move_type = "lifted_birth_death",
         direction = direction,
         no_reverse = TRUE,
-        proposal_failed = FALSE
+        proposal_failed = FALSE,
+        block_id = block_id,
+        k_before = k,
+        k_after = length(proposed_state$secondary_blocks),
+        n_add = n_add,
+        n_rem = n_rem,
+        n_universe = n_add + n_rem,
+        n_add_new = n_add_new,
+        n_rem_new = NA_integer_,
+        n_universe_new = NA_integer_,
+        constraint_failed = NA_character_,
+        accept_prob = NA_real_
       ))
     }
 
@@ -775,7 +861,17 @@ lifted_birth_death_move <- function(
       direction = direction,
       constraint_failed = feasibility$constraint_failed,
       infeasible = TRUE,
-      proposal_failed = FALSE
+      proposal_failed = FALSE,
+      block_id = block_id,
+      k_before = k,
+      k_after = length(proposed_state$secondary_blocks),
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = if (exists("n_add_new")) n_add_new else NA_integer_,
+      n_rem_new = if (exists("n_rem_new")) n_rem_new else NA_integer_,
+      n_universe_new = NA_integer_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -803,7 +899,16 @@ lifted_birth_death_move <- function(
       block_id = block_id,
       accept_prob = min(1, exp(log_alpha)),
       proposal_failed = FALSE,
-      infeasible = FALSE
+      infeasible = FALSE,
+      constraint_failed = NA_character_,
+      k_before = k,
+      k_after = k_new,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = if (exists("n_add_new")) n_add_new else NA_integer_,
+      n_rem_new = if (exists("n_rem_new")) n_rem_new else NA_integer_,
+      n_universe_new = NA_integer_
     ))
   } else {
     # Reject -> flip direction (bounce)
@@ -815,7 +920,16 @@ lifted_birth_death_move <- function(
       direction = direction,
       accept_prob = min(1, exp(log_alpha)),
       proposal_failed = FALSE,
-      infeasible = FALSE
+      infeasible = FALSE,
+      constraint_failed = NA_character_,
+      k_before = k,
+      k_after = k_new,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = if (exists("n_add_new")) n_add_new else NA_integer_,
+      n_rem_new = if (exists("n_rem_new")) n_rem_new else NA_integer_,
+      n_universe_new = NA_integer_
     ))
   }
 }
@@ -1651,14 +1765,12 @@ purge_diagnostic_move <- function(state, library, parcel_graph, constraints) {
 
   if (k_current == 0) {
     return(list(
-      new_state = state,
-      accepted = FALSE,
-      proposal_failed = TRUE,
-      move_type = "purge_diagnostic",
       k_before = 0L,
+      total_capacity_before = state$total_capacity,
       feasible = TRUE,
       constraint_failed = NA_character_,
-      lcc_capacity = NA_real_
+      lcc_capacity = NA_real_,
+      lcc_minus_min_capacity = NA_real_
     ))
   }
 
@@ -1679,17 +1791,15 @@ purge_diagnostic_move <- function(state, library, parcel_graph, constraints) {
 
   # Return diagnostic result (never actually transition)
   list(
-    new_state = state,
-    accepted = FALSE,
-    proposal_failed = FALSE,
-    move_type = "purge_diagnostic",
     k_before = k_current,
+    total_capacity_before = state$total_capacity,
     feasible = feasibility$feasible,
     constraint_failed = if (is.null(feasibility$constraint_failed)) {
       NA_character_
     } else {
       feasibility$constraint_failed
     },
-    lcc_capacity = lcc_capacity
+    lcc_capacity = lcc_capacity,
+    lcc_minus_min_capacity = lcc_capacity - constraints$min_capacity
   )
 }
