@@ -47,6 +47,9 @@ K_PRIOR_LAMBDA <- config_env$K_PRIOR_LAMBDA
 SECONDARY_AREA_THRESHOLD <- config_env$SECONDARY_AREA_THRESHOLD
 REPLACE_LCC_CAP_TOLERANCE <- config_env$REPLACE_LCC_CAP_TOLERANCE
 SWAP_CAP_TOLERANCE <- config_env$SWAP_CAP_TOLERANCE
+JOINT_CORE_P_KEEP <- config_env$JOINT_CORE_P_KEEP
+JOINT_LCC_EXCESS_RATE <- config_env$JOINT_LCC_EXCESS_RATE
+JOINT_ADD_WEIGHT_NOTHING <- config_env$JOINT_ADD_WEIGHT_NOTHING
 
 # Load targets
 parcel_chain_results <- tar_read(all_parcel_chain_results)
@@ -78,6 +81,25 @@ diag_vec <- function(chains, field) {
     value <- ch$diagnostics[[field]]
     if (is.null(value)) numeric(0) else value
   }), use.names = FALSE)
+}
+
+diag_vec_fallback <- function(chains, primary, fallback = NULL) {
+  values <- diag_vec(chains, primary)
+  if (length(values) > 0 || is.null(fallback)) {
+    return(values)
+  }
+  diag_vec(chains, fallback)
+}
+
+diag_dt_fallback <- function(chains, primary, fallback = NULL) {
+  dt_list <- lapply(chains, function(ch) {
+    dt <- ch$diagnostics[[primary]]
+    if (is.null(dt) && !is.null(fallback)) {
+      dt <- ch$diagnostics[[fallback]]
+    }
+    dt
+  })
+  Filter(Negate(is.null), dt_list)
 }
 
 all_lcc_cap <- diag_vec(valid_chains, "lcc_capacity_trajectory")
@@ -133,6 +155,9 @@ if (!use_lifted) {
 - Secondary-count prior λ: `r K_PRIOR_LAMBDA`
 - Secondary minimum area: `r SECONDARY_AREA_THRESHOLD` acres
 - Replace-LCC capacity tolerance: `r REPLACE_LCC_CAP_TOLERANCE`
+- Joint core p_keep: `r JOINT_CORE_P_KEEP`
+- Joint LCC excess rate: `r JOINT_LCC_EXCESS_RATE`
+- Joint add weight (nothing): `r JOINT_ADD_WEIGHT_NOTHING`
 - Swap capacity tolerance: `r SWAP_CAP_TOLERANCE`
 
 ## Graph Statistics
@@ -1115,15 +1140,16 @@ total_samples <- sum(sapply(valid_chains, function(chain) {
 
 ## Kernel-Specific Diagnostics
 
-### Replace-LCC Rejection Breakdown
+### Joint Core Refresh Rejection Breakdown
 
 ```{r}
-#| label: replace-lcc-reasons
-# Aggregate replace-LCC rejection reasons across chains
-all_replace_reasons <- lapply(valid_chains, function(chain) {
-  chain$diagnostics$replace_lcc_reasons
-})
-all_replace_reasons <- Filter(Negate(is.null), all_replace_reasons)
+#| label: joint-refresh-reasons
+# Aggregate joint-refresh rejection reasons across chains
+all_replace_reasons <- diag_dt_fallback(
+  valid_chains,
+  "joint_refresh_reasons",
+  "replace_lcc_reasons"
+)
 
 if (length(all_replace_reasons) > 0) {
   combined_reasons <- rbindlist(all_replace_reasons)
@@ -1134,18 +1160,19 @@ if (length(all_replace_reasons) > 0) {
   kable(reason_summary, col.names = c("Reason", "Count", "% of Attempted"))
 } else {
   cat(
-    "No replace-LCC rejection data available (replace_lcc kernel may have 0% probability).\n"
+    "No joint core-refresh rejection data available (replace_lcc kernel may have 0% probability).\n"
   )
 }
 ```
 
 ```{r}
-#| label: replace-lcc-constraints
-# Aggregate replace-LCC constraint failures
-all_replace_constraints <- lapply(valid_chains, function(chain) {
-  chain$diagnostics$replace_lcc_constraints
-})
-all_replace_constraints <- Filter(Negate(is.null), all_replace_constraints)
+#| label: joint-refresh-constraints
+# Aggregate joint-refresh constraint failures
+all_replace_constraints <- diag_dt_fallback(
+  valid_chains,
+  "joint_refresh_constraints",
+  "replace_lcc_constraints"
+)
 
 if (length(all_replace_constraints) > 0) {
   combined_constraints <- rbindlist(all_replace_constraints)
@@ -1169,27 +1196,41 @@ if (length(all_replace_constraints) > 0) {
   }
 } else {
   cat(
-    "No replace-LCC constraint tracking data (replace_lcc kernel may have 0% probability).\n"
+    "No joint core-refresh constraint tracking data (replace_lcc kernel may have 0% probability).\n"
   )
 }
 ```
 
-**Replace-LCC MH Acceptance Analysis:**
+**Joint Core Refresh MH Acceptance Analysis:**
 
 ```{r}
-#| label: replace-lcc-mh
+#| label: joint-refresh-mh
 # MH acceptance probability distribution
-all_accept_probs <- unlist(lapply(valid_chains, function(chain) {
-  chain$diagnostics$replace_lcc_accept_prob
-}))
-
-all_log_q_ratios <- unlist(lapply(valid_chains, function(chain) {
-  chain$diagnostics$replace_lcc_log_q_ratio
-}))
-
-all_k_retained <- unlist(lapply(valid_chains, function(chain) {
-  chain$diagnostics$replace_lcc_k_retained
-}))
+all_accept_probs <- diag_vec_fallback(
+  valid_chains,
+  "joint_refresh_accept_prob",
+  "replace_lcc_accept_prob"
+)
+all_log_q_forward <- diag_vec(valid_chains, "joint_refresh_log_q_forward")
+all_log_q_reverse <- diag_vec(valid_chains, "joint_refresh_log_q_reverse")
+all_log_q_ratios <- diag_vec_fallback(
+  valid_chains,
+  "joint_refresh_log_q_ratio",
+  "replace_lcc_log_q_ratio"
+)
+all_core_size <- diag_vec_fallback(
+  valid_chains,
+  "joint_refresh_core_size",
+  "replace_lcc_k_retained"
+)
+all_n_added <- diag_vec(valid_chains, "joint_refresh_n_added")
+all_n_removed <- diag_vec(valid_chains, "joint_refresh_n_removed")
+all_candidate_lccs <- diag_vec_fallback(
+  valid_chains,
+  "joint_refresh_candidate_lccs",
+  "replace_lcc_n_similar_forward"
+)
+all_changed_lcc <- diag_vec(valid_chains, "joint_refresh_changed_lcc")
 
 if (length(all_accept_probs) > 0) {
   cat(sprintf(
@@ -1210,7 +1251,32 @@ if (length(all_accept_probs) > 0) {
   ))
 }
 
-if (length(all_log_q_ratios) > 0) {
+if (length(all_log_q_forward) > 0 && length(all_log_q_reverse) > 0) {
+  log_q_dt <- data.table(
+    Quantity = c("Forward log q", "Reverse log q", "Reverse - Forward"),
+    Mean = c(
+      round(mean(all_log_q_forward), 2),
+      round(mean(all_log_q_reverse), 2),
+      round(mean(all_log_q_reverse - all_log_q_forward), 2)
+    ),
+    Median = c(
+      round(median(all_log_q_forward), 2),
+      round(median(all_log_q_reverse), 2),
+      round(median(all_log_q_reverse - all_log_q_forward), 2)
+    ),
+    Min = c(
+      round(min(all_log_q_forward), 2),
+      round(min(all_log_q_reverse), 2),
+      round(min(all_log_q_reverse - all_log_q_forward), 2)
+    ),
+    Max = c(
+      round(max(all_log_q_forward), 2),
+      round(max(all_log_q_reverse), 2),
+      round(max(all_log_q_reverse - all_log_q_forward), 2)
+    )
+  )
+  kable(log_q_dt)
+} else if (length(all_log_q_ratios) > 0) {
   cat(sprintf("\n**Log proposal ratio (log q(x'→x) / q(x→x')):**\n\n"))
   cat(sprintf("- Mean: %.2f\n", mean(all_log_q_ratios)))
   cat(sprintf("- SD: %.2f\n", sd(all_log_q_ratios)))
@@ -1221,34 +1287,81 @@ if (length(all_log_q_ratios) > 0) {
   ))
 }
 
-if (length(all_k_retained) > 0) {
-  cat(sprintf("\n**Secondary blocks retained during LCC replacement:**\n\n"))
-  k_retained_table <- as.data.table(table(all_k_retained))
-  setnames(k_retained_table, c("k Retained", "Count"))
-  kable(k_retained_table)
+shape_metric_dt <- rbindlist(Filter(Negate(is.null), list(
+  if (length(all_core_size) > 0) {
+    data.table(
+      Metric = "Retained core size",
+      Mean = round(mean(all_core_size), 2),
+      Median = round(median(all_core_size), 2),
+      P90 = round(as.numeric(stats::quantile(all_core_size, 0.9)), 2),
+      Max = round(max(all_core_size), 2)
+    )
+  },
+  if (length(all_n_removed) > 0) {
+    data.table(
+      Metric = "Removed secondaries",
+      Mean = round(mean(all_n_removed), 2),
+      Median = round(median(all_n_removed), 2),
+      P90 = round(as.numeric(stats::quantile(all_n_removed, 0.9)), 2),
+      Max = round(max(all_n_removed), 2)
+    )
+  },
+  if (length(all_n_added) > 0) {
+    data.table(
+      Metric = "Added secondaries",
+      Mean = round(mean(all_n_added), 2),
+      Median = round(median(all_n_added), 2),
+      P90 = round(as.numeric(stats::quantile(all_n_added, 0.9)), 2),
+      Max = round(max(all_n_added), 2)
+    )
+  },
+  if (length(all_candidate_lccs) > 0) {
+    data.table(
+      Metric = "Candidate LCC count",
+      Mean = round(mean(all_candidate_lccs), 2),
+      Median = round(median(all_candidate_lccs), 2),
+      P90 = round(as.numeric(stats::quantile(all_candidate_lccs, 0.9)), 2),
+      Max = round(max(all_candidate_lccs), 2)
+    )
+  }
+)), fill = TRUE)
+
+if (nrow(shape_metric_dt) > 0) {
+  cat("\n**Joint proposal shape diagnostics:**\n\n")
+  kable(shape_metric_dt)
+}
+
+if (length(all_changed_lcc) > 0) {
+  cat(sprintf(
+    "\n- Proposals changing the LCC: %.1f%%\n",
+    100 * mean(as.logical(all_changed_lcc))
+  ))
 }
 ```
 
-**Replace-LCC Similar LCC Counts:**
+**Joint Core Refresh Proposal Geometry:**
 
 ```{r}
-#| label: replace-lcc-similar
-# Similar LCC counts (for debugging proposal asymmetry)
-all_similar_fwd <- unlist(lapply(valid_chains, function(chain) {
-  chain$diagnostics$replace_lcc_n_similar_forward
-}))
-all_similar_rev <- unlist(lapply(valid_chains, function(chain) {
-  chain$diagnostics$replace_lcc_n_similar_reverse
-}))
+#| label: joint-refresh-geometry
+all_similar_fwd <- diag_vec_fallback(
+  valid_chains,
+  "joint_refresh_candidate_lccs",
+  "replace_lcc_n_similar_forward"
+)
+all_similar_rev <- diag_vec_fallback(
+  valid_chains,
+  "joint_refresh_candidate_lccs_reverse",
+  "replace_lcc_n_similar_reverse"
+)
 
 if (length(all_similar_fwd) > 0 && length(all_similar_rev) > 0) {
   cat(sprintf(
-    "- Forward similar LCCs: mean=%.1f, sd=%.1f\n",
+    "- Forward candidate LCCs: mean=%.1f, sd=%.1f\n",
     mean(all_similar_fwd),
     sd(all_similar_fwd)
   ))
   cat(sprintf(
-    "- Reverse similar LCCs: mean=%.1f, sd=%.1f\n",
+    "- Reverse candidate LCCs: mean=%.1f, sd=%.1f\n",
     mean(all_similar_rev),
     sd(all_similar_rev)
   ))
@@ -1696,7 +1809,7 @@ bd_acc_rate <- if (nrow(bd_stats) > 0 && bd_stats$n_attempted > 0) {
   0
 }
 
-# 6. Replace-LCC effectiveness
+# 6. Joint core-refresh effectiveness
 replace_stats <- parcel_metrics$stats[move_type == "replace_lcc"]
 if (nrow(replace_stats) > 0 && replace_stats$n_attempted > 0) {
   replace_feasibility <- replace_stats$n_feasible / replace_stats$n_attempted
@@ -1719,7 +1832,7 @@ health_dt <- data.table(
     "Chain Mixing",
     "LCC Exploration",
     bd_label,
-    "Replace-LCC Feasibility",
+    "Joint Core Refresh Feasibility",
     "Parcel Variability (stickiness)"
   ),
   Value = c(
