@@ -1317,7 +1317,858 @@ find_lcc_in_library <- function(lcc_parcels, lcc_library) {
 }
 
 # ============================================================================
-# KERNEL 4: REPLACE-LCC (GLOBAL RELOCATION)
+# KERNEL 4A: JOINT CORE REFRESH (GLOBAL RELOCATION)
+# ============================================================================
+
+joint_refresh_logsumexp <- function(log_values) {
+  if (length(log_values) == 0) {
+    return(-Inf)
+  }
+  max_log <- max(log_values)
+  if (!is.finite(max_log)) {
+    return(-Inf)
+  }
+  max_log + log(sum(exp(log_values - max_log)))
+}
+
+joint_refresh_mean_secondary_capacity <- function(secondary_library) {
+  caps <- secondary_library$metadata$capacity
+  caps <- caps[is.finite(caps) & caps > 0]
+  if (length(caps) == 0) {
+    return(1)
+  }
+  mean(caps)
+}
+
+#' Core step: remove 0 or 1 block from source_ids
+#'
+#' With probability p_keep, keep all blocks (removed_id = NULL).
+#' With probability (1 - p_keep), sample 1 block uniformly to remove.
+#'
+#' @param source_ids Integer vector of current secondary block IDs
+#' @param p_keep Probability of removing nothing (default from JOINT_CORE_P_KEEP)
+#' @return List with retained_ids, removed_id (NULL or integer), log_prob
+joint_refresh_core_remove_one <- function(
+  source_ids,
+  p_keep = JOINT_CORE_P_KEEP
+) {
+  k <- length(source_ids)
+
+  if (k == 0) {
+    return(list(
+      retained_ids = integer(0),
+      removed_id = NULL,
+      log_prob = 0
+    ))
+  }
+
+  if (runif(1) < p_keep) {
+    list(
+      retained_ids = source_ids,
+      removed_id = NULL,
+      log_prob = log(p_keep)
+    )
+  } else {
+    idx <- sample.int(k, 1)
+    removed <- source_ids[idx]
+    list(
+      retained_ids = source_ids[-idx],
+      removed_id = removed,
+      log_prob = log((1 - p_keep) / k)
+    )
+  }
+}
+
+#' Core step log-probability for a specific outcome
+#'
+#' Computes the log-probability that the core step on source_ids would
+#' produce the given removed_id (NULL for "remove nothing").
+#'
+#' @param source_ids Integer vector of secondary block IDs before core step
+#' @param removed_id NULL (kept all) or integer (removed this block)
+#' @param p_keep Probability of removing nothing
+#' @return Numeric log-probability
+joint_refresh_core_remove_one_logprob <- function(
+  source_ids,
+  removed_id,
+  p_keep = JOINT_CORE_P_KEEP
+) {
+  k <- length(source_ids)
+
+  if (k == 0) {
+    return(0)
+  }
+
+  if (is.null(removed_id)) {
+    return(log(p_keep))
+  }
+
+  removed_id <- as.integer(removed_id)
+  if (!(removed_id %in% source_ids)) {
+    return(-Inf)
+  }
+
+  log((1 - p_keep) / k)
+}
+
+joint_refresh_secondary_summary <- function(
+  secondary_ids,
+  secondary_library,
+  parcel_graph
+) {
+  secondary_ids <- sort(unique(as.integer(secondary_ids)))
+  union_fields <- compute_secondary_union_fields(secondary_ids, secondary_library)
+
+  if (length(union_fields$secondary_union_indices) > 0) {
+    parcels <- secondary_library$parcel_names[union_fields$secondary_union_indices]
+    area_in_station <- sum(igraph::V(parcel_graph)[parcels]$area_in_station)
+    capacity_in_station <- sum(igraph::V(parcel_graph)[parcels]$capacity_in_station)
+  } else {
+    area_in_station <- 0
+    capacity_in_station <- 0
+  }
+
+  list(
+    block_ids = secondary_ids,
+    capacity = sum(secondary_library$metadata$capacity[secondary_ids], na.rm = TRUE),
+    area = sum(secondary_library$metadata$area[secondary_ids], na.rm = TRUE),
+    area_in_station = area_in_station,
+    capacity_in_station = capacity_in_station,
+    secondary_union_indices = union_fields$secondary_union_indices,
+    secondary_neighbor_indices = union_fields$secondary_neighbor_indices
+  )
+}
+
+joint_refresh_required_lcc_capacity <- function(core_summary, constraints) {
+  theta <- constraints$min_lcc_fraction
+
+  min_capacity_shortfall <- constraints$min_capacity - core_summary$capacity
+  lcc_fraction_requirement <- if (
+    is.finite(theta) && theta > 0 && theta < 1 && core_summary$capacity > 0
+  ) {
+    (theta / (1 - theta)) * core_summary$capacity
+  } else {
+    0
+  }
+
+  station_capacity_shortfall <- 0
+  if (!is.null(constraints$station_capacity_pct) &&
+      !is.na(constraints$station_capacity_pct)) {
+    station_capacity_required <- (constraints$station_capacity_pct / 100) *
+      constraints$min_capacity
+    station_capacity_shortfall <- station_capacity_required -
+      core_summary$capacity_in_station
+  }
+
+  max(
+    0,
+    min_capacity_shortfall,
+    lcc_fraction_requirement,
+    station_capacity_shortfall
+  )
+}
+
+joint_refresh_candidate_lccs <- function(
+  retained_core_ids,
+  lcc_library,
+  secondary_library,
+  parcel_graph,
+  constraints
+) {
+  n_blocks <- lcc_library$n_blocks
+  if (n_blocks == 0) {
+    return(list(
+      candidate_ids = integer(0),
+      log_weights = numeric(0),
+      core_summary = joint_refresh_secondary_summary(
+        retained_core_ids, secondary_library, parcel_graph
+      ),
+      required_cap = NA_real_
+    ))
+  }
+
+  active_mask <- lcc_library$active_mask
+  if (is.null(active_mask) || length(active_mask) != n_blocks) {
+    active_mask <- compute_library_active_mask(lcc_library)
+  }
+  candidate_ids <- which(active_mask)
+  if (length(candidate_ids) == 0) {
+    return(list(
+      candidate_ids = integer(0),
+      log_weights = numeric(0),
+      core_summary = joint_refresh_secondary_summary(
+        retained_core_ids, secondary_library, parcel_graph
+      ),
+      required_cap = NA_real_
+    ))
+  }
+
+  core_summary <- joint_refresh_secondary_summary(
+    retained_core_ids,
+    secondary_library,
+    parcel_graph
+  )
+
+  if (length(retained_core_ids) > 0) {
+    candidate_ids <- filter_compatible_lccs(
+      candidate_ids,
+      lcc_library,
+      secondary_library,
+      retained_core_ids,
+      secondary_union_indices = core_summary$secondary_union_indices,
+      secondary_neighbor_indices = core_summary$secondary_neighbor_indices
+    )
+  }
+
+  if (length(candidate_ids) == 0) {
+    return(list(
+      candidate_ids = integer(0),
+      log_weights = numeric(0),
+      core_summary = core_summary,
+      required_cap = joint_refresh_required_lcc_capacity(core_summary, constraints)
+    ))
+  }
+
+  meta <- lcc_library$metadata
+  lcc_cap <- meta$capacity[candidate_ids]
+  lcc_area <- meta$area[candidate_ids]
+
+  total_cap <- core_summary$capacity + lcc_cap
+  total_area <- core_summary$area + lcc_area
+  density <- total_cap / pmax(total_area, .Machine$double.eps)
+
+  # Candidate filter: only enforce compatibility, density, and LCC fraction.
+
+  # min_capacity, min_area, and station constraints are deliberately OMITTED here.
+  # Rationale: the reverse path must find the old LCC in the reverse candidate set.
+  # When the reverse core has fewer blocks (removed blocks are missing), the reduced
+  # core capacity causes the old LCC to fail min_capacity, creating zero_reverse_support.
+  # The hard constraint check at line 2011 (check_hard_constraints_only) still catches
+  # infeasible forward proposals — this filter only needs to ensure reversibility.
+  keep_mask <- is.finite(lcc_cap) &
+    is.finite(lcc_area) &
+    is.finite(total_cap) &
+    is.finite(total_area) &
+    density >= constraints$min_density
+
+  theta <- constraints$min_lcc_fraction
+  if (is.finite(theta) && theta > 0 && theta < 1) {
+    keep_mask <- keep_mask & (lcc_cap / total_cap >= theta)
+  }
+
+  candidate_ids <- candidate_ids[keep_mask]
+  if (length(candidate_ids) == 0) {
+    return(list(
+      candidate_ids = integer(0),
+      log_weights = numeric(0),
+      core_summary = core_summary,
+      required_cap = joint_refresh_required_lcc_capacity(core_summary, constraints)
+    ))
+  }
+
+  required_cap <- joint_refresh_required_lcc_capacity(core_summary, constraints)
+  log_weights <- -JOINT_LCC_EXCESS_RATE *
+    pmax(lcc_library$metadata$capacity[candidate_ids] - required_cap, 0)
+
+  list(
+    candidate_ids = candidate_ids,
+    log_weights = log_weights,
+    core_summary = core_summary,
+    required_cap = required_cap
+  )
+}
+
+joint_refresh_sample_lcc <- function(candidate_ids, log_weights) {
+  if (length(candidate_ids) == 0) {
+    return(NULL)
+  }
+  log_norm <- joint_refresh_logsumexp(log_weights)
+  probs <- exp(log_weights - log_norm)
+  idx <- sample.int(length(candidate_ids), 1, prob = probs)
+  list(
+    lcc_id = candidate_ids[idx],
+    log_prob = log_weights[idx] - log_norm,
+    log_weight = log_weights[idx],
+    log_norm = log_norm
+  )
+}
+
+joint_refresh_build_state <- function(
+  lcc_id,
+  core_ids,
+  lcc_library,
+  secondary_library,
+  parcel_graph,
+  neighbor_idx = NULL,
+  parcel_names = NULL
+) {
+  lcc_parcels <- library_block_parcels(lcc_library, lcc_id)
+  if (is.null(lcc_parcels) || length(lcc_parcels) == 0) {
+    return(NULL)
+  }
+
+  state <- reset_to_lcc(
+    lcc_parcels,
+    secondary_library,
+    parcel_graph,
+    neighbor_idx = neighbor_idx,
+    parcel_names = parcel_names
+  )
+
+  for (block_id in sort(unique(as.integer(core_ids)))) {
+    state <- add_secondary_block(
+      state,
+      block_id,
+      secondary_library,
+      parcel_graph,
+      neighbor_idx = neighbor_idx
+    )
+  }
+
+  state
+}
+
+joint_refresh_initial_add_candidates <- function(
+  base_state,
+  source_secondary_ids,
+  secondary_library,
+  parcel_graph,
+  constraints
+) {
+  addable <- get_addable_blocks_unconstrained(base_state, secondary_library)
+  if (length(addable) == 0) {
+    return(integer(0))
+  }
+
+  finite_mask <- is.finite(secondary_library$metadata$capacity[addable])
+  addable <- addable[finite_mask]
+
+  if (length(addable) > 0) {
+    lcc_capacity <- get_lcc_capacity(base_state, secondary_library, parcel_graph)
+    lcc_filter <- filter_blocks_by_lcc_fraction(
+      addable,
+      secondary_library,
+      base_state$total_capacity,
+      lcc_capacity,
+      constraints$min_lcc_fraction
+    )
+    addable <- lcc_filter$filtered_ids
+  }
+
+  sort(setdiff(addable, source_secondary_ids))
+}
+
+#' Compute capacity-based weight for a single block in the categorical add step
+#'
+#' @param block_id Integer block ID
+#' @param secondary_library Secondary block library
+#' @param mean_secondary_cap Mean secondary capacity
+#' @return Numeric weight (always positive)
+joint_refresh_add_weight <- function(
+  block_id,
+  secondary_library,
+  mean_secondary_cap
+) {
+  cap_b <- secondary_library$metadata$capacity[block_id]
+  if (!is.finite(cap_b) || cap_b <= 0) {
+    cap_b <- mean_secondary_cap
+  }
+  exp(-abs(cap_b - mean_secondary_cap) / mean_secondary_cap)
+}
+
+#' Categorical add step: sample 0 or 1 block from candidates
+#'
+#' Builds a categorical distribution over {add nothing, add block_b for b in B0}
+#' and samples one outcome. The "add nothing" option has weight JOINT_ADD_WEIGHT_NOTHING;
+#' each block has capacity-based weight.
+#'
+#' @param base_state State with LCC + retained core blocks
+#' @param source_secondary_ids IDs of secondaries in the source state (excluded from adds)
+#' @param secondary_library Secondary block library
+#' @param parcel_graph igraph parcel graph
+#' @param constraints MBTA constraints
+#' @param mean_secondary_cap Mean secondary capacity
+#' @param neighbor_idx Neighbor index cache
+#' @return List with added_id (NULL or integer), log_prob, candidates, weights
+joint_refresh_categorical_add <- function(
+  base_state,
+  source_secondary_ids,
+  secondary_library,
+  parcel_graph,
+  constraints,
+  mean_secondary_cap,
+  neighbor_idx = NULL
+) {
+  candidates <- joint_refresh_initial_add_candidates(
+    base_state = base_state,
+    source_secondary_ids = source_secondary_ids,
+    secondary_library = secondary_library,
+    parcel_graph = parcel_graph,
+    constraints = constraints
+  )
+
+  if (length(candidates) == 0) {
+    # Only option is "add nothing", probability 1
+    return(list(
+      state = base_state,
+      added_id = NULL,
+      log_prob = 0,
+      candidates = integer(0),
+      weights = numeric(0)
+    ))
+  }
+
+  # Compute weights for each candidate block
+  block_weights <- vapply(candidates, function(bid) {
+    joint_refresh_add_weight(bid, secondary_library, mean_secondary_cap)
+  }, numeric(1))
+
+  w_0 <- JOINT_ADD_WEIGHT_NOTHING
+  Z <- w_0 + sum(block_weights)
+
+  # Sample from categorical: 0 = add nothing, 1..n = add block i
+  probs <- c(w_0, block_weights) / Z
+  draw <- sample.int(length(probs), 1, prob = probs)
+
+  if (draw == 1L) {
+    # Add nothing
+    list(
+      state = base_state,
+      added_id = NULL,
+      log_prob = log(w_0 / Z),
+      candidates = candidates,
+      weights = block_weights
+    )
+  } else {
+    block_idx <- draw - 1L
+    block_id <- candidates[block_idx]
+    new_state <- add_secondary_block(
+      base_state,
+      block_id,
+      secondary_library,
+      parcel_graph,
+      neighbor_idx = neighbor_idx
+    )
+    list(
+      state = new_state,
+      added_id = block_id,
+      log_prob = log(block_weights[block_idx] / Z),
+      candidates = candidates,
+      weights = block_weights
+    )
+  }
+}
+
+#' Categorical add step log-probability for a specific outcome
+#'
+#' Computes the log-probability that the categorical add step would select
+#' target_id (NULL for "add nothing", or a specific block ID).
+#'
+#' @param target_id NULL (add nothing) or integer block ID
+#' @param base_state State with LCC + retained core blocks
+#' @param source_secondary_ids IDs of secondaries in the source state
+#' @param secondary_library Secondary block library
+#' @param parcel_graph igraph parcel graph
+#' @param constraints MBTA constraints
+#' @param mean_secondary_cap Mean secondary capacity
+#' @return Numeric log-probability (-Inf if target not in candidates)
+joint_refresh_categorical_add_logprob <- function(
+  target_id,
+  base_state,
+  source_secondary_ids,
+  secondary_library,
+  parcel_graph,
+  constraints,
+  mean_secondary_cap
+) {
+  candidates <- joint_refresh_initial_add_candidates(
+    base_state = base_state,
+    source_secondary_ids = source_secondary_ids,
+    secondary_library = secondary_library,
+    parcel_graph = parcel_graph,
+    constraints = constraints
+  )
+
+  if (length(candidates) == 0) {
+    # Only "add nothing" is possible
+    if (is.null(target_id)) {
+      return(0)
+    } else {
+      return(-Inf)
+    }
+  }
+
+  block_weights <- vapply(candidates, function(bid) {
+    joint_refresh_add_weight(bid, secondary_library, mean_secondary_cap)
+  }, numeric(1))
+
+  w_0 <- JOINT_ADD_WEIGHT_NOTHING
+  Z <- w_0 + sum(block_weights)
+
+  if (is.null(target_id)) {
+    return(log(w_0 / Z))
+  }
+
+  target_id <- as.integer(target_id)
+  idx <- match(target_id, candidates)
+  if (is.na(idx)) {
+    return(-Inf)
+  }
+
+  log(block_weights[idx] / Z)
+}
+
+joint_core_refresh_move <- function(
+  state,
+  lcc_library,
+  secondary_library,
+  parcel_graph,
+  constraints,
+  neighbor_idx = NULL,
+  parcel_names = NULL
+) {
+  if (lcc_library$n_blocks == 0) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = TRUE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "no_candidates"
+    ))
+  }
+
+  current_lcc_id <- find_lcc_in_library(state$lcc_parcels, lcc_library)
+  if (is.na(current_lcc_id)) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = TRUE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "current_lcc_not_in_library"
+    ))
+  }
+
+  current_secondary_ids <- sort(unique(as.integer(state$secondary_blocks)))
+  mean_secondary_cap <- joint_refresh_mean_secondary_capacity(secondary_library)
+
+  # --- CORE STEP: remove 0 or 1 block ---
+  core_result <- joint_refresh_core_remove_one(
+    source_ids = current_secondary_ids,
+    p_keep = JOINT_CORE_P_KEEP
+  )
+  retained_core_ids <- core_result$retained_ids
+  forward_removed_id <- core_result$removed_id
+  log_q_core_forward <- core_result$log_prob
+
+  # --- LCC STEP: sample new LCC compatible with core K ---
+  candidate_info <- joint_refresh_candidate_lccs(
+    retained_core_ids = retained_core_ids,
+    lcc_library = lcc_library,
+    secondary_library = secondary_library,
+    parcel_graph = parcel_graph,
+    constraints = constraints
+  )
+
+  if (length(candidate_info$candidate_ids) == 0) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = TRUE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "no_lcc_for_core",
+      core_size = length(retained_core_ids),
+      n_removed = if (is.null(forward_removed_id)) 0L else 1L,
+      n_added = 0L,
+      candidate_lccs_forward = 0L
+    ))
+  }
+
+  lcc_draw <- joint_refresh_sample_lcc(
+    candidate_ids = candidate_info$candidate_ids,
+    log_weights = candidate_info$log_weights
+  )
+  new_lcc_id <- lcc_draw$lcc_id
+
+  base_state <- joint_refresh_build_state(
+    lcc_id = new_lcc_id,
+    core_ids = retained_core_ids,
+    lcc_library = lcc_library,
+    secondary_library = secondary_library,
+    parcel_graph = parcel_graph,
+    neighbor_idx = neighbor_idx,
+    parcel_names = parcel_names
+  )
+
+  if (is.null(base_state)) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = TRUE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "selected_lcc_invalid",
+      core_size = length(retained_core_ids),
+      n_removed = if (is.null(forward_removed_id)) 0L else 1L,
+      n_added = 0L,
+      candidate_lccs_forward = length(candidate_info$candidate_ids)
+    ))
+  }
+
+  # --- ADD STEP: categorical add of 0 or 1 block ---
+  add_forward <- joint_refresh_categorical_add(
+    base_state = base_state,
+    source_secondary_ids = current_secondary_ids,
+    secondary_library = secondary_library,
+    parcel_graph = parcel_graph,
+    constraints = constraints,
+    mean_secondary_cap = mean_secondary_cap,
+    neighbor_idx = neighbor_idx
+  )
+
+  proposed_state <- add_forward$state
+  proposed_secondary_ids <- sort(unique(as.integer(proposed_state$secondary_blocks)))
+  forward_added_id <- add_forward$added_id
+  n_removed <- if (is.null(forward_removed_id)) 0L else 1L
+  n_added <- if (is.null(forward_added_id)) 0L else 1L
+  changed_lcc <- !identical(new_lcc_id, current_lcc_id)
+
+  if (!changed_lcc && setequal(proposed_secondary_ids, current_secondary_ids)) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = TRUE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "no_change",
+      core_size = length(retained_core_ids),
+      n_removed = n_removed,
+      n_added = n_added,
+      candidate_lccs_forward = length(candidate_info$candidate_ids)
+    ))
+  }
+
+  # --- FEASIBILITY CHECK ---
+  feasibility <- check_hard_constraints_only(
+    proposed_state,
+    secondary_library,
+    parcel_graph,
+    constraints
+  )
+  if (!feasibility$feasible) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      infeasible = TRUE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      constraint_failed = feasibility$constraint_failed,
+      core_size = length(retained_core_ids),
+      n_removed = n_removed,
+      n_added = n_added,
+      candidate_lccs_forward = length(candidate_info$candidate_ids)
+    ))
+  }
+
+  log_q_forward <- log_q_core_forward + lcc_draw$log_prob + add_forward$log_prob
+
+  # --- REVERSE COMPUTATION ---
+  # The reverse must undo the forward: from S_new back to S_old.
+  # Reverse core: must remove forward_added_id (if any) from S_new
+  # Reverse add: must add forward_removed_id (if any) to (LCC_old, K_rev)
+
+  # Reverse core step: from S_new, remove forward_added_id (or nothing)
+  log_q_core_reverse <- joint_refresh_core_remove_one_logprob(
+    source_ids = proposed_secondary_ids,
+    removed_id = forward_added_id,
+    p_keep = JOINT_CORE_P_KEEP
+  )
+
+  if (!is.finite(log_q_core_reverse)) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = FALSE,
+      infeasible = FALSE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "zero_reverse_support",
+      zero_reverse_subreason = "core_reverse_impossible",
+      core_size = length(retained_core_ids),
+      n_removed = n_removed,
+      n_added = n_added,
+      candidate_lccs_forward = length(candidate_info$candidate_ids),
+      candidate_lccs_reverse = NA_integer_,
+      log_q_forward = log_q_forward,
+      log_q_reverse = -Inf,
+      log_q_ratio = -Inf,
+      log_q_core_forward = log_q_core_forward,
+      log_q_core_reverse = log_q_core_reverse,
+      log_q_lcc_forward = lcc_draw$log_prob,
+      log_q_lcc_reverse = NA_real_,
+      log_q_add_forward = add_forward$log_prob,
+      log_q_add_reverse = NA_real_,
+      accept_prob = 0,
+      changed_lcc = changed_lcc
+    ))
+  }
+
+  # The reverse core produces K_rev = S_new \ {forward_added_id} = retained_core_ids
+  # (same as forward core result). This is by construction, so the reverse
+  # candidate LCC set is identical to the forward one — reuse it directly.
+  reverse_candidate_info <- candidate_info
+
+  current_lcc_reverse_idx <- match(current_lcc_id, reverse_candidate_info$candidate_ids)
+  if (is.na(current_lcc_reverse_idx)) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = FALSE,
+      infeasible = FALSE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "zero_reverse_support",
+      zero_reverse_subreason = "lcc_not_in_candidates",
+      retained_core_ids = retained_core_ids,
+      retained_core_ids = retained_core_ids,
+      core_size = length(retained_core_ids),
+      n_removed = n_removed,
+      n_added = n_added,
+      candidate_lccs_forward = length(candidate_info$candidate_ids),
+      candidate_lccs_reverse = length(reverse_candidate_info$candidate_ids),
+      log_q_forward = log_q_forward,
+      log_q_reverse = -Inf,
+      log_q_ratio = -Inf,
+      log_q_core_forward = log_q_core_forward,
+      log_q_core_reverse = log_q_core_reverse,
+      log_q_lcc_forward = lcc_draw$log_prob,
+      log_q_lcc_reverse = NA_real_,
+      log_q_add_forward = add_forward$log_prob,
+      log_q_add_reverse = NA_real_,
+      accept_prob = 0,
+      changed_lcc = changed_lcc
+    ))
+  }
+
+  log_q_lcc_reverse <- reverse_candidate_info$log_weights[current_lcc_reverse_idx] -
+    joint_refresh_logsumexp(reverse_candidate_info$log_weights)
+
+  # Reverse add step: from (LCC_old, K_rev), must add forward_removed_id (or nothing)
+  reverse_base_state <- joint_refresh_build_state(
+    lcc_id = current_lcc_id,
+    core_ids = retained_core_ids,
+    lcc_library = lcc_library,
+    secondary_library = secondary_library,
+    parcel_graph = parcel_graph,
+    neighbor_idx = neighbor_idx,
+    parcel_names = parcel_names
+  )
+
+  log_q_add_reverse <- joint_refresh_categorical_add_logprob(
+    target_id = forward_removed_id,
+    base_state = reverse_base_state,
+    source_secondary_ids = proposed_secondary_ids,
+    secondary_library = secondary_library,
+    parcel_graph = parcel_graph,
+    constraints = constraints,
+    mean_secondary_cap = mean_secondary_cap
+  )
+
+  if (!is.finite(log_q_add_reverse)) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = FALSE,
+      infeasible = FALSE,
+      move_type = "replace_lcc",
+      proposal_variant = "joint_core_refresh",
+      reason = "zero_reverse_support",
+      zero_reverse_subreason = "add_reverse_failed",
+      core_size = length(retained_core_ids),
+      n_removed = n_removed,
+      n_added = n_added,
+      candidate_lccs_forward = length(candidate_info$candidate_ids),
+      candidate_lccs_reverse = length(reverse_candidate_info$candidate_ids),
+      log_q_forward = log_q_forward,
+      log_q_reverse = -Inf,
+      log_q_ratio = -Inf,
+      log_q_core_forward = log_q_core_forward,
+      log_q_core_reverse = log_q_core_reverse,
+      log_q_lcc_forward = lcc_draw$log_prob,
+      log_q_lcc_reverse = log_q_lcc_reverse,
+      log_q_add_forward = add_forward$log_prob,
+      log_q_add_reverse = log_q_add_reverse,
+      accept_prob = 0,
+      changed_lcc = changed_lcc
+    ))
+  }
+
+  log_q_reverse <- log_q_core_reverse + log_q_lcc_reverse + log_q_add_reverse
+
+  log_q_ratio <- log_q_reverse - log_q_forward
+  log_pi_ratio <- compute_penalty_difference(
+    state$total_capacity,
+    proposed_state$total_capacity,
+    constraints
+  ) + K_PRIOR_LAMBDA * (
+    length(current_secondary_ids) - length(proposed_secondary_ids)
+  )
+
+  log_accept <- log_pi_ratio + log_q_ratio
+  accept_prob <- if (log_accept >= 0) 1 else exp(log_accept)
+  accepted <- log(runif(1)) < log_accept
+
+  old_lcc_region <- NA_character_
+  new_lcc_region <- NA_character_
+  is_cross_region <- NA
+  if (!is.null(lcc_library$metadata$spectral_region)) {
+    old_lcc_region <- lcc_library$metadata$spectral_region[current_lcc_id]
+    new_lcc_region <- lcc_library$metadata$spectral_region[new_lcc_id]
+    is_cross_region <- !is.na(old_lcc_region) &&
+      !is.na(new_lcc_region) &&
+      old_lcc_region != new_lcc_region
+  }
+
+  list(
+    new_state = if (accepted) proposed_state else state,
+    accepted = accepted,
+    proposal_failed = FALSE,
+    infeasible = FALSE,
+    move_type = "replace_lcc",
+    proposal_variant = "joint_core_refresh",
+    old_lcc_id = current_lcc_id,
+    new_lcc_id = new_lcc_id,
+    k_retained = length(retained_core_ids),
+    core_size = length(retained_core_ids),
+    n_removed = n_removed,
+    n_added = n_added,
+    old_lcc_cap = lcc_library$metadata$capacity[current_lcc_id],
+    new_lcc_cap = lcc_library$metadata$capacity[new_lcc_id],
+    n_similar_forward = length(candidate_info$candidate_ids),
+    n_similar_reverse = length(reverse_candidate_info$candidate_ids),
+    candidate_lccs_forward = length(candidate_info$candidate_ids),
+    candidate_lccs_reverse = length(reverse_candidate_info$candidate_ids),
+    log_q_forward = log_q_forward,
+    log_q_reverse = log_q_reverse,
+    log_q_ratio = log_q_ratio,
+    log_q_core_forward = log_q_core_forward,
+    log_q_core_reverse = log_q_core_reverse,
+    log_q_lcc_forward = lcc_draw$log_prob,
+    log_q_lcc_reverse = log_q_lcc_reverse,
+    log_q_add_forward = add_forward$log_prob,
+    log_q_add_reverse = log_q_add_reverse,
+    accept_prob = accept_prob,
+    changed_lcc = changed_lcc,
+    old_lcc_region = old_lcc_region,
+    new_lcc_region = new_lcc_region,
+    is_cross_region = is_cross_region
+  )
+}
+
+# ============================================================================
+# KERNEL 4B: REPLACE-LCC (LEGACY GLOBAL RELOCATION)
 # ============================================================================
 
 #' Replace-LCC move with retention + capacity-matched sampling
