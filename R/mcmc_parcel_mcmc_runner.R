@@ -400,11 +400,17 @@ run_parcel_mcmc <- function(
       "mh_rejected",
       "current_lcc_not_in_library",
       "no_candidates",
-      # Retention approach reasons
+      # Legacy replace-LCC reasons
       "secondaries_incompatible",
       "no_similar_capacity_lcc",
       "selected_lcc_invalid",
-      "no_reverse_candidates"
+      "no_reverse_candidates",
+      # Joint core-refresh reasons
+      "no_lcc_for_core",
+      "zero_reverse_support",
+      "zero_reverse_lcc",
+      "zero_reverse_replay",
+      "no_change"
     ),
     count = 0L
   )
@@ -429,6 +435,17 @@ run_parcel_mcmc <- function(
   replace_lcc_k_retained <- integer(0)
   replace_lcc_n_similar_forward <- integer(0)
   replace_lcc_n_similar_reverse <- integer(0)
+  joint_refresh_reasons <- data.table::copy(replace_lcc_reasons)
+  joint_refresh_constraints <- data.table::copy(replace_lcc_constraints)
+  joint_refresh_accept_prob <- numeric(0)
+  joint_refresh_log_q_forward <- numeric(0)
+  joint_refresh_log_q_reverse <- numeric(0)
+  joint_refresh_core_size <- integer(0)
+  joint_refresh_n_added <- integer(0)
+  joint_refresh_n_removed <- integer(0)
+  joint_refresh_candidate_lccs <- integer(0)
+  joint_refresh_candidate_lccs_reverse <- integer(0)
+  joint_refresh_changed_lcc <- logical(0)
 
   # Cross-region transition tracking (for replace_lcc moves)
   cross_region_transitions <- 0L
@@ -795,13 +812,12 @@ run_parcel_mcmc <- function(
           if (enrich_result$added) online_adds <- online_adds + 1L
         }
 
-        r <- replace_lcc_move(
+        r <- joint_core_refresh_move(
           current_state,
           lcc_library,
           secondary_library,
           parcel_graph,
           constraints,
-          cap_tolerance = REPLACE_LCC_CAP_TOLERANCE,
           neighbor_idx = neighbor_idx,
           parcel_names = parcel_names
         )
@@ -810,6 +826,7 @@ run_parcel_mcmc <- function(
         # (only counts as feasible if proposal succeeded AND passed feasibility)
         stats[move_type == "replace_lcc", n_attempted := n_attempted + 1L]
         replace_lcc_reasons[reason == "attempted", count := count + 1L]
+        joint_refresh_reasons[reason == "attempted", count := count + 1L]
 
         proposed <- !isTRUE(r$proposal_failed)
         feasible <- proposed && !isTRUE(r$infeasible)
@@ -817,14 +834,17 @@ run_parcel_mcmc <- function(
         if (proposed) {
           stats[move_type == "replace_lcc", n_proposed := n_proposed + 1L]
           replace_lcc_reasons[reason == "proposed", count := count + 1L]
+          joint_refresh_reasons[reason == "proposed", count := count + 1L]
         }
         if (feasible) {
           stats[move_type == "replace_lcc", n_feasible := n_feasible + 1L]
           replace_lcc_reasons[reason == "feasible", count := count + 1L]
+          joint_refresh_reasons[reason == "feasible", count := count + 1L]
         }
         if (isTRUE(r$accepted)) {
           stats[move_type == "replace_lcc", n_accepted := n_accepted + 1L]
           replace_lcc_reasons[reason == "accepted", count := count + 1L]
+          joint_refresh_reasons[reason == "accepted", count := count + 1L]
 
           # Track cross-region transitions (only for accepted moves)
           if (!is.null(r$is_cross_region) && !is.na(r$is_cross_region)) {
@@ -839,9 +859,11 @@ run_parcel_mcmc <- function(
         # Track failure reasons
         if (!proposed) {
           replace_lcc_reasons[reason == "proposal_failed", count := count + 1L]
+          joint_refresh_reasons[reason == "proposal_failed", count := count + 1L]
         }
         if (isTRUE(r$infeasible)) {
           replace_lcc_reasons[reason == "infeasible", count := count + 1L]
+          joint_refresh_reasons[reason == "infeasible", count := count + 1L]
           constraint_label <- if (
             !is.null(r$constraint_failed) &&
               r$constraint_failed %in% replace_lcc_constraints$constraint
@@ -854,23 +876,84 @@ run_parcel_mcmc <- function(
             constraint == constraint_label,
             count := count + 1L
           ]
+          joint_refresh_constraints[
+            constraint == constraint_label,
+            count := count + 1L
+          ]
         }
         if (!is.null(r$reason) && r$reason %in% replace_lcc_reasons$reason) {
           replace_lcc_reasons[reason == r$reason, count := count + 1L]
         }
+        if (!is.null(r$reason) && r$reason %in% joint_refresh_reasons$reason) {
+          joint_refresh_reasons[reason == r$reason, count := count + 1L]
+        }
+        # Record zero_reverse_support subreasons
+        if (!is.null(r$zero_reverse_subreason)) {
+          subreason_map <- c(
+            core_reverse_impossible = "zero_reverse_lcc",
+            lcc_not_in_candidates   = "zero_reverse_lcc",
+            add_reverse_failed      = "zero_reverse_replay"
+          )
+          subreason_key <- unname(subreason_map[r$zero_reverse_subreason])
+          if (!is.na(subreason_key)) {
+            replace_lcc_reasons[reason == subreason_key, count := count + 1L]
+            joint_refresh_reasons[reason == subreason_key, count := count + 1L]
+          }
+        }
         if (feasible && !isTRUE(r$accepted)) {
           replace_lcc_reasons[reason == "mh_rejected", count := count + 1L]
+          joint_refresh_reasons[reason == "mh_rejected", count := count + 1L]
         }
 
         # Track MH diagnostics
         if (!is.null(r$accept_prob)) {
           replace_lcc_accept_prob <- c(replace_lcc_accept_prob, r$accept_prob)
+          joint_refresh_accept_prob <- c(joint_refresh_accept_prob, r$accept_prob)
         }
         if (!is.null(r$log_q_ratio)) {
           replace_lcc_log_q_ratio <- c(replace_lcc_log_q_ratio, r$log_q_ratio)
         }
+        if (!is.null(r$log_q_forward)) {
+          joint_refresh_log_q_forward <- c(
+            joint_refresh_log_q_forward,
+            r$log_q_forward
+          )
+        }
+        if (!is.null(r$log_q_reverse)) {
+          joint_refresh_log_q_reverse <- c(
+            joint_refresh_log_q_reverse,
+            r$log_q_reverse
+          )
+        }
         if (!is.null(r$k_retained)) {
           replace_lcc_k_retained <- c(replace_lcc_k_retained, r$k_retained)
+        }
+        if (!is.null(r$core_size)) {
+          joint_refresh_core_size <- c(joint_refresh_core_size, r$core_size)
+        }
+        if (!is.null(r$n_added)) {
+          joint_refresh_n_added <- c(joint_refresh_n_added, r$n_added)
+        }
+        if (!is.null(r$n_removed)) {
+          joint_refresh_n_removed <- c(joint_refresh_n_removed, r$n_removed)
+        }
+        if (!is.null(r$candidate_lccs_forward)) {
+          joint_refresh_candidate_lccs <- c(
+            joint_refresh_candidate_lccs,
+            r$candidate_lccs_forward
+          )
+        }
+        if (!is.null(r$candidate_lccs_reverse)) {
+          joint_refresh_candidate_lccs_reverse <- c(
+            joint_refresh_candidate_lccs_reverse,
+            r$candidate_lccs_reverse
+          )
+        }
+        if (!is.null(r$changed_lcc)) {
+          joint_refresh_changed_lcc <- c(
+            joint_refresh_changed_lcc,
+            isTRUE(r$changed_lcc)
+          )
         }
         if (!is.null(r$n_similar_forward)) {
           replace_lcc_n_similar_forward <- c(
@@ -1062,7 +1145,7 @@ run_parcel_mcmc <- function(
     cli::cli_alert_info("Penalty: mean={mean_pen}, max={max_pen}")
 
     if (replace_lcc_reasons[reason == "attempted", count] > 0) {
-      cli::cli_h3("Replace-LCC Diagnostics")
+      cli::cli_h3("Joint Core Refresh Diagnostics")
       for (i in seq_len(nrow(replace_lcc_reasons))) {
         r <- replace_lcc_reasons$reason[i]
         c <- replace_lcc_reasons$count[i]
@@ -1071,7 +1154,7 @@ run_parcel_mcmc <- function(
         }
       }
       if (sum(replace_lcc_constraints$count) > 0) {
-        cli::cli_h3("Replace-LCC Constraint Failures")
+        cli::cli_h3("Joint Core Refresh Constraint Failures")
         for (i in seq_len(nrow(replace_lcc_constraints))) {
           cn <- replace_lcc_constraints$constraint[i]
           c <- replace_lcc_constraints$count[i]
@@ -1182,6 +1265,17 @@ run_parcel_mcmc <- function(
       replace_lcc_k_retained = replace_lcc_k_retained,
       replace_lcc_n_similar_forward = replace_lcc_n_similar_forward,
       replace_lcc_n_similar_reverse = replace_lcc_n_similar_reverse,
+      joint_refresh_reasons = joint_refresh_reasons,
+      joint_refresh_constraints = joint_refresh_constraints,
+      joint_refresh_accept_prob = joint_refresh_accept_prob,
+      joint_refresh_log_q_forward = joint_refresh_log_q_forward,
+      joint_refresh_log_q_reverse = joint_refresh_log_q_reverse,
+      joint_refresh_core_size = joint_refresh_core_size,
+      joint_refresh_n_added = joint_refresh_n_added,
+      joint_refresh_n_removed = joint_refresh_n_removed,
+      joint_refresh_candidate_lccs = joint_refresh_candidate_lccs,
+      joint_refresh_candidate_lccs_reverse = joint_refresh_candidate_lccs_reverse,
+      joint_refresh_changed_lcc = joint_refresh_changed_lcc,
       # Cross-region transition tracking
       cross_region_transitions = cross_region_transitions,
       same_region_transitions = same_region_transitions,
