@@ -16,8 +16,6 @@ ROW_MIN_CROSSING_LENGTH <- 20 # feet
 
 # Convergence diagnostics thresholds
 RHAT_CONVERGENCE_THRESHOLD <- 1.1 # R-hat < this indicates convergence
-CHAIN_OVERLAP_THRESHOLD <- 0.1 # Jaccard < this suggests separation
-MIN_REGION_CAPACITY_FRACTION <- 0.5 # Fraction of min_capacity needed in region
 
 # ============================================================================
 # CAPACITY PRIOR CONFIGURATION

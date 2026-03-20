@@ -3,24 +3,6 @@
 # Computes ESS, unique states, geographic coverage, and comparison metrics.
 
 # ============================================================================
-# EFFECTIVE SAMPLE SIZE
-# ============================================================================
-
-#' Compute effective sample size from trajectory
-#'
-#' @param x Numeric vector
-#' @param lag_max Maximum lag for autocorrelation
-#' @return ESS estimate
-compute_ess_parcel <- function(x, lag_max = 50) {
-  n <- length(x)
-  if (n < 10) return(NA_real_)
-  if (sd(x) < 1e-10) return(1)  # Constant trace
-
-  acf_vals <- acf(x, lag.max = min(lag_max, n - 1), plot = FALSE)$acf
-  n / (1 + 2 * sum(abs(acf_vals[2:min(lag_max + 1, length(acf_vals))])))
-}
-
-# ============================================================================
 # UNIQUE STATE COUNTING
 # ============================================================================
 
@@ -39,62 +21,6 @@ count_unique_parcel_states <- function(parcel_samples) {
   length(unique(state_keys))
 }
 
-#' Extract unique LCC configurations from parcel samples
-#'
-#' Uses state$lcc_parcels which is already stored in each state (see R/parcel_mcmc_state.R:15).
-#' No need to recompute via get_lcc_parcels().
-#'
-#' @param parcel_samples List of parcel states from run_parcel_mcmc()
-#' @param parcel_graph igraph with capacity/area attributes
-#' @return data.table with columns: lcc_key, parcel_ids (list), capacity, area, count
-extract_unique_lccs <- function(parcel_samples, parcel_graph) {
-  # Extract LCC from each sample - already stored as state$lcc_parcels
-  lcc_list <- lapply(parcel_samples, function(state) {
-    sort(state$lcc_parcels)
-  })
-
-  # Create digest keys for deduplication (matches discovery format)
-  lcc_keys <- vapply(lcc_list, function(lcc) {
-    if (length(lcc) == 0) return("__EMPTY__")
-    digest::digest(lcc, algo = "xxhash64")
-  }, character(1))
-
-  # Count occurrences and find first index for each unique key
-  unique_keys <- unique(lcc_keys)
-  first_idx <- match(unique_keys, lcc_keys)
-  key_counts <- table(lcc_keys)
-
-  # Build result table using stored parcel lists (not reconstructed from key)
-  results <- lapply(seq_along(unique_keys), function(i) {
-    key <- unique_keys[i]
-    parcel_ids <- lcc_list[[first_idx[i]]]
-
-    # Handle empty LCC case
-    if (key == "__EMPTY__") {
-      return(data.table::data.table(
-        lcc_key = key,
-        parcel_ids = list(character(0)),
-        capacity = 0L,
-        area = 0,
-        count = as.integer(key_counts[[key]])
-      ))
-    }
-
-    capacity <- sum(igraph::V(parcel_graph)[parcel_ids]$capacity)
-    area <- sum(igraph::V(parcel_graph)[parcel_ids]$area)
-
-    data.table::data.table(
-      lcc_key = key,
-      parcel_ids = list(parcel_ids),
-      capacity = as.integer(capacity),
-      area = area,
-      count = as.integer(key_counts[[key]])
-    )
-  })
-
-  data.table::rbindlist(results)
-}
-
 # ============================================================================
 # COMPONENT DIAGNOSTICS
 # ============================================================================
@@ -107,75 +33,6 @@ trace_n_secondaries <- function(parcel_samples) {
   vapply(parcel_samples, function(s) {
     length(s$secondary_blocks)
   }, integer(1))
-}
-
-#' Count secondary birth/death events
-#'
-#' @param parcel_samples List of parcel states
-#' @return List with births, deaths, net_change
-count_secondary_turnover <- function(parcel_samples) {
-  n_sec <- trace_n_secondaries(parcel_samples)
-  diffs <- diff(n_sec)
-
-  list(
-    births = sum(diffs > 0),
-    deaths = sum(diffs < 0),
-    net_change = sum(diffs)
-  )
-}
-
-# ============================================================================
-# GEOGRAPHIC COVERAGE
-# ============================================================================
-
-#' Compute centroid trajectory
-#'
-#' @param parcel_samples List of parcel states
-#' @param parcel_graph igraph with centroid_x, centroid_y attributes
-#' @return data.table with step, centroid_x, centroid_y
-trace_centroids <- function(parcel_samples, parcel_graph) {
-  if (!"centroid_x" %in% igraph::vertex_attr_names(parcel_graph)) {
-    return(NULL)
-  }
-
-  centroids <- lapply(seq_along(parcel_samples), function(i) {
-    state <- parcel_samples[[i]]
-    parcels <- state$X
-    areas <- igraph::V(parcel_graph)[parcels]$area
-    cx <- igraph::V(parcel_graph)[parcels]$centroid_x
-    cy <- igraph::V(parcel_graph)[parcels]$centroid_y
-
-    # Area-weighted centroid
-    total_area <- sum(areas)
-    data.table::data.table(
-      step = i,
-      centroid_x = sum(cx * areas) / total_area,
-      centroid_y = sum(cy * areas) / total_area
-    )
-  })
-
-  data.table::rbindlist(centroids)
-}
-
-#' Compute geographic spread (bounding box area) over time
-#'
-#' @param parcel_samples List of parcel states
-#' @param parcel_graph igraph with centroid_x, centroid_y
-#' @return Numeric vector of bounding box areas
-trace_geographic_spread <- function(parcel_samples, parcel_graph) {
-  if (!"centroid_x" %in% igraph::vertex_attr_names(parcel_graph)) {
-    return(rep(NA_real_, length(parcel_samples)))
-  }
-
-  vapply(parcel_samples, function(state) {
-    parcels <- state$X
-    cx <- igraph::V(parcel_graph)[parcels]$centroid_x
-    cy <- igraph::V(parcel_graph)[parcels]$centroid_y
-
-    if (length(cx) < 2) return(0)
-
-    (max(cx) - min(cx)) * (max(cy) - min(cy))
-  }, numeric(1))
 }
 
 # ============================================================================

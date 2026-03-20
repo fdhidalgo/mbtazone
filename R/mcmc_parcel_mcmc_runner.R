@@ -474,9 +474,6 @@ run_parcel_mcmc <- function(
   multi_birth_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
   multi_death_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
 
-  # DEBUG: Death proposal failure tracking
-  death_fail_reasons <- list()
-
   # Swap move tracking (capacity-balanced swap)
   swap_delta_caps <- numeric(0) # Track capacity change for accepted swaps
   swap_n_similar_fwd <- integer(0) # Forward similar-capacity set sizes
@@ -1150,20 +1147,6 @@ run_parcel_mcmc <- function(
       acc <- stats$n_accepted[i]
       rate <- if (att > 0) round(100 * acc / att, 1) else 0
       cli::cli_alert_info("{mt}: {acc}/{att} accepted ({rate}%)")
-    }
-
-    # DEBUG: Death proposal failure breakdown
-    if (length(death_fail_reasons) > 0) {
-      cli::cli_h3("Death Proposal Failure Analysis (DEBUG)")
-      reasons <- sapply(death_fail_reasons, `[[`, "reason")
-      k_values <- sapply(death_fail_reasons, `[[`, "k")
-      reason_counts <- table(reasons)
-      for (r_name in names(reason_counts)) {
-        cli::cli_alert_info("  {r_name}: {reason_counts[r_name]}")
-      }
-      cli::cli_alert_info("  k distribution at failure: min={min(k_values)}, median={median(k_values)}, max={max(k_values)}")
-      cli::cli_alert_info("  k=0 failures: {sum(k_values == 0)}")
-      cli::cli_alert_info("  k>=3 failures (should be rare): {sum(k_values >= 3)}")
     }
 
     # Capacity prior summary

@@ -49,32 +49,6 @@ parcel_ids_to_indices <- function(parcel_ids, parcel_names) {
   idx[!is.na(idx)]
 }
 
-#' Get dominant region for a set of parcels
-#'
-#' Determines which region contains the plurality of parcels
-#' (by count). Used to assign region labels to LCC library entries.
-#'
-#' @param parcel_ids Character vector of parcel IDs
-#' @param region_assignments Named character vector mapping parcel IDs to regions
-#' @return Character string of dominant region (e.g., "R1"), or NA if no assignments
-get_dominant_region <- function(parcel_ids, region_assignments) {
-  if (is.null(region_assignments) || length(parcel_ids) == 0) {
-    return(NA_character_)
-  }
-
-  # Get region assignments for these parcels
-  regions <- region_assignments[parcel_ids]
-  regions <- regions[!is.na(regions)]
-
-  if (length(regions) == 0) {
-    return(NA_character_)
-  }
-
-  # Find the region with the most parcels
-  region_counts <- table(regions)
-  names(region_counts)[which.max(region_counts)]
-}
-
 #' Select blocks by coverage-aware greedy algorithm
 #'
 #' Selects blocks to maximize geographic coverage. Each block is scored by how
