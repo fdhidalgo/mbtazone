@@ -39,6 +39,7 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 - **Parcel graph**: Adjacency graph of parcels built with spatial buffers; nodes carry capacity/area attributes
 - **Spanning tree**: Used for contiguity checks and valid-cut enumeration during MCMC proposals
 - **Station constraints**: LCCs must include a minimum share of station-area capacity and land area
+- **Joint core refresh**: Global relocation kernel that simultaneously swaps the LCC and adds/removes 0-or-1 secondary blocks via a capped-at-1 categorical proposal (replaces the earlier Bernoulli scan design)
 
 **Module overview:**
 
@@ -52,7 +53,7 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 | `mcmc_parcel_library.R` | LCC discovery engine (~3K lines): BFS, capacity bands, tree-based discovery, seed selection, `generate_initial_states_from_lccs()` |
 | `mcmc_parcel_feasibility.R` | `analyze_parcel_feasibility()` — checks if district can meet constraints |
 | `mcmc_spanning_tree.R` | Spanning tree operations, `find_valid_cuts()` for contiguity-preserving proposals |
-| `mcmc_parcel_mcmc_kernels.R` | Proposal kernels: birth/death, secondary swap, symmetric moves |
+| `mcmc_parcel_mcmc_kernels.R` | Proposal kernels: birth/death, secondary swap, joint core refresh (capped-at-1 categorical) |
 | `mcmc_parcel_mcmc_state.R` | State management, initialization, invariant validation |
 | `mcmc_parcel_mcmc_runner.R` | `run_parcel_mcmc()` — single-chain execution with burn-in |
 | `mcmc_parcel_multichain.R` | Multi-chain parallel execution, Gelman-Rubin diagnostics, geographic coverage |
@@ -165,6 +166,8 @@ mbtazone/
 ├── dev/                         # Development resources
 │   ├── PRD.md                   # Product Requirements Document
 │   ├── build_zoning_data.R      # Rebuild zoning_parameters dataset
+│   ├── test_joint_refresh.R     # Kernel benchmark harness (grid sweep)
+│   ├── test_k_exploration.R     # Single-chain k-trace test
 │   ├── compliance_model_docs/   # Excel model documentation
 │   └── proof_of_concept/        # Student prototype (reference only)
 │
@@ -271,7 +274,7 @@ Use when parcels and spatial layers are fixed across iterations. Don't use for s
 
 ### Test Organization (tests/testthat/)
 
-~4,900 lines of test code across 7 files (all for the compliance engine; MCMC modules do not yet have tests):
+~5,200 lines of test code across 8 files:
 
 - **`test-gis-operations.R`** (~1,250 lines): Spatial operation tests
 - **`test-compliance-pipeline.R`** (~1,190 lines): Integration tests for complete workflow
@@ -280,6 +283,7 @@ Use when parcels and spatial layers are fixed across iterations. Don't use for s
 - **`test-integration.R`** (~600 lines): End-to-end pipeline tests with synthetic data
 - **`test-data-loaders.R`** (~330 lines): Data loading and validation tests
 - **`test-zoning-parameters.R`** (~170 lines): Parameter extraction tests
+- **`test-mcmc-joint-refresh.R`** (~290 lines): Joint core refresh kernel tests (core remove, categorical add, integration)
 
 ### Test Fixtures
 
