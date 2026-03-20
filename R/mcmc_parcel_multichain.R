@@ -181,39 +181,8 @@ run_parcel_chain_from_region <- function(config,
   result$initialization_failed <- FALSE
   result$failure_reason      <- NULL
 
-  minimal_diagnostics <- list(
-    capacity_trajectory         = result$diagnostics$capacity_trajectory,
-    n_components_trajectory     = result$diagnostics$n_components_trajectory,
-    n_secondaries_trajectory    = result$diagnostics$n_secondaries_trajectory,
-    lcc_capacity_trajectory     = result$diagnostics$lcc_capacity_trajectory,
-    centroid_x_trajectory       = result$diagnostics$centroid_x_trajectory,
-    centroid_y_trajectory       = result$diagnostics$centroid_y_trajectory,
-    penalty_trajectory          = result$diagnostics$penalty_trajectory,
-    parcel_inclusion_count      = result$diagnostics$parcel_inclusion_count,
-    n_steps                     = result$diagnostics$n_steps,
-    symmetric_bd_births         = result$diagnostics$symmetric_bd_births,
-    symmetric_bd_deaths         = result$diagnostics$symmetric_bd_deaths,
-    replace_lcc_reasons         = result$diagnostics$replace_lcc_reasons,
-    replace_lcc_constraints     = result$diagnostics$replace_lcc_constraints,
-    replace_lcc_accept_prob     = result$diagnostics$replace_lcc_accept_prob,
-    replace_lcc_log_q_ratio     = result$diagnostics$replace_lcc_log_q_ratio,
-    replace_lcc_k_retained      = result$diagnostics$replace_lcc_k_retained,
-    replace_lcc_n_similar_forward = result$diagnostics$replace_lcc_n_similar_forward,
-    replace_lcc_n_similar_reverse = result$diagnostics$replace_lcc_n_similar_reverse,
-    swap_delta_caps             = result$diagnostics$swap_delta_caps,
-    swap_n_similar_fwd          = result$diagnostics$swap_n_similar_fwd,
-    swap_n_similar_rev          = result$diagnostics$swap_n_similar_rev,
-    swap_reasons                = result$diagnostics$swap_reasons,
-    swap_constraints            = result$diagnostics$swap_constraints,
-    cross_region_transitions    = result$diagnostics$cross_region_transitions,
-    same_region_transitions     = result$diagnostics$same_region_transitions,
-    online_adds                 = result$diagnostics$online_adds,
-    final_library_size          = result$diagnostics$final_library_size,
-    timing                      = result$diagnostics$timing
-  )
-
   list(
-    diagnostics          = minimal_diagnostics,
+    diagnostics          = result$diagnostics,
     stats                = result$stats,
     chain_id             = result$chain_id,
     region_id            = result$region_id,
@@ -666,4 +635,3 @@ create_parcel_irreducibility_report <- function(chain_results,
     summary = summary_text
   )
 }
-
