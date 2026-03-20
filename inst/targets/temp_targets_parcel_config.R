@@ -259,9 +259,6 @@ STORE_LCC_SIGNATURES <- TRUE
 # Default number of chains for parcel multi-chain analysis
 DEFAULT_N_CHAINS <- 4L
 
-# Number of k=0 (no-secondary) chains initialized with standalone-feasible LCCs
-N_K0_CHAINS <- 2L
-
 # Note: Use MCMC_STEPS_MACRO from R/config.R for step counts
 
 # Minimum Jaccard overlap for chains to be considered "mixing"

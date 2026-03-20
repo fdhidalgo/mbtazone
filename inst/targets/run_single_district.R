@@ -14,8 +14,8 @@ if (!identical(install_status, 0L)) {
   stop("Failed to install current mbtazone package before running targets.")
 }
 
-district_name <- "Abington"
-district_type <- "commuter_rail" #One of: "rapid_transit", "commuter_rail", "adjacent", and "adjacent_small_town
+district_name <- "Norwood"
+district_type <- "rapid_transit" #One of: "rapid_transit", "commuter_rail", "adjacent", and "adjacent_small_town
 store <- paste0("ext/_targets_", gsub(" ", "_", district_name))
 
 Sys.setenv(DISTRICT_NAME = district_name, DISTRICT_TYPE = district_type)

@@ -364,22 +364,9 @@ list(
     )
   ),
 
-  # k=0 chains (no-secondary, standalone-feasible LCCs only)
-  tar_target(
-    parcel_initial_states_k0,
-    generate_k0_initial_states(
-      lcc_library       = discovered_lcc_library,
-      secondary_library = discovered_secondary_library,
-      parcel_graph      = parcel_graph_result$parcel_graph,
-      constraints       = constraints,
-      n_k0_chains       = N_K0_CHAINS
-    )
-  ),
-
-  # Combine: k>0 first, then k=0
   tar_target(
     parcel_initial_states,
-    c(parcel_initial_states_k_pos, parcel_initial_states_k0)
+    parcel_initial_states_k_pos
   ),
 
   # Splits the list into branchable elements
@@ -426,14 +413,12 @@ list(
     packages  = c("data.table", "igraph", "purrr", "cli", "mbtazone")
   ),
 
-  # Combine all parcel chain results into named list
-  # k>0 chains get "chain_N" names, k=0 chains get "k0_chain_N" names
+  # Name chains consistently
   tar_target(
     all_parcel_chain_results,
     setNames(
       parcel_chain_results,
-      c(paste0("chain_", seq_along(parcel_initial_states_k_pos)),
-        paste0("k0_chain_", seq_along(parcel_initial_states_k0)))
+      paste0("chain_", seq_along(parcel_initial_states))
     )
   ),
 

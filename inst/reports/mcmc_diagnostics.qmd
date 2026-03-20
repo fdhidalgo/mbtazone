@@ -948,7 +948,7 @@ traj_list <- lapply(seq_along(valid_chains), function(i) {
 })
 traj_df <- data.table::rbindlist(traj_list)
 
-# Dynamic chain colors: accommodate both k>0 and k=0 chains
+# Dynamic chain colors
 chain_colors <- c("#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#d95f02", "#8c510a")[seq_along(valid_chains)]
 
 ggplot(traj_df, aes(x = step, y = capacity, color = chain)) +
@@ -999,133 +999,6 @@ ggplot(traj_sec_df, aes(x = step, y = n_secondaries, color = chain)) +
   theme_minimal()
 ```
 
-### k=0 Chain Initialization Diagnostic
-
-```{r}
-#| label: k0-chain-diagnostic
-#| fig-height: 5
-#| fig-width: 10
-#| results: asis
-
-# Detect k=0 chains by name prefix
-k0_names <- grep("^k0_", names(parcel_chain_results), value = TRUE)
-kpos_names <- setdiff(names(parcel_chain_results), k0_names)
-
-if (length(k0_names) > 0 && length(kpos_names) > 0) {
-  # Helper: extract post-burn-in secondary count trajectory
-  get_post_burnin_k <- function(ch) {
-    n_sec <- ch$diagnostics$n_secondaries_trajectory
-    burnin <- max(1, length(n_sec) %/% 2)
-    n_sec[burnin:length(n_sec)]
-  }
-
-  get_post_burnin_cap <- function(ch) {
-    cap <- ch$diagnostics$capacity_trajectory
-    burnin <- max(1, length(cap) %/% 2)
-    cap[burnin:length(cap)]
-  }
-
-  get_post_burnin_lcc_cap <- function(ch) {
-    lcc_cap <- ch$diagnostics$lcc_capacity_trajectory
-    burnin <- max(1, length(lcc_cap) %/% 2)
-    lcc_cap[burnin:length(lcc_cap)]
-  }
-
-  # k>0 chain stats
-  kpos_k     <- unlist(lapply(parcel_chain_results[kpos_names], get_post_burnin_k))
-  kpos_cap   <- unlist(lapply(parcel_chain_results[kpos_names], get_post_burnin_cap))
-  kpos_lcc   <- unlist(lapply(parcel_chain_results[kpos_names], get_post_burnin_lcc_cap))
-  kpos_k0pct <- mean(kpos_k == 0)
-
-  # k=0 chain stats
-  k0_k       <- unlist(lapply(parcel_chain_results[k0_names], get_post_burnin_k))
-  k0_cap     <- unlist(lapply(parcel_chain_results[k0_names], get_post_burnin_cap))
-  k0_lcc     <- unlist(lapply(parcel_chain_results[k0_names], get_post_burnin_lcc_cap))
-  k0_k0pct   <- mean(k0_k == 0)
-
-  comparison_dt <- data.table::data.table(
-    Metric = c("Time at k=0", "Mean k", "Mean capacity", "Mean LCC capacity"),
-    `k>0 Chains (mean)` = c(
-      sprintf("%.1f%%", 100 * kpos_k0pct),
-      round(mean(kpos_k), 2),
-      round(mean(kpos_cap), 0),
-      round(mean(kpos_lcc), 0)
-    ),
-    `k=0 Chains (mean)` = c(
-      sprintf("%.1f%%", 100 * k0_k0pct),
-      round(mean(k0_k), 2),
-      round(mean(k0_cap), 0),
-      round(mean(k0_lcc), 0)
-    )
-  )
-
-  knitr::kable(comparison_dt)
-
-  # Build comparison trajectory plot
-  traj_k0_list <- lapply(seq_along(k0_names), function(i) {
-    ch <- parcel_chain_results[[k0_names[i]]]
-    n_sec <- ch$diagnostics$n_secondaries_trajectory
-    n_steps <- length(n_sec)
-    idx <- seq(1, n_steps, by = max(1, n_steps %/% 500))
-    data.table::data.table(
-      step = idx,
-      n_secondaries = n_sec[idx],
-      chain = k0_names[i],
-      type = "k=0"
-    )
-  })
-
-  traj_kpos_list <- lapply(seq_along(kpos_names), function(i) {
-    ch <- parcel_chain_results[[kpos_names[i]]]
-    n_sec <- ch$diagnostics$n_secondaries_trajectory
-    n_steps <- length(n_sec)
-    idx <- seq(1, n_steps, by = max(1, n_steps %/% 500))
-    data.table::data.table(
-      step = idx,
-      n_secondaries = n_sec[idx],
-      chain = kpos_names[i],
-      type = "k>0"
-    )
-  })
-
-  traj_compare <- data.table::rbindlist(c(traj_kpos_list, traj_k0_list))
-
-  # Use named chain colors palette
-  all_chain_names <- c(kpos_names, k0_names)
-  kpos_cols <- c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3")[seq_along(kpos_names)]
-  k0_cols   <- c("#d95f02", "#8c510a")[seq_along(k0_names)]
-  names(kpos_cols) <- kpos_names
-  names(k0_cols)   <- k0_names
-  compare_colors <- c(kpos_cols, k0_cols)
-
-  p <- ggplot(traj_compare, aes(x = step, y = n_secondaries, color = chain)) +
-    geom_line(alpha = 0.7, linewidth = 0.4) +
-    scale_color_manual(values = compare_colors, name = "Chain") +
-    labs(
-      title = "Secondary Count: k>0 vs k=0 Initialized Chains",
-      x = "MCMC Step",
-      y = "Number of Secondaries"
-    ) +
-    theme_minimal()
-  print(p)
-
-  # Narrative
-  k0_mean_k   <- mean(k0_k)
-  kpos_mean_k <- mean(kpos_k)
-
-  if (k0_mean_k < 3) {
-    cat("\n\n**k=0 chains stayed at low k** (mean k =", round(k0_mean_k, 2),
-        "after burn-in). The posterior is likely multimodal in k; the k=0 / low-k ",
-        "region is a valid mode that k>0 chains cannot reach.\n\n")
-  } else {
-    cat("\n\n**k=0 chains drifted up** to mean k =", round(k0_mean_k, 2),
-        " (comparable to k>0 chains at", round(kpos_mean_k, 2),
-        "). k=0 has low posterior mass; high-k dominates.\n\n")
-  }
-} else {
-  cat("\n\n*No k=0 chains detected — section skipped.*\n\n")
-}
-```
 
 ## Move Acceptance Diagnostics
 
@@ -1456,14 +1329,12 @@ endpoints <- traj_df[,
   by = chain
 ]
 
-# Chain colors (k>0 chains + k=0 chains)
+# Chain colors
 chain_colors <- c(
   chain_1 = "#e41a1c",
   chain_2 = "#377eb8",
   chain_3 = "#4daf4a",
-  chain_4 = "#984ea3",
-  k0_chain_1 = "#d95f02",
-  k0_chain_2 = "#8c510a"
+  chain_4 = "#984ea3"
 )
 
 # Make nice chain labels
