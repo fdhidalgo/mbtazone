@@ -39,6 +39,7 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 - **Parcel graph**: Adjacency graph of parcels built with spatial buffers; nodes carry capacity/area attributes
 - **Spanning tree**: Used for contiguity checks and valid-cut enumeration during MCMC proposals
 - **Station constraints**: LCCs must include a minimum share of station-area capacity and land area
+- **Reference measure correction**: Birth/death kernels include a `lchoose(n_pool, k_old) - lchoose(n_pool, k_new)` term in the MH ratio to cancel the combinatorial volume C(n_pool, k). Without this, the uniform proposal over the k-subset of secondaries implicitly favors mid-range k values where C(n,k) is largest, overwhelming the geometric prior. With the correction, the marginal on k matches the intended `K_PRIOR_LAMBDA` geometric prior, enabling proper exploration of k=0 states.
 - **Replace-LCC**: Simple global relocation kernel that swaps the LCC while keeping all secondaries fixed (k unchanged). Birth/death + reference measure correction handles k exploration, so replace-LCC only needs to handle LCC exploration. Uses capacity-similar sampling with cached compatible LCC sets for efficiency.
 
 **Module overview:**
