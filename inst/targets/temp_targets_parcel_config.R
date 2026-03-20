@@ -121,12 +121,15 @@ BFS_RESERVATION_SEC <- 100L
 #   Band 1: [0.5, 0.75] * 2045 = [1023, 1534] - Minimum viable LCCs
 #   Band 2: [0.75, 1.0] * 2045 = [1534, 2045] - Near-minimum (posterior mode)
 #   Band 3: [1.0, 1.5] * 2045 = [2045, 3068] - Small excess
-# High-capacity LCCs (>3068) are adequately covered by tree discovery.
+#   Band 4: [1.5, 2.5] * 2045 = [3068, 5113] - High-capacity, enables low-k states
+# Norwood diagnostic: standalone feasibility peaks at 62-72% for capacity
+# 2000-3000, and remains ~29% above 3000. The old 1.5x cap excluded 10K+
+# standalone-feasible LCCs needed for low-k exploration.
 LCC_CAPACITY_BANDS_RELATIVE <- list(
   c(0.5, 0.75),   # Need substantial secondaries to hit min_capacity
-
   c(0.75, 1.0),   # Primary posterior mode under capacity prior
-  c(1.0, 1.5)     # Small excess, still favored over very high capacity
+  c(1.0, 1.5),    # Small excess, still favored over very high capacity
+  c(1.5, 2.5)     # High-capacity: critical for low-k (standalone/few secondaries)
 )
 
 # Number of LCC samples per capacity band
@@ -184,7 +187,7 @@ REPLACE_LCC_CAP_TOLERANCE <- 800
 # Core step: remove 0 or 1 secondary block
 #   P(remove nothing) = p_keep
 #   P(remove block b)  = (1 - p_keep) / |S_old|  for each b in S_old
-JOINT_CORE_P_KEEP <- 0.5
+JOINT_CORE_P_KEEP <- 0.30
 
 # LCC proposal weight:
 #   log w(lcc | K) = -JOINT_LCC_EXCESS_RATE * max(cap_lcc - required_cap(K), 0)
@@ -195,7 +198,7 @@ JOINT_LCC_EXCESS_RATE <- 0.003
 #   w_b = exp(-|cap_b - mean_secondary_cap| / mean_secondary_cap)
 #   Higher w_0 → more "add nothing" → smaller proposals
 #   Lower w_0 → more additions → more diagonal movement
-JOINT_ADD_WEIGHT_NOTHING <- 5.0
+JOINT_ADD_WEIGHT_NOTHING <- 10.0
 
 # Capacity tolerance for secondary swap similar-capacity sampling
 # Blocks within ±SWAP_CAP_TOLERANCE of removed block are candidates for swap

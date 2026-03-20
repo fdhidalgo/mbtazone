@@ -1827,6 +1827,9 @@ joint_core_refresh_move <- function(
   neighbor_idx = NULL,
   parcel_names = NULL
 ) {
+  current_secondary_ids <- sort(unique(as.integer(state$secondary_blocks)))
+  k_before <- length(current_secondary_ids)
+
   if (lcc_library$n_blocks == 0) {
     return(list(
       new_state = state,
@@ -1834,7 +1837,10 @@ joint_core_refresh_move <- function(
       proposal_failed = TRUE,
       move_type = "replace_lcc",
       proposal_variant = "joint_core_refresh",
-      reason = "no_candidates"
+      reason = "no_candidates",
+      k_before = k_before,
+      k_after = k_before,
+      delta_k = 0L
     ))
   }
 
@@ -1846,12 +1852,23 @@ joint_core_refresh_move <- function(
       proposal_failed = TRUE,
       move_type = "replace_lcc",
       proposal_variant = "joint_core_refresh",
-      reason = "current_lcc_not_in_library"
+      reason = "current_lcc_not_in_library",
+      k_before = k_before,
+      k_after = k_before,
+      delta_k = 0L
     ))
   }
 
-  current_secondary_ids <- sort(unique(as.integer(state$secondary_blocks)))
   mean_secondary_cap <- joint_refresh_mean_secondary_capacity(secondary_library)
+  lcc_station_caps <- lcc_library$metadata$capacity_in_station
+  safe_station_cap <- function(lcc_id) {
+    if (!is.null(lcc_station_caps) && length(lcc_station_caps) >= lcc_id) {
+      lcc_station_caps[lcc_id]
+    } else {
+      NA_real_
+    }
+  }
+  old_lcc_station_cap <- safe_station_cap(current_lcc_id)
 
   # --- CORE STEP: remove 0 or 1 block ---
   core_result <- joint_refresh_core_remove_one(
@@ -1861,6 +1878,7 @@ joint_core_refresh_move <- function(
   retained_core_ids <- core_result$retained_ids
   forward_removed_id <- core_result$removed_id
   log_q_core_forward <- core_result$log_prob
+  n_removed <- if (is.null(forward_removed_id)) 0L else 1L
 
   # --- LCC STEP: sample new LCC compatible with core K ---
   candidate_info <- joint_refresh_candidate_lccs(
@@ -1879,10 +1897,15 @@ joint_core_refresh_move <- function(
       move_type = "replace_lcc",
       proposal_variant = "joint_core_refresh",
       reason = "no_lcc_for_core",
+      k_before = k_before,
+      k_after = k_before - n_removed,
+      delta_k = -n_removed,
       core_size = length(retained_core_ids),
-      n_removed = if (is.null(forward_removed_id)) 0L else 1L,
+      n_removed = n_removed,
       n_added = 0L,
-      candidate_lccs_forward = 0L
+      candidate_lccs_forward = 0L,
+      old_lcc_station_cap = old_lcc_station_cap,
+      new_lcc_station_cap = NA_real_
     ))
   }
 
@@ -1891,6 +1914,7 @@ joint_core_refresh_move <- function(
     log_weights = candidate_info$log_weights
   )
   new_lcc_id <- lcc_draw$lcc_id
+  new_lcc_station_cap <- safe_station_cap(new_lcc_id)
 
   base_state <- joint_refresh_build_state(
     lcc_id = new_lcc_id,
@@ -1910,10 +1934,15 @@ joint_core_refresh_move <- function(
       move_type = "replace_lcc",
       proposal_variant = "joint_core_refresh",
       reason = "selected_lcc_invalid",
+      k_before = k_before,
+      k_after = k_before - n_removed,
+      delta_k = -n_removed,
       core_size = length(retained_core_ids),
-      n_removed = if (is.null(forward_removed_id)) 0L else 1L,
+      n_removed = n_removed,
       n_added = 0L,
-      candidate_lccs_forward = length(candidate_info$candidate_ids)
+      candidate_lccs_forward = length(candidate_info$candidate_ids),
+      old_lcc_station_cap = old_lcc_station_cap,
+      new_lcc_station_cap = new_lcc_station_cap
     ))
   }
 
@@ -1931,8 +1960,9 @@ joint_core_refresh_move <- function(
   proposed_state <- add_forward$state
   proposed_secondary_ids <- sort(unique(as.integer(proposed_state$secondary_blocks)))
   forward_added_id <- add_forward$added_id
-  n_removed <- if (is.null(forward_removed_id)) 0L else 1L
   n_added <- if (is.null(forward_added_id)) 0L else 1L
+  k_after <- length(proposed_secondary_ids)
+  delta_k <- k_after - k_before
   changed_lcc <- !identical(new_lcc_id, current_lcc_id)
 
   if (!changed_lcc && setequal(proposed_secondary_ids, current_secondary_ids)) {
@@ -1943,10 +1973,15 @@ joint_core_refresh_move <- function(
       move_type = "replace_lcc",
       proposal_variant = "joint_core_refresh",
       reason = "no_change",
+      k_before = k_before,
+      k_after = k_after,
+      delta_k = delta_k,
       core_size = length(retained_core_ids),
       n_removed = n_removed,
       n_added = n_added,
-      candidate_lccs_forward = length(candidate_info$candidate_ids)
+      candidate_lccs_forward = length(candidate_info$candidate_ids),
+      old_lcc_station_cap = old_lcc_station_cap,
+      new_lcc_station_cap = new_lcc_station_cap
     ))
   }
 
@@ -1965,10 +2000,17 @@ joint_core_refresh_move <- function(
       move_type = "replace_lcc",
       proposal_variant = "joint_core_refresh",
       constraint_failed = feasibility$constraint_failed,
+      k_before = k_before,
+      k_after = k_after,
+      delta_k = delta_k,
       core_size = length(retained_core_ids),
       n_removed = n_removed,
       n_added = n_added,
-      candidate_lccs_forward = length(candidate_info$candidate_ids)
+      candidate_lccs_forward = length(candidate_info$candidate_ids),
+      old_lcc_station_cap = old_lcc_station_cap,
+      new_lcc_station_cap = new_lcc_station_cap,
+      old_total_station_cap = state$total_capacity_in_station,
+      new_total_station_cap = proposed_state$total_capacity_in_station
     ))
   }
 
@@ -1996,6 +2038,9 @@ joint_core_refresh_move <- function(
       proposal_variant = "joint_core_refresh",
       reason = "zero_reverse_support",
       zero_reverse_subreason = "core_reverse_impossible",
+      k_before = k_before,
+      k_after = k_after,
+      delta_k = delta_k,
       core_size = length(retained_core_ids),
       n_removed = n_removed,
       n_added = n_added,
@@ -2011,7 +2056,11 @@ joint_core_refresh_move <- function(
       log_q_add_forward = add_forward$log_prob,
       log_q_add_reverse = NA_real_,
       accept_prob = 0,
-      changed_lcc = changed_lcc
+      changed_lcc = changed_lcc,
+      old_lcc_station_cap = old_lcc_station_cap,
+      new_lcc_station_cap = new_lcc_station_cap,
+      old_total_station_cap = state$total_capacity_in_station,
+      new_total_station_cap = proposed_state$total_capacity_in_station
     ))
   }
 
@@ -2031,8 +2080,9 @@ joint_core_refresh_move <- function(
       proposal_variant = "joint_core_refresh",
       reason = "zero_reverse_support",
       zero_reverse_subreason = "lcc_not_in_candidates",
-      retained_core_ids = retained_core_ids,
-      retained_core_ids = retained_core_ids,
+      k_before = k_before,
+      k_after = k_after,
+      delta_k = delta_k,
       core_size = length(retained_core_ids),
       n_removed = n_removed,
       n_added = n_added,
@@ -2048,7 +2098,11 @@ joint_core_refresh_move <- function(
       log_q_add_forward = add_forward$log_prob,
       log_q_add_reverse = NA_real_,
       accept_prob = 0,
-      changed_lcc = changed_lcc
+      changed_lcc = changed_lcc,
+      old_lcc_station_cap = old_lcc_station_cap,
+      new_lcc_station_cap = new_lcc_station_cap,
+      old_total_station_cap = state$total_capacity_in_station,
+      new_total_station_cap = proposed_state$total_capacity_in_station
     ))
   }
 
@@ -2086,6 +2140,9 @@ joint_core_refresh_move <- function(
       proposal_variant = "joint_core_refresh",
       reason = "zero_reverse_support",
       zero_reverse_subreason = "add_reverse_failed",
+      k_before = k_before,
+      k_after = k_after,
+      delta_k = delta_k,
       core_size = length(retained_core_ids),
       n_removed = n_removed,
       n_added = n_added,
@@ -2101,7 +2158,11 @@ joint_core_refresh_move <- function(
       log_q_add_forward = add_forward$log_prob,
       log_q_add_reverse = log_q_add_reverse,
       accept_prob = 0,
-      changed_lcc = changed_lcc
+      changed_lcc = changed_lcc,
+      old_lcc_station_cap = old_lcc_station_cap,
+      new_lcc_station_cap = new_lcc_station_cap,
+      old_total_station_cap = state$total_capacity_in_station,
+      new_total_station_cap = proposed_state$total_capacity_in_station
     ))
   }
 
@@ -2140,12 +2201,19 @@ joint_core_refresh_move <- function(
     proposal_variant = "joint_core_refresh",
     old_lcc_id = current_lcc_id,
     new_lcc_id = new_lcc_id,
+    k_before = k_before,
+    k_after = k_after,
+    delta_k = delta_k,
     k_retained = length(retained_core_ids),
     core_size = length(retained_core_ids),
     n_removed = n_removed,
     n_added = n_added,
     old_lcc_cap = lcc_library$metadata$capacity[current_lcc_id],
     new_lcc_cap = lcc_library$metadata$capacity[new_lcc_id],
+    old_lcc_station_cap = old_lcc_station_cap,
+    new_lcc_station_cap = new_lcc_station_cap,
+    old_total_station_cap = state$total_capacity_in_station,
+    new_total_station_cap = proposed_state$total_capacity_in_station,
     n_similar_forward = length(candidate_info$candidate_ids),
     n_similar_reverse = length(reverse_candidate_info$candidate_ids),
     candidate_lccs_forward = length(candidate_info$candidate_ids),

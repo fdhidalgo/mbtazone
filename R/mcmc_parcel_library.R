@@ -1627,12 +1627,13 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
       default =                  "band_4"
     )]
 
-    # Fixed quotas weighted toward lower-capacity bands where the posterior
-    # has most mass (capacity prior penalises excess above min_capacity)
+    # Fixed quotas balancing posterior mode (bands 1-2) with low-k feasibility
+    # (bands 3-4). Bands 3-4 supply LCCs that can meet min_capacity with few
+    # or no secondaries — critical for exploring low-k states.
     band_quotas <- list(
-      band_1 = round(max_library_size * 0.20),
-      band_2 = round(max_library_size * 0.25),
-      band_3 = round(max_library_size * 0.20),
+      band_1 = round(max_library_size * 0.15),
+      band_2 = round(max_library_size * 0.20),
+      band_3 = round(max_library_size * 0.30),
       band_4 = max_library_size - round(max_library_size * 0.65)
     )
 

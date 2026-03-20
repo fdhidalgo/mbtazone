@@ -51,7 +51,11 @@ CAPACITY_PRIOR_LAMBDA <- 0.005
 # LCCs with capacity > min_capacity * DISCOVERY_CAPACITY_MULTIPLIER are skipped.
 # This is NOT a constraint - just efficiency optimization since high-capacity
 # LCCs are heavily penalized by the capacity prior anyway.
-DISCOVERY_CAPACITY_MULTIPLIER <- 1.5
+# Note: Raised from 1.5 to 2.5 after Norwood diagnostic showed 1.5x cap
+# excluded 10,627 standalone-feasible LCCs. The sweet spot for station
+# constraint satisfaction is capacity 2000-3000 (62-72% feasible), and
+# above 3000 still yields ~29% feasible — all invisible at the old cap.
+DISCOVERY_CAPACITY_MULTIPLIER <- 2.5
 
 # ============================================================================
 # K PRIOR CONFIGURATION (Prior on Number of Secondaries)

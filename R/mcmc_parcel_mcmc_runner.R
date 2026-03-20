@@ -446,6 +446,8 @@ run_parcel_mcmc <- function(
   joint_refresh_candidate_lccs <- integer(0)
   joint_refresh_candidate_lccs_reverse <- integer(0)
   joint_refresh_changed_lcc <- logical(0)
+  joint_refresh_attempts <- vector("list", n_steps)
+  joint_refresh_attempt_idx <- 0L
 
   # Cross-region transition tracking (for replace_lcc moves)
   cross_region_transitions <- 0L
@@ -955,6 +957,32 @@ run_parcel_mcmc <- function(
             isTRUE(r$changed_lcc)
           )
         }
+        joint_refresh_attempt_idx <- joint_refresh_attempt_idx + 1L
+        joint_refresh_attempts[[joint_refresh_attempt_idx]] <- data.table::data.table(
+          step = step,
+          k_before = if (is.null(r$k_before)) NA_integer_ else as.integer(r$k_before),
+          k_after = if (is.null(r$k_after)) NA_integer_ else as.integer(r$k_after),
+          delta_k = if (is.null(r$delta_k)) NA_integer_ else as.integer(r$delta_k),
+          accepted = isTRUE(r$accepted),
+          proposal_failed = isTRUE(r$proposal_failed),
+          infeasible = isTRUE(r$infeasible),
+          reason = if (is.null(r$reason)) NA_character_ else as.character(r$reason),
+          zero_reverse_subreason = if (is.null(r$zero_reverse_subreason)) NA_character_ else as.character(r$zero_reverse_subreason),
+          constraint_failed = if (is.null(r$constraint_failed)) NA_character_ else as.character(r$constraint_failed),
+          accept_prob = if (is.null(r$accept_prob)) NA_real_ else as.numeric(r$accept_prob),
+          changed_lcc = if (is.null(r$changed_lcc)) NA else isTRUE(r$changed_lcc),
+          n_removed = if (is.null(r$n_removed)) NA_integer_ else as.integer(r$n_removed),
+          n_added = if (is.null(r$n_added)) NA_integer_ else as.integer(r$n_added),
+          core_size = if (is.null(r$core_size)) NA_integer_ else as.integer(r$core_size),
+          candidate_lccs_forward = if (is.null(r$candidate_lccs_forward)) NA_integer_ else as.integer(r$candidate_lccs_forward),
+          candidate_lccs_reverse = if (is.null(r$candidate_lccs_reverse)) NA_integer_ else as.integer(r$candidate_lccs_reverse),
+          old_lcc_cap = if (is.null(r$old_lcc_cap)) NA_real_ else as.numeric(r$old_lcc_cap),
+          new_lcc_cap = if (is.null(r$new_lcc_cap)) NA_real_ else as.numeric(r$new_lcc_cap),
+          old_lcc_station_cap = if (is.null(r$old_lcc_station_cap)) NA_real_ else as.numeric(r$old_lcc_station_cap),
+          new_lcc_station_cap = if (is.null(r$new_lcc_station_cap)) NA_real_ else as.numeric(r$new_lcc_station_cap),
+          old_total_station_cap = if (is.null(r$old_total_station_cap)) NA_real_ else as.numeric(r$old_total_station_cap),
+          new_total_station_cap = if (is.null(r$new_total_station_cap)) NA_real_ else as.numeric(r$new_total_station_cap)
+        )
         if (!is.null(r$n_similar_forward)) {
           replace_lcc_n_similar_forward <- c(
             replace_lcc_n_similar_forward,
@@ -1238,6 +1266,39 @@ run_parcel_mcmc <- function(
     )
   }
 
+  joint_refresh_attempts <- if (joint_refresh_attempt_idx > 0L) {
+    data.table::rbindlist(
+      joint_refresh_attempts[seq_len(joint_refresh_attempt_idx)],
+      fill = TRUE
+    )
+  } else {
+    data.table::data.table(
+      step = integer(0),
+      k_before = integer(0),
+      k_after = integer(0),
+      delta_k = integer(0),
+      accepted = logical(0),
+      proposal_failed = logical(0),
+      infeasible = logical(0),
+      reason = character(0),
+      zero_reverse_subreason = character(0),
+      constraint_failed = character(0),
+      accept_prob = numeric(0),
+      changed_lcc = logical(0),
+      n_removed = integer(0),
+      n_added = integer(0),
+      core_size = integer(0),
+      candidate_lccs_forward = integer(0),
+      candidate_lccs_reverse = integer(0),
+      old_lcc_cap = numeric(0),
+      new_lcc_cap = numeric(0),
+      old_lcc_station_cap = numeric(0),
+      new_lcc_station_cap = numeric(0),
+      old_total_station_cap = numeric(0),
+      new_total_station_cap = numeric(0)
+    )
+  }
+
   list(
     # Thinned minimal states (for visualization/metrics)
     parcel_samples = parcel_samples,
@@ -1276,6 +1337,7 @@ run_parcel_mcmc <- function(
       joint_refresh_candidate_lccs = joint_refresh_candidate_lccs,
       joint_refresh_candidate_lccs_reverse = joint_refresh_candidate_lccs_reverse,
       joint_refresh_changed_lcc = joint_refresh_changed_lcc,
+      joint_refresh_attempts = joint_refresh_attempts,
       # Cross-region transition tracking
       cross_region_transitions = cross_region_transitions,
       same_region_transitions = same_region_transitions,
