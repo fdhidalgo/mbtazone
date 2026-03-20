@@ -5,6 +5,14 @@ library(targets)
 pkg_root <- Sys.getenv("MBTAZONE_PACKAGE_ROOT", unset = normalizePath(getwd(), winslash = "/", mustWork = TRUE))
 owd <- setwd(pkg_root)
 on.exit(setwd(owd), add = TRUE)
+r_bin <- file.path(R.home("bin"), "R")
+install_status <- system2(
+  r_bin,
+  c("CMD", "INSTALL", "--no-multiarch", shQuote(pkg_root))
+)
+if (!identical(install_status, 0L)) {
+  stop("Failed to install current mbtazone package before running targets.")
+}
 districts <- fread("inst/extdata/community_info.csv")
 
 results <- vector("list", nrow(districts))
