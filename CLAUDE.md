@@ -39,7 +39,7 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 - **Parcel graph**: Adjacency graph of parcels built with spatial buffers; nodes carry capacity/area attributes
 - **Spanning tree**: Used for contiguity checks and valid-cut enumeration during MCMC proposals
 - **Station constraints**: LCCs must include a minimum share of station-area capacity and land area
-- **Joint core refresh**: Global relocation kernel that simultaneously swaps the LCC and adds/removes 0-or-1 secondary blocks via a capped-at-1 categorical proposal (replaces the earlier Bernoulli scan design)
+- **Replace-LCC**: Simple global relocation kernel that swaps the LCC while keeping all secondaries fixed (k unchanged). Birth/death + reference measure correction handles k exploration, so replace-LCC only needs to handle LCC exploration. Uses capacity-similar sampling with cached compatible LCC sets for efficiency.
 
 **Module overview:**
 
@@ -53,7 +53,7 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 | `mcmc_parcel_library.R` | LCC discovery engine (~3K lines): BFS, capacity bands, tree-based discovery, seed selection, `generate_initial_states_from_lccs()` |
 | `mcmc_parcel_feasibility.R` | `analyze_parcel_feasibility()` — checks if district can meet constraints |
 | `mcmc_spanning_tree.R` | Spanning tree operations, `find_valid_cuts()` for contiguity-preserving proposals |
-| `mcmc_parcel_mcmc_kernels.R` | Proposal kernels: birth/death, secondary swap, joint core refresh (capped-at-1 categorical) |
+| `mcmc_parcel_mcmc_kernels.R` | Proposal kernels: birth/death (with reference measure correction), secondary swap, replace-LCC |
 | `mcmc_parcel_mcmc_state.R` | State management, initialization, invariant validation |
 | `mcmc_parcel_mcmc_runner.R` | `run_parcel_mcmc()` — single-chain execution with burn-in |
 | `mcmc_parcel_multichain.R` | Multi-chain parallel execution, Gelman-Rubin diagnostics, geographic coverage |

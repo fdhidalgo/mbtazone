@@ -2430,6 +2430,103 @@ generate_initial_states_from_lccs <- function(
   initial_states
 }
 
+
+#' Generate k=0 (no-secondary) initial states from standalone-feasible LCCs
+#'
+#' Produces initial MCMC states containing only an LCC component (zero secondary
+#' blocks). These states let some chains explore the low-k region of the
+#' posterior, which is hard to reach from k>0 due to birth/death pool asymmetry.
+#'
+#' LCCs that satisfy all hard constraints on their own (capacity, area, density,
+#' station proximity, connectivity) are identified via \code{find_feasible_lcc_ids()}.
+#' The most geographically distant candidates are selected as seeds.
+#'
+#' @param lcc_library LCC library (will be hydrated internally)
+#' @param secondary_library Secondary block library
+#' @param parcel_graph igraph object with parcel attributes
+#' @param constraints MBTA constraints list
+#' @param n_k0_chains Number of k=0 chains to produce (default 2)
+#' @return List of initialised parcel MCMC states (length 0 to \code{n_k0_chains}).
+#'   Returns empty list with a warning if no standalone-feasible LCCs exist.
+#' @export
+generate_k0_initial_states <- function(
+    lcc_library,
+    secondary_library,
+    parcel_graph,
+    constraints,
+    n_k0_chains = 2L
+) {
+  cli::cli_h2("Generating k=0 (No-Secondary) Initial States")
+
+
+  # Hydrate libraries
+  lcc_library       <- hydrate_library(lcc_library)
+  secondary_library <- hydrate_library(secondary_library)
+
+  # Find LCCs that meet ALL hard constraints on their own (no secondaries)
+  feasible_ids <- find_feasible_lcc_ids(
+    lcc_library,
+    parcel_graph,
+    secondary_library,
+    constraints
+  )
+
+  if (length(feasible_ids) == 0) {
+    cli::cli_alert_warning(
+      "No standalone-feasible LCCs found — skipping k=0 chain initialisation"
+    )
+    return(list())
+  }
+
+  cli::cli_alert_info(
+    "{length(feasible_ids)} standalone-feasible LCCs found for k=0 seeding"
+  )
+
+  # Filter metadata to feasible LCCs with valid centroids
+
+  meta <- lcc_library$metadata
+  feasible_meta <- meta[meta$block_id %in% feasible_ids]
+  valid_centroid <- !is.na(feasible_meta$centroid_x) &
+    !is.na(feasible_meta$centroid_y)
+  feasible_meta <- feasible_meta[valid_centroid]
+
+  if (nrow(feasible_meta) == 0) {
+    cli::cli_alert_warning(
+      "No standalone-feasible LCCs have valid centroids — skipping k=0 chains"
+    )
+    return(list())
+  }
+
+  n_select <- min(n_k0_chains, nrow(feasible_meta))
+
+  # Select maximally distant seeds for geographic diversity
+  coords <- cbind(feasible_meta$centroid_x, feasible_meta$centroid_y)
+  selected_rows <- select_maxmin_distant_seeds(coords, k = n_select)
+  selected_ids  <- feasible_meta$block_id[selected_rows]
+
+  all_parcels    <- lcc_library$parcel_names
+  initial_states <- vector("list", n_select)
+
+  for (i in seq_len(n_select)) {
+    bid         <- selected_ids[i]
+    lcc_indices <- lcc_library$blocks[[bid]]
+    lcc_parcels <- all_parcels[lcc_indices]
+
+    state <- create_lcc_only_state(lcc_parcels, secondary_library, parcel_graph)
+
+    lcc_cap <- sum(igraph::V(parcel_graph)[lcc_parcels]$capacity)
+    cli::cli_alert_success(
+      "  k=0 chain {i}: block_id={bid}, {length(lcc_parcels)} LCC parcels (cap={lcc_cap}), 0 secondary blocks"
+    )
+
+    initial_states[[i]] <- state
+  }
+
+  cli::cli_alert_success("Initialised {n_select} k=0 chains")
+  initial_states
+}
+
+
 #' Partition parcels into quadrants for geographic diversity (fallback)
 #'
 #' Simple geographic partitioning when station constraints are not active.

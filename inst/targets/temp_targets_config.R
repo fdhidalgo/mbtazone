@@ -81,10 +81,15 @@ DISCOVERY_CAPACITY_MULTIPLIER <- 2.5
 #   2.0  | 0.14      | 14%           |  2%           | Strong
 #   3.0  | 0.05      |  5%           | 0.2%          | Very strong
 #
-# NOTE: λ=2.0 strongly favors k=0 (LCC only). Reduce to 0.5-1.0 if you want
-# the posterior to include more secondary blocks.
+# A reference measure correction (lchoose term) cancels the combinatorial
+# volume C(n_pool, k), so this prior directly controls the marginal on k.
+# Without the correction, the prior is overwhelmed by configuration entropy.
 #
-K_PRIOR_LAMBDA <- 2.0
+# NOTE: With the reference measure correction, this prior directly controls
+# the marginal on k. λ=0.5 gives E[k] ≈ 1.5 (gentle preference for low k).
+# Increase to 1.0-2.0 for stronger preference toward k=0.
+#
+K_PRIOR_LAMBDA <- 0.5
 
 # MCMC step count (single source of truth for all MCMC runs)
 MCMC_STEPS_MACRO <- 5000L

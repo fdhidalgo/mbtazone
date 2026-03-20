@@ -181,25 +181,6 @@ LCC_BAND_MAX_ATTEMPTS <- 500L
 # Tradeoff: more candidates to filter, but enables n_secondaries mixing.
 REPLACE_LCC_CAP_TOLERANCE <- 800
 
-# Joint core-refresh proposal tuning (used by the reversible global move
-# occupying the replace_lcc slot in the main sampler).
-#
-# Core step: remove 0 or 1 secondary block
-#   P(remove nothing) = p_keep
-#   P(remove block b)  = (1 - p_keep) / |S_old|  for each b in S_old
-JOINT_CORE_P_KEEP <- 0.30
-
-# LCC proposal weight:
-#   log w(lcc | K) = -JOINT_LCC_EXCESS_RATE * max(cap_lcc - required_cap(K), 0)
-JOINT_LCC_EXCESS_RATE <- 0.003
-
-# Add step: categorical over {add nothing, add block_b for b in B0}
-#   w_0 = JOINT_ADD_WEIGHT_NOTHING (weight for "add nothing")
-#   w_b = exp(-|cap_b - mean_secondary_cap| / mean_secondary_cap)
-#   Higher w_0 → more "add nothing" → smaller proposals
-#   Lower w_0 → more additions → more diagonal movement
-JOINT_ADD_WEIGHT_NOTHING <- 10.0
-
 # Capacity tolerance for secondary swap similar-capacity sampling
 # Blocks within ±SWAP_CAP_TOLERANCE of removed block are candidates for swap
 # Larger values = more geographic diversity, lower acceptance rate
@@ -277,6 +258,9 @@ STORE_LCC_SIGNATURES <- TRUE
 
 # Default number of chains for parcel multi-chain analysis
 DEFAULT_N_CHAINS <- 4L
+
+# Number of k=0 (no-secondary) chains initialized with standalone-feasible LCCs
+N_K0_CHAINS <- 2L
 
 # Note: Use MCMC_STEPS_MACRO from R/config.R for step counts
 
