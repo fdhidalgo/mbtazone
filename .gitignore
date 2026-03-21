@@ -37,6 +37,11 @@ _targets
 worker_logs
 ext/
 
+# Rendered report outputs (generated from .qmd sources)
+inst/reports/*.html
+inst/reports/*.md
+!inst/reports/*.qmd
+
 # Extra files from generating reports
 inst/reports/_targets.yaml
 _targets.yaml

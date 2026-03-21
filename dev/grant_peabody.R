@@ -1,16 +1,24 @@
-# Grant application figures (dev script; not part of the installed package).
+# grant_peabody.R — Pipeline runner and analysis for Peabody grant application
 #
-# Norwood "Adopted Plan" anchor map:
-#   Run from the package root (directory containing DESCRIPTION) after a successful
-#   targets run. Requires ext/_targets_Norwood.
+# Interactive usage (source from package root):
+#   source("dev/grant_peabody.R")
 #
-# Static maps only (tmap plot mode — opens in the RStudio Plots pane when preview =
-# TRUE, not a Leaflet viewer). In an interactive session, default is preview without
-# saving; from Rscript, default is save with no on-screen plot. Override save / preview
-# as needed.
+#   # Run MCMC pipeline (invalidate chains, reuse cached discovery)
+#   run_peabody()
 #
-# Dependencies: mbtazone (devtools::load_all() or library(mbtazone)), plus tmap, scales,
-# targets, sf, arrow, data.table (tmap/scales/arrow not in DESCRIPTION).
+#   # Full rebuild from scratch
+#   run_peabody(mode = "full")
+#
+#   # Generate adopted plan map
+#   grant_adopted_plan("Peabody", store = PEABODY_STORE)
+#
+#   # Compute capacity metrics
+#   adopted <- compute_adopted_plan_metrics(store = PEABODY_STORE, city_name = "Peabody")
+#   mcmc    <- compute_net_capacity_distribution(store = PEABODY_STORE, city_name = "Peabody")
+
+# ============================================================================
+# SETUP & CONFIG
+# ============================================================================
 
 suppressPackageStartupMessages({
   library(targets)
@@ -28,59 +36,106 @@ if (!requireNamespace("mbtazone", quietly = TRUE)) {
   suppressPackageStartupMessages(devtools::load_all(quiet = TRUE))
 }
 
-# Parcel footprint outline (union of parcels), not a legal municipal boundary.
-parcel_union_outline <- function(parcels_sf) {
-  u <- sf::st_union(sf::st_geometry(parcels_sf))
-  sf::st_as_sf(sf::st_sfc(u, crs = sf::st_crs(parcels_sf)))
-}
+PEABODY_STORE <- "ext/_targets_Peabody"
+PEABODY_TYPE  <- "adjacent"
 
-# Statewide half-mile layer is one MULTIPOLYGON with no station names. Cast to
-# POLYGON rows, keep buffers that intersect the parcel footprint, then keep the
-# top `max_buffers` by overlap area (Norwood has two commuter-rail stops).
-norwood_station_buffers <- function(muni_sf, max_buffers = 2L) {
-  all <- mbtazone::load_transit_stations()
-  parts <- suppressWarnings(sf::st_cast(sf::st_make_valid(all), "POLYGON"))
-  muni_sf <- sf::st_make_valid(muni_sf)
-  hit <- lengths(sf::st_intersects(parts, muni_sf)) > 0L
-  parts <- parts[hit, , drop = FALSE]
-  if (nrow(parts) == 0L) {
-    stop("No half-mile buffers intersect the parcel footprint.", call. = FALSE)
-  }
-  if (nrow(parts) <= max_buffers) {
-    return(parts)
-  }
-  overlap <- vapply(seq_len(nrow(parts)), function(i) {
-    as.numeric(sf::st_area(suppressWarnings(sf::st_intersection(parts[i, ], muni_sf))))
-  }, numeric(1))
-  ord <- order(overlap, decreasing = TRUE)
-  keep <- ord[seq_len(max_buffers)]
-  parts[keep, , drop = FALSE]
-}
-
-# ============================================================================
-# NET CAPACITY ANALYSIS
-# ============================================================================
-#
-# Compares zoning build-out capacity against baseline housing (from the
-# residensity dataset, MA State Housing Partnership) for MCMC sampled plans
-# and the adopted plan.
-#
-# Three capacity metrics per plan:
-#   total_capacity:  sum of final_unit_capacity for all parcels in plan
-#   net_capacity:    sum of max(0, capacity - baseline_HU) over all parcels
-#   net_vacant:      capacity only on parcels with NO existing housing
-#                    (baseline_hu == 0) — a more realistic proxy for actual
-#                    development potential, since developers rarely demolish
-#                    existing housing to rebuild at similar density
-
-# Default path to residensity parquet (shared across functions).
 RESIDENSITY_PATH <- file.path(
   "/Users/dhidalgo/MIT Dropbox/Fernando Hidalgo/projects/mbta_communities/data",
   "ioc_mbta_communities_hackathon/residensity_mbta_communities.parquet"
 )
 
-# Build parcel-level lookup table: LOC_ID -> capacity, baseline_hu, net metrics.
-# Shared by both adopted-plan and MCMC analysis functions.
+# ============================================================================
+# PIPELINE HELPERS
+# ============================================================================
+
+install_package <- function() {
+  cat("Installing package...\n")
+  r_bin <- file.path(R.home("bin"), "R")
+  status <- system2(
+    r_bin,
+    c("CMD", "INSTALL", "--no-multiarch", shQuote(normalizePath("."))),
+    stdout = FALSE, stderr = FALSE
+  )
+  if (!identical(status, 0L)) stop("Failed to install mbtazone package.")
+  cat("Package installed.\n")
+  invisible(TRUE)
+}
+
+#' Run the MCMC pipeline for Peabody.
+#'
+#' @param mode "chains" (default) invalidates chain results only;
+#'   "full" destroys entire store for a full rebuild.
+#' @param install If TRUE (default), installs the package first so crew
+#'   workers see current code.
+run_peabody <- function(mode = "chains", install = TRUE) {
+  if (install) install_package()
+
+  # Clear stale lock
+  lf <- file.path(PEABODY_STORE, "meta/process")
+  if (file.exists(lf)) file.remove(lf)
+
+  # Invalidate or destroy targets
+
+if (mode == "full") {
+    tryCatch(tar_destroy(store = PEABODY_STORE), error = function(e) NULL)
+    cat("Peabody: store destroyed (full rebuild)\n")
+  } else {
+    tryCatch(
+      tar_delete(
+        names = c("parcel_chain_results", "all_parcel_chain_results"),
+        store = PEABODY_STORE
+      ),
+      error = function(e) NULL
+    )
+    cat("Peabody: chain results invalidated\n")
+  }
+
+  # Run pipeline
+  cat("\n", paste(rep("=", 60), collapse = ""), "\n")
+  cat(" Peabody (", PEABODY_TYPE, ")\n")
+  cat(" Time:", format(Sys.time()), "\n")
+  cat(paste(rep("=", 60), collapse = ""), "\n\n")
+
+  start_time <- Sys.time()
+  Sys.setenv(DISTRICT_NAME = "Peabody", DISTRICT_TYPE = PEABODY_TYPE)
+  on.exit({
+    Sys.unsetenv("DISTRICT_NAME")
+    Sys.unsetenv("DISTRICT_TYPE")
+  })
+
+  tar_make(store = PEABODY_STORE, script = "inst/targets/_targets.R")
+
+  elapsed <- difftime(Sys.time(), start_time, units = "mins")
+  cat(sprintf("\nCompleted in %.1f minutes\n", elapsed))
+  invisible(TRUE)
+}
+
+# ============================================================================
+# PLOT & ANALYSIS FUNCTIONS
+# ============================================================================
+
+# Parcel footprint outline (union of parcels).
+parcel_union_outline <- function(parcels_sf) {
+  u <- sf::st_union(sf::st_geometry(parcels_sf))
+  sf::st_as_sf(sf::st_sfc(u, crs = sf::st_crs(parcels_sf)))
+}
+
+# Detect station buffers that intersect the municipal parcel footprint.
+find_station_buffers <- function(muni_sf, max_buffers = 4L) {
+  all <- mbtazone::load_transit_stations()
+  parts <- suppressWarnings(sf::st_cast(sf::st_make_valid(all), "POLYGON"))
+  muni_sf <- sf::st_make_valid(muni_sf)
+  hit <- lengths(sf::st_intersects(parts, muni_sf)) > 0L
+  parts <- parts[hit, , drop = FALSE]
+  if (nrow(parts) == 0L) return(parts)
+  if (nrow(parts) <= max_buffers) return(parts)
+  overlap <- vapply(seq_len(nrow(parts)), function(i) {
+    as.numeric(sf::st_area(suppressWarnings(sf::st_intersection(parts[i, ], muni_sf))))
+  }, numeric(1))
+  parts[order(overlap, decreasing = TRUE)[seq_len(max_buffers)], , drop = FALSE]
+}
+
+# Build parcel-level lookup: LOC_ID -> capacity, baseline_hu, net metrics.
 build_parcel_lookup <- function(district_parcels, residensity_path, city_name) {
   cap_lookup <- district_parcels[, .(LOC_ID, capacity)]
 
@@ -112,11 +167,11 @@ summarize_plan <- function(plan_locs, parcel_lookup) {
   )
 }
 
-# Compute metrics for the adopted plan (parcels with in_district == TRUE).
+# Compute metrics for the adopted plan.
 compute_adopted_plan_metrics <- function(
-    store,
+    store = PEABODY_STORE,
     residensity_path = RESIDENSITY_PATH,
-    city_name) {
+    city_name = "Peabody") {
   district_data <- targets::tar_read("district_data", store = store)
   dp <- district_data$district_parcels
   parcel_lookup <- build_parcel_lookup(dp, residensity_path, city_name)
@@ -126,11 +181,11 @@ compute_adopted_plan_metrics <- function(
   as.data.table(c(list(plan = "adopted"), metrics))
 }
 
-# Compute net capacity distribution from raw MCMC chain samples.
+# Compute net capacity distribution from MCMC chain samples.
 compute_net_capacity_distribution <- function(
-    store,
+    store = PEABODY_STORE,
     residensity_path = RESIDENSITY_PATH,
-    city_name,
+    city_name = "Peabody",
     burn_in_frac = 0.5) {
   if (!dir.exists(store)) {
     stop("Missing targets store: ", store, call. = FALSE)
@@ -174,36 +229,10 @@ compute_net_capacity_distribution <- function(
   }))
 }
 
-# ============================================================================
-# ADOPTED PLAN MAP
-# ============================================================================
-#
-# Static map of a municipality's adopted overlay district: inclusion-colored
-# parcels, MBTA half-mile station buffers, and a capacity annotation.
-#
-# Generalised from the original Norwood-only function. Station labels are
-# auto-detected from the statewide buffer layer (kept in order of decreasing
-# overlap area with the parcel footprint).
-
-# Detect station buffers that intersect the municipal parcel footprint.
-# Returns an sf object with one POLYGON row per buffer, ordered by overlap area.
-find_station_buffers <- function(muni_sf, max_buffers = 4L) {
-  all <- mbtazone::load_transit_stations()
-  parts <- suppressWarnings(sf::st_cast(sf::st_make_valid(all), "POLYGON"))
-  muni_sf <- sf::st_make_valid(muni_sf)
-  hit <- lengths(sf::st_intersects(parts, muni_sf)) > 0L
-  parts <- parts[hit, , drop = FALSE]
-  if (nrow(parts) == 0L) return(parts)
-  if (nrow(parts) <= max_buffers) return(parts)
-  overlap <- vapply(seq_len(nrow(parts)), function(i) {
-    as.numeric(sf::st_area(suppressWarnings(sf::st_intersection(parts[i, ], muni_sf))))
-  }, numeric(1))
-  parts[order(overlap, decreasing = TRUE)[seq_len(max_buffers)], , drop = FALSE]
-}
-
+# Adopted plan map: inclusion-colored parcels, station buffers, capacity annotation.
 grant_adopted_plan <- function(
-    community_name,
-    store,
+    community_name = "Peabody",
+    store = PEABODY_STORE,
     out_path = NULL,
     station_labels = NULL,
     preview = interactive(),
@@ -248,7 +277,6 @@ grant_adopted_plan <- function(
     credits_txt <- paste0(credits_txt, "\nShaded ring: MBTA half-mile station area")
   }
 
-  # Station labels: use provided labels when stations exist
   has_labels <- !is.null(station_labels) && has_stations
   if (has_labels) {
     pts <- sf::st_point_on_surface(sf::st_geometry(stations))
@@ -317,39 +345,18 @@ grant_adopted_plan <- function(
   invisible(map)
 }
 
-# Backwards-compatible wrapper for Norwood.
-grant_norwood_adopted_plan <- function(
-    store = "ext/_targets_Norwood",
-    out_path = "ext/figures/grant_norwood_adopted.png",
-    preview = interactive(),
-    save = !interactive(),
-    ...) {
-  grant_adopted_plan("Norwood", store = store, out_path = out_path,
-    station_labels = c("Norwood Central", "Norwood Depot"),
-    preview = preview, save = save, ...)
-}
-
 # ============================================================================
-# USAGE
+# INTERACTIVE USAGE EXAMPLES
 # ============================================================================
 if (FALSE) {
-  # --- Norwood ---
-  grant_adopted_plan("Norwood", store = "ext/_targets_Norwood",
-    station_labels = c("Norwood Central", "Norwood Depot"))
-  adopted <- compute_adopted_plan_metrics(store = "ext/_targets_Norwood", city_name = "Norwood")
-  mcmc    <- compute_net_capacity_distribution(store = "ext/_targets_Norwood", city_name = "Norwood")
+  # Run the MCMC pipeline
+  run_peabody()
+  run_peabody(mode = "full")  # full rebuild
 
-  # --- Beverly ---
-  grant_adopted_plan("Beverly", store = "ext/_targets_Beverly",
-    station_labels = c("Beverly Depot", "North Beverly", "Montserrat"))
-  adopted <- compute_adopted_plan_metrics(store = "ext/_targets_Beverly", city_name = "Beverly")
-  mcmc    <- compute_net_capacity_distribution(store = "ext/_targets_Beverly", city_name = "Beverly")
+  # Adopted plan map
+  grant_adopted_plan("Peabody", store = PEABODY_STORE)
 
-  # --- Reading ---
-  grant_adopted_plan("Reading", store = "ext/_targets_Reading",
-    station_labels = c("Reading"))
-
-  # --- Wellesley ---
-  grant_adopted_plan("Wellesley", store = "ext/_targets_Wellesley",
-    station_labels = c("Wellesley Hills", "Wellesley Square"))
+  # Capacity metrics
+  adopted <- compute_adopted_plan_metrics()
+  mcmc    <- compute_net_capacity_distribution()
 }
