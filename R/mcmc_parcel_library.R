@@ -1082,31 +1082,263 @@ run_bfs_lcc_supplement <- function(
 # CAPACITY-STRATIFIED BFS DISCOVERY
 # ============================================================================
 
+#' Discover LCCs for a single capacity band via BFS
+#'
+#' Processes one capacity band of the stratified BFS LCC discovery. Designed
+#' to be called in parallel via targets dynamic branching (one target per band).
+#'
+#' Seeds BFS from high-density parcels (capacity/area >= min_density) to
+#' dramatically improve hit rate vs random seeding. BFS can still grow through
+#' any eligible parcel — only the seed selection is filtered.
+#'
+#' @param parcel_graph igraph object with capacity/area attributes
+#' @param constraints MBTA constraints list (min_capacity, min_area, min_density,
+#'   min_lcc_fraction)
+#' @param band_idx Integer index (1-based) into capacity_bands_relative
+#' @param capacity_bands_relative List of c(low_mult, high_mult) tuples.
+#'   Default: LCC_CAPACITY_BANDS_RELATIVE from parcel_config.R.
+#' @param samples_per_band Number of BFS samples to find.
+#'   Default: LCC_BAND_SAMPLES_PER_BAND.
+#' @param max_attempts_per_band Maximum BFS attempts before giving up.
+#'   Default: LCC_BAND_MAX_ATTEMPTS.
+#' @param forbidden_parcels Character vector of parcels to exclude. Default: NULL.
+#' @param existing_keys Character vector of xxhash64 keys to skip. Default: character(0).
+#' @param verbose Print progress. Default: TRUE.
+#' @return List with:
+#'   - discovered_lccs: data.table with lcc_key, parcel_ids, capacity, area,
+#'       capacity_band, tree_count = 0, source = "bfs_stratified"
+#'   - band_stats: single-row data.table with band, cap_low, cap_high, attempts,
+#'       valid, unique_found
+#' @export
+discover_lccs_single_band <- function(
+    parcel_graph,
+    constraints,
+    band_idx,
+    capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
+    samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
+    max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
+    forbidden_parcels = NULL,
+    existing_keys = character(0),
+    verbose = TRUE
+) {
+  # Extract constraint values
+  min_capacity <- constraints$min_capacity
+  min_lcc_fraction <- constraints$min_lcc_fraction %||% 0.5
+  min_lcc_capacity <- min_capacity * min_lcc_fraction
+  min_density <- constraints$min_density
+
+  # Station thresholds
+  st <- compute_station_lcc_thresholds(constraints)
+
+  # Convert relative band to absolute capacity range
+  mult <- capacity_bands_relative[[band_idx]]
+  cap_low <- max(min_lcc_capacity, mult[1] * min_capacity)
+  cap_high <- mult[2] * min_capacity
+
+  # Setup
+  all_parcels <- igraph::V(parcel_graph)$name
+
+  # Compute eligible parcels (excluding forbidden)
+  if (!is.null(forbidden_parcels) && length(forbidden_parcels) > 0) {
+    eligible_parcels <- setdiff(all_parcels, forbidden_parcels)
+    forbidden_set <- forbidden_parcels
+  } else {
+    eligible_parcels <- all_parcels
+    forbidden_set <- character(0)
+  }
+
+  # Precompute lookups
+  capacity_lookup <- igraph::V(parcel_graph)$capacity
+  area_lookup <- igraph::V(parcel_graph)$area
+  names(capacity_lookup) <- all_parcels
+  names(area_lookup) <- all_parcels
+  cap_in_station_lookup  <- igraph::V(parcel_graph)$capacity_in_station
+  area_in_station_lookup <- igraph::V(parcel_graph)$area_in_station
+  names(cap_in_station_lookup)  <- all_parcels
+  names(area_in_station_lookup) <- all_parcels
+
+  # Smart seed pre-filtering: only seed from parcels with sufficient density
+  # This dramatically improves hit rate (~3% -> ~30-50%) for suburban communities
+  parcel_density <- capacity_lookup[eligible_parcels] / area_lookup[eligible_parcels]
+  # Handle NaN/Inf from zero-area parcels
+  parcel_density[!is.finite(parcel_density)] <- 0
+  dense_seeds <- eligible_parcels[parcel_density >= min_density]
+
+  if (length(dense_seeds) < 10) {
+    dense_seeds <- eligible_parcels
+    if (verbose) cli::cli_alert_warning(
+      "Band {band_idx}: Few dense parcels for seeding ({length(dense_seeds)}), using all eligible"
+    )
+  }
+
+  if (verbose) {
+    cli::cli_alert_info(
+      "Band {band_idx} [{round(cap_low)}-{round(cap_high)}]: dense seeds = {length(dense_seeds)}/{length(eligible_parcels)}"
+    )
+  }
+
+  # Initialize deduplication hash with existing keys
+  lcc_hash <- new.env(hash = TRUE, parent = emptyenv())
+  for (key in existing_keys) {
+    assign(key, TRUE, envir = lcc_hash)
+  }
+
+  # Per-band BFS discovery
+  band_attempts <- 0L
+  band_found <- 0L
+  band_valid <- 0L
+  discovered_list <- list()
+
+  if (verbose) {
+    cli::cli_progress_bar(
+      name = sprintf("Band %d [%d-%d]", band_idx, round(cap_low), round(cap_high)),
+      total = samples_per_band,
+      format = "{cli::pb_spin} {cli::pb_name} | Found: {band_found}/{samples_per_band} | Attempts: {band_attempts}"
+    )
+  }
+
+  while (band_found < samples_per_band && band_attempts < max_attempts_per_band) {
+    band_attempts <- band_attempts + 1L
+
+    if (verbose && band_attempts %% 100 == 0) {
+      cli::cli_progress_update(set = band_found)
+    }
+
+    target_capacity <- runif(1, cap_low, cap_high)
+
+    result <- tryCatch(
+      bfs_grow_block(
+        graph = parcel_graph,
+        metric_lookup = capacity_lookup,
+        seed_pool = dense_seeds,
+        eligible_pool = eligible_parcels,
+        target_min = cap_low,
+        target_exact = target_capacity,
+        target_max = cap_high,
+        check_max_before_add = TRUE
+      ),
+      error = function(e) NULL
+    )
+
+    if (is.null(result) || !result$success) next
+
+    candidate_parcels <- result$block
+    candidate_capacity <- result$metric_total
+    candidate_area <- sum(area_lookup[candidate_parcels])
+    candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
+    candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
+
+    if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) next
+    if (candidate_capacity < cap_low || candidate_capacity > cap_high) next
+    if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
+    if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) next
+    if (st$check_station_area && candidate_area_in_station < st$station_area_min) next
+
+    band_valid <- band_valid + 1L
+
+    # Deduplication
+    lcc_key <- digest::digest(sort(candidate_parcels), algo = "xxhash64")
+    if (exists(lcc_key, envir = lcc_hash, inherits = FALSE)) next
+
+    assign(lcc_key, TRUE, envir = lcc_hash)
+    band_found <- band_found + 1L
+
+    discovered_list[[band_found]] <- data.table::data.table(
+      lcc_key = lcc_key,
+      parcel_ids = list(candidate_parcels),
+      capacity = as.integer(candidate_capacity),
+      area = candidate_area,
+      capacity_band = band_idx,
+      tree_count = 0L,
+      source = "bfs_stratified"
+    )
+
+    if (verbose) {
+      cli::cli_progress_update(set = band_found)
+    }
+  }
+
+  if (verbose) {
+    cli::cli_progress_done()
+    cli::cli_alert_success(
+      "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid)"
+    )
+  }
+
+  # Build result
+  if (length(discovered_list) > 0) {
+    discovered_lccs <- data.table::rbindlist(discovered_list)
+  } else {
+    discovered_lccs <- data.table::data.table(
+      lcc_key = character(0),
+      parcel_ids = list(),
+      capacity = integer(0),
+      area = numeric(0),
+      capacity_band = integer(0),
+      tree_count = integer(0),
+      source = character(0)
+    )
+  }
+
+  band_stats <- data.table::data.table(
+    band = band_idx,
+    cap_low = cap_low,
+    cap_high = cap_high,
+    attempts = band_attempts,
+    valid = band_valid,
+    unique_found = band_found
+  )
+
+  list(
+    discovered_lccs = discovered_lccs,
+    band_stats = band_stats
+  )
+}
+
+
 #' Discover LCCs via capacity-stratified BFS sampling
 #'
 #' Explicitly targets capacity bands to populate the library with LCCs
-#' in ranges that tree enumeration under-represents. Tree discovery produces
-#' 78% LCCs with capacity > 5000, but the capacity prior (lambda=0.005)
-#' makes the posterior favor LCCs with capacity 1200-2000.
+#' in ranges that tree enumeration under-represents. Calls
+#' \code{\link{discover_lccs_single_band}} for each band sequentially.
+#' For parallel execution, use targets dynamic branching over bands instead.
+#' Combine per-band BFS stratified discovery results
 #'
-#' Unlike run_bfs_lcc_supplement() which seeds from tree-discovered LCCs,
-#' this function seeds from random parcels across the graph, enabling
-#' discovery of LCCs in capacity ranges tree enumeration misses.
+#' Merges results from multiple \code{\link{discover_lccs_single_band}} calls
+#' into a single result. Used by both the sequential wrapper and the targets
+#' pipeline combiner target.
 #'
-#' Algorithm:
-#' 1. For each capacity band [cap_low, cap_high]:
-#'    a. Select random seed parcels from all eligible parcels
-#'    b. BFS-grow toward target capacity within band
-#'    c. Validate: capacity in band, area >= min_area, density >= min_density
-#'    d. Check connectivity (guaranteed by BFS, but verified)
-#'    e. Deduplicate via xxhash64
-#' 2. Return all unique LCCs discovered across bands
+#' @param band_results List of return values from discover_lccs_single_band()
+#' @return List with discovered_lccs, band_stats, n_total_attempts, n_unique_found
+#' @export
+combine_stratified_band_results <- function(band_results) {
+  all_lccs <- data.table::rbindlist(lapply(band_results, `[[`, "discovered_lccs"))
+  all_stats <- data.table::rbindlist(lapply(band_results, `[[`, "band_stats"))
+
+  if (nrow(all_lccs) > 0) {
+    all_lccs <- all_lccs[!duplicated(lcc_key)]
+  }
+
+  list(
+    discovered_lccs = all_lccs,
+    band_stats = all_stats,
+    n_total_attempts = sum(all_stats$attempts),
+    n_unique_found = nrow(all_lccs)
+  )
+}
+
+
+#' Discover LCCs via capacity-stratified BFS sampling
+#'
+#' Explicitly targets capacity bands to populate the library with LCCs
+#' in ranges that tree enumeration under-represents. Calls
+#' \code{\link{discover_lccs_single_band}} for each band sequentially.
+#' For parallel execution, use targets dynamic branching over bands instead.
 #'
 #' @param parcel_graph igraph object with capacity/area attributes
 #' @param constraints MBTA constraints list (min_capacity, min_area, min_density,
 #'   min_lcc_fraction)
 #' @param capacity_bands_relative List of c(low_mult, high_mult) tuples.
-#'   Each tuple defines a band as [low_mult * min_capacity, high_mult * min_capacity].
 #'   Default: LCC_CAPACITY_BANDS_RELATIVE from parcel_config.R.
 #' @param samples_per_band Number of BFS samples per band.
 #'   Default: LCC_BAND_SAMPLES_PER_BAND.
@@ -1134,204 +1366,36 @@ discover_lccs_by_capacity_bands <- function(
     existing_keys = character(0),
     verbose = TRUE
 ) {
-  # Extract constraint values
-  min_capacity <- constraints$min_capacity
-  min_lcc_fraction <- constraints$min_lcc_fraction %||% 0.5
-  min_lcc_capacity <- min_capacity * min_lcc_fraction
-  min_density <- constraints$min_density
-
-  # Station thresholds
-  st <- compute_station_lcc_thresholds(constraints)
-
-  # Convert relative bands to absolute capacity ranges
-  bands <- lapply(capacity_bands_relative, function(mult) {
-    c(max(min_lcc_capacity, mult[1] * min_capacity),
-      mult[2] * min_capacity)
-  })
-
-  # Setup
-  all_parcels <- igraph::V(parcel_graph)$name
-  n_parcels <- length(all_parcels)
-
-  # Compute eligible parcels (excluding forbidden)
-  if (!is.null(forbidden_parcels) && length(forbidden_parcels) > 0) {
-    eligible_parcels <- setdiff(all_parcels, forbidden_parcels)
-    forbidden_set <- forbidden_parcels
-  } else {
-    eligible_parcels <- all_parcels
-    forbidden_set <- character(0)
-  }
-
-  # Precompute lookups
-  capacity_lookup <- igraph::V(parcel_graph)$capacity
-  area_lookup <- igraph::V(parcel_graph)$area
-  names(capacity_lookup) <- all_parcels
-  names(area_lookup) <- all_parcels
-  cap_in_station_lookup  <- igraph::V(parcel_graph)$capacity_in_station
-  area_in_station_lookup <- igraph::V(parcel_graph)$area_in_station
-  names(cap_in_station_lookup)  <- all_parcels
-  names(area_in_station_lookup) <- all_parcels
-
-
   if (verbose) {
     cli::cli_h2("Capacity-Stratified BFS LCC Discovery")
-    cli::cli_alert_info("Target bands: {length(bands)}")
+    cli::cli_alert_info("Target bands: {length(capacity_bands_relative)}")
     cli::cli_alert_info("Samples per band: {samples_per_band}")
     cli::cli_alert_info("Existing keys to skip: {length(existing_keys)}")
-    for (i in seq_along(bands)) {
-      cli::cli_alert_info("  Band {i}: [{round(bands[[i]][1])}, {round(bands[[i]][2])}] capacity")
-    }
   }
 
-  # Initialize deduplication hash with existing keys
-  lcc_hash <- new.env(hash = TRUE, parent = emptyenv())
-  for (key in existing_keys) {
-    assign(key, TRUE, envir = lcc_hash)
-  }
-
-  # Track statistics
-  n_total_attempts <- 0L
-  n_unique_found <- 0L
-  discovered_list <- list()
-  band_stats_list <- list()
-
-  for (band_idx in seq_along(bands)) {
-    band <- bands[[band_idx]]
-    cap_low <- band[1]
-    cap_high <- band[2]
-
-    band_attempts <- 0L
-    band_found <- 0L
-    band_valid <- 0L
-
-    if (verbose) {
-      cli::cli_progress_bar(
-        name = sprintf("Band %d [%d-%d]", band_idx, round(cap_low), round(cap_high)),
-        total = samples_per_band,
-        format = "{cli::pb_spin} {cli::pb_name} | Found: {band_found}/{samples_per_band} | Attempts: {band_attempts}"
-      )
-    }
-
-    while (band_found < samples_per_band && band_attempts < max_attempts_per_band) {
-      band_attempts <- band_attempts + 1L
-      n_total_attempts <- n_total_attempts + 1L
-
-      if (verbose && band_attempts %% 100 == 0) {
-        cli::cli_progress_update(set = band_found)
-      }
-
-      # Sample random target capacity within band
-      target_capacity <- runif(1, cap_low, cap_high)
-
-      # BFS grow from random seed toward target capacity
-      result <- tryCatch(
-        bfs_grow_block(
-          graph = parcel_graph,
-          metric_lookup = capacity_lookup,
-          seed_pool = eligible_parcels,  # Random seed from all eligible
-          eligible_pool = eligible_parcels,
-          target_min = cap_low,
-          target_exact = target_capacity,
-          target_max = cap_high,
-          check_max_before_add = TRUE  # Stay within band
-        ),
-        error = function(e) NULL
-      )
-
-      if (is.null(result) || !result$success) next
-
-      candidate_parcels <- result$block
-      candidate_capacity <- result$metric_total
-      candidate_area <- sum(area_lookup[candidate_parcels])
-      candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
-      candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
-
-      # Reject if contains forbidden parcels
-      if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) next
-
-      # Validate capacity within band
-      if (candidate_capacity < cap_low || candidate_capacity > cap_high) next
-
-      # Validate density
-      if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
-
-      # Check station constraints
-      if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) next
-      if (st$check_station_area && candidate_area_in_station < st$station_area_min) next
-
-      # Note: BFS guarantees connectivity by construction, no check needed
-
-      band_valid <- band_valid + 1L
-
-      # Deduplication
-      lcc_key <- digest::digest(sort(candidate_parcels), algo = "xxhash64")
-      if (exists(lcc_key, envir = lcc_hash, inherits = FALSE)) next
-
-      assign(lcc_key, TRUE, envir = lcc_hash)
-      band_found <- band_found + 1L
-      n_unique_found <- n_unique_found + 1L
-
-      discovered_list[[length(discovered_list) + 1L]] <- data.table::data.table(
-        lcc_key = lcc_key,
-        parcel_ids = list(candidate_parcels),
-        capacity = as.integer(candidate_capacity),
-        area = candidate_area,
-        capacity_band = band_idx,
-        tree_count = 0L,
-        source = "bfs_stratified"
-      )
-
-      if (verbose) {
-        cli::cli_progress_update(set = band_found)
-      }
-    }
-
-    if (verbose) {
-      cli::cli_progress_done()
-      cli::cli_alert_success(
-        "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid)"
-      )
-    }
-
-    band_stats_list[[band_idx]] <- data.table::data.table(
-      band = band_idx,
-      cap_low = cap_low,
-      cap_high = cap_high,
-      attempts = band_attempts,
-      valid = band_valid,
-      unique_found = band_found
+  band_results <- lapply(seq_along(capacity_bands_relative), function(band_idx) {
+    discover_lccs_single_band(
+      parcel_graph = parcel_graph,
+      constraints = constraints,
+      band_idx = band_idx,
+      capacity_bands_relative = capacity_bands_relative,
+      samples_per_band = samples_per_band,
+      max_attempts_per_band = max_attempts_per_band,
+      forbidden_parcels = forbidden_parcels,
+      existing_keys = existing_keys,
+      verbose = verbose
     )
-  }
+  })
 
-  # Combine discoveries
-  if (length(discovered_list) > 0) {
-    discovered_lccs <- data.table::rbindlist(discovered_list)
-  } else {
-    discovered_lccs <- data.table::data.table(
-      lcc_key = character(0),
-      parcel_ids = list(),
-      capacity = integer(0),
-      area = numeric(0),
-      capacity_band = integer(0),
-      tree_count = integer(0),
-      source = character(0)
-    )
-  }
-
-  band_stats <- data.table::rbindlist(band_stats_list)
+  result <- combine_stratified_band_results(band_results)
 
   if (verbose) {
     cli::cli_alert_success(
-      "Capacity-stratified discovery: {n_unique_found} unique LCCs from {n_total_attempts} total attempts"
+      "Capacity-stratified discovery: {result$n_unique_found} unique LCCs from {result$n_total_attempts} total attempts"
     )
   }
 
-  list(
-    discovered_lccs = discovered_lccs,
-    band_stats = band_stats,
-    n_total_attempts = n_total_attempts,
-    n_unique_found = n_unique_found
-  )
+  result
 }
 
 

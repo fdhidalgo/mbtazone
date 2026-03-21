@@ -210,15 +210,24 @@ list(
     )
   ),
 
-  # LCC Stage 2b: Capacity-stratified BFS discovery
-  # Tree discovery is biased toward high-capacity LCCs (78% have capacity > 5000).
-  # The capacity prior (lambda=0.005) makes the posterior favor capacity 1200-2000.
-  # This stage explicitly targets low-capacity bands to balance the library.
+  # LCC Stage 2b: Capacity-stratified BFS discovery (parallel over bands)
+  # Tree discovery is biased toward high-capacity LCCs. This stage explicitly
+  # targets low-capacity bands to balance the library. Each band runs as a
+  # separate crew worker for parallel execution.
+
+  # Band grid for dynamic branching
   tar_target(
-    bfs_stratified_lccs,
-    discover_lccs_by_capacity_bands(
+    bfs_band_grid,
+    data.frame(band_idx = seq_along(LCC_CAPACITY_BANDS_RELATIVE))
+  ),
+
+  # Per-band discovery — crew dispatches these to separate workers
+  tar_target(
+    bfs_stratified_band,
+    discover_lccs_single_band(
       parcel_graph = parcel_graph_result$parcel_graph,
       constraints = constraints,
+      band_idx = bfs_band_grid$band_idx,
       capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
       samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
       max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
@@ -228,7 +237,15 @@ list(
         bfs_discovered_lccs$discovered_lccs$lcc_key
       ),
       verbose = TRUE
-    )
+    ),
+    pattern = map(bfs_band_grid),
+    iteration = "list"
+  ),
+
+  # Combine per-band results into format expected downstream
+  tar_target(
+    bfs_stratified_lccs,
+    combine_stratified_band_results(bfs_stratified_band)
   ),
 
   # LCC Stage 3: Combine all LCC discoveries (tree, bfs boundary, bfs stratified)
