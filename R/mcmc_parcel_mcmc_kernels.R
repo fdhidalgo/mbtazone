@@ -201,6 +201,61 @@ compute_lcc_capacity_weights <- function(lcc_ids, lcc_library) {
   )
 }
 
+#' Compute capacity-tilted weights for birth proposals
+#'
+#' Returns weights w_i = exp(-tilt_lambda * capacity_i) for biasing birth
+#' proposals toward lower-capacity blocks. When tilt_lambda = 0, returns
+#' uniform weights (equivalent to legacy behavior). Uses log-sum-exp for
+#' numerical stability.
+#'
+#' @param block_ids Integer vector of addable block IDs
+#' @param library Secondary library with $metadata$capacity
+#' @param tilt_lambda Tilt strength (default: BIRTH_TILT_LAMBDA)
+#' @return List with weights, log_weights, log_sum_w, valid
+compute_birth_tilt_weights <- function(block_ids, library,
+                                       tilt_lambda = NULL) {
+  if (is.null(tilt_lambda)) {
+    tilt_lambda <- BIRTH_TILT_LAMBDA
+  }
+
+  n <- length(block_ids)
+  if (n == 0) {
+    return(list(
+      weights = numeric(0),
+      log_weights = numeric(0),
+      log_sum_w = -Inf,
+      valid = FALSE
+    ))
+  }
+
+  # Uniform case: skip computation
+  if (tilt_lambda == 0) {
+    return(list(
+      weights = rep(1 / n, n),
+      log_weights = rep(0, n),
+      log_sum_w = log(n),
+      valid = TRUE
+    ))
+  }
+
+  caps <- library$metadata$capacity[block_ids]
+  log_w <- -tilt_lambda * caps
+
+  # Log-sum-exp for numerical stability
+  max_log_w <- max(log_w)
+  log_sum_w <- max_log_w + log(sum(exp(log_w - max_log_w)))
+
+  # Normalized weights for sampling
+  weights <- exp(log_w - log_sum_w)
+
+  list(
+    weights = weights,
+    log_weights = log_w,
+    log_sum_w = log_sum_w,
+    valid = TRUE
+  )
+}
+
 # ============================================================================
 # KERNEL 1: LCC-LOCAL REFINEMENT
 # ============================================================================
@@ -483,8 +538,12 @@ symmetric_birth_death_move <- function(
   n_add <- length(addable)
   n_rem <- length(removable)
 
-  # Total universe size
-  Z_old <- n_add + n_rem
+  # Compute capacity-tilted birth weights
+  birth_weights <- compute_birth_tilt_weights(addable, library)
+  W_add <- exp(birth_weights$log_sum_w)  # sum of birth weights (= n_add when tilt=0)
+
+  # Total universe size: weighted births + uniform deaths
+  Z_old <- W_add + n_rem
 
   if (Z_old == 0) {
     return(list(
@@ -507,11 +566,13 @@ symmetric_birth_death_move <- function(
     ))
   }
 
-  # Step 2: Sample block uniformly from universe
-  is_birth <- runif(1) < (n_add / Z_old)
+  # Step 2: Select direction proportional to weight mass
+  is_birth <- runif(1) < (W_add / Z_old)
 
   if (is_birth) {
-    block_id <- addable[sample.int(n_add, 1)]
+    idx <- sample.int(n_add, 1, prob = birth_weights$weights)
+    block_id <- addable[idx]
+    log_w_selected <- birth_weights$log_weights[idx]
     direction <- "birth"
     proposed_state <- add_secondary_block(
       state,
@@ -521,7 +582,7 @@ symmetric_birth_death_move <- function(
       neighbor_idx
     )
   } else {
-    # Sample from removable (weighted uniform, so just sample uniform)
+    # Sample from removable (uniform)
     sampled_idx <- sample.int(n_rem, 1)
     block_id <- removable[sampled_idx]
     direction <- "death"
@@ -589,15 +650,21 @@ symmetric_birth_death_move <- function(
   }
   n_add_new <- length(addable_rev)
 
-  # Universe size in proposed state
-  Z_new <- n_add_new + n_rem_new
+  # Universe size in proposed state (weighted births + uniform deaths)
+  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library)
+  W_add_new <- exp(rev_birth_weights$log_sum_w)
+  Z_new <- W_add_new + n_rem_new
 
-  # Step 5: MH Ratio
-  # q(y|x) = 1 / Z_old (uniform sampling)
-  # q(x|y) = 1 / Z_new
-  # ratio = Z_old / Z_new
-
-  log_q_ratio <- log(Z_old) - log(Z_new)
+  # Step 5: MH Ratio with capacity-tilted birth proposals
+  # Birth of block i: q(y|x) = w_i / Z_old, reverse (death): q(x|y) = 1 / Z_new
+  # Death of block j: q(y|x) = 1 / Z_old, reverse (birth): q(x|y) = w_j / Z_new
+  if (is_birth) {
+    log_q_ratio <- log(Z_old) - log(Z_new) - log_w_selected
+  } else {
+    removed_cap <- library$metadata$capacity[block_id]
+    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_q_ratio <- log_w_removed + log(Z_old) - log(Z_new)
+  }
 
   # Capacity prior penalty difference
   log_pi_ratio <- compute_penalty_difference(
@@ -762,7 +829,13 @@ lifted_birth_death_move <- function(
 
   # Propose move in current direction only
   if (direction == "birth") {
-    block_id <- addable[sample.int(n_add, 1)]
+    # Capacity-tilted birth proposal
+    birth_weights <- compute_birth_tilt_weights(addable, library)
+    idx <- sample.int(n_add, 1, prob = birth_weights$weights)
+    block_id <- addable[idx]
+    log_w_selected <- birth_weights$log_weights[idx]
+    log_W_addable <- birth_weights$log_sum_w
+
     proposed_state <- add_secondary_block(
       state, block_id, library, parcel_graph, neighbor_idx
     )
@@ -796,10 +869,11 @@ lifted_birth_death_move <- function(
       ))
     }
 
-    # Proposal ratio for lifted kernel
-    # Forward: select from n_add addable blocks
-    # Reverse: select from n_rem_new removable blocks
-    log_q_ratio <- log(n_add) - log(n_rem_new)
+    # Proposal ratio for lifted kernel with capacity-tilted birth
+    # Forward: q(y|x) = w_selected / W(addable)  [weighted birth]
+    # Reverse: q(x|y) = 1 / n_rem_new             [uniform death]
+    # log(q(x|y)/q(y|x)) = log(W(addable)) - log(w_selected) - log(n_rem_new)
+    log_q_ratio <- log_W_addable - log_w_selected - log(n_rem_new)
 
   } else { # death
     block_id <- removable[sample.int(n_rem, 1)]
@@ -845,10 +919,15 @@ lifted_birth_death_move <- function(
       ))
     }
 
-    # Proposal ratio for lifted kernel
-    # Forward: select from n_rem removable blocks
-    # Reverse: select from n_add_new addable blocks
-    log_q_ratio <- log(n_rem) - log(n_add_new)
+    # Proposal ratio for lifted kernel with capacity-tilted reverse birth
+    # Forward: q(y|x) = 1 / n_rem                      [uniform death]
+    # Reverse: q(x|y) = w_removed / W(addable_new)      [weighted birth]
+    # log(q(x|y)/q(y|x)) = log(w_removed) - log(W(addable_new)) + log(n_rem)
+    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library)
+    removed_cap <- library$metadata$capacity[block_id]
+    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_W_addable_new <- rev_birth_weights$log_sum_w
+    log_q_ratio <- log_w_removed - log_W_addable_new + log(n_rem)
   }
 
   # Check feasibility (hard constraints only - capacity handled by prior)

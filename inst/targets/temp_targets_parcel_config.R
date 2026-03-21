@@ -209,6 +209,16 @@ MULTI_MOVE_MAX_R <- length(MULTI_MOVE_PROBS)
 
 
 # ============================================================================
+# BIRTH PROPOSAL TILT (Capacity-Weighted Births)
+# ============================================================================
+# Tilts birth proposals toward lower-capacity secondary blocks.
+# Weights: w_i = exp(-BIRTH_TILT_LAMBDA * capacity_i)
+# Set to 0 for uniform (legacy behavior).
+# Set to CAPACITY_PRIOR_LAMBDA to cancel the capacity prior on births.
+BIRTH_TILT_LAMBDA <- CAPACITY_PRIOR_LAMBDA
+
+
+# ============================================================================
 # ONLINE LCC LIBRARY ENRICHMENT
 # ============================================================================
 #
