@@ -76,10 +76,18 @@ if (length(valid_chains) == 0) {
 }
 first_valid_chain <- valid_chains[[1]]
 
+strip_burnin <- function(traj) {
+  if (MCMC_BURN_IN > 0 && length(traj) > MCMC_BURN_IN) {
+    traj[(MCMC_BURN_IN + 1):length(traj)]
+  } else {
+    traj
+  }
+}
+
 diag_vec <- function(chains, field) {
   unlist(lapply(chains, function(ch) {
     value <- ch$diagnostics[[field]]
-    if (is.null(value)) numeric(0) else value
+    if (is.null(value)) numeric(0) else strip_burnin(value)
   }), use.names = FALSE)
 }
 

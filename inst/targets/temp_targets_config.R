@@ -43,7 +43,7 @@ RHAT_CONVERGENCE_THRESHOLD <- 1.1 # R-hat < this indicates convergence
 #   0.005   | 0.37        | 139 units | Moderate
 #   0.010   | 0.14        |  69 units | Strong
 #
-CAPACITY_PRIOR_LAMBDA <- 0.005
+CAPACITY_PRIOR_LAMBDA <- 0.002
 # Discovery-only capacity bound (multiplier of min_capacity)
 # Filters LCCs during tree enumeration to speed up discovery.
 # LCCs with capacity > min_capacity * DISCOVERY_CAPACITY_MULTIPLIER are skipped.

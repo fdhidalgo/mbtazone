@@ -85,6 +85,16 @@ pa <- parcel_graph_result$parcel_attributes
 sec <- discovered_secondary_library
 lcc <- discovered_lcc_library
 
+# Helper: extract a trajectory field from all valid chains,
+# discarding the first MCMC_BURN_IN draws from each chain.
+strip_burnin <- function(traj) {
+  if (MCMC_BURN_IN > 0 && length(traj) > MCMC_BURN_IN) {
+    traj[(MCMC_BURN_IN + 1):length(traj)]
+  } else {
+    traj
+  }
+}
+
 # Get diagnostics from first valid chain (for trajectory plots)
 first_valid_chain <- Filter(
   function(x) !isTRUE(x$initialization_failed),
@@ -759,13 +769,13 @@ Birth and death moves add/remove secondary components.
 #| label: parcel-secondary-distribution
 #| fig-height: 4
 #| fig-width: 8
-# Combine n_secondaries trajectories from all chains
+# Combine n_secondaries trajectories (post-burn-in) from all chains
 valid_chains <- Filter(
   function(x) !isTRUE(x$initialization_failed),
   parcel_chain_results
 )
 all_n_sec <- unlist(lapply(valid_chains, function(x) {
-  x$diagnostics$n_secondaries_trajectory
+  strip_burnin(x$diagnostics$n_secondaries_trajectory)
 }))
 
 sec_df <- data.table::data.table(n_secondaries = all_n_sec)
@@ -799,13 +809,13 @@ ggplot(sec_df, aes(x = n_secondaries)) +
 #| label: parcel-total-capacity-distribution
 #| fig-height: 4
 #| fig-width: 8
-# Combine total capacity trajectories from all chains
+# Combine total capacity trajectories (post-burn-in) from all chains
 valid_chains_cap <- Filter(
   function(x) !isTRUE(x$initialization_failed),
   parcel_chain_results
 )
 all_total_cap_hist <- unlist(lapply(valid_chains_cap, function(x) {
-  x$diagnostics$capacity_trajectory
+  strip_burnin(x$diagnostics$capacity_trajectory)
 }))
 
 cap_df <- data.table::data.table(capacity = all_total_cap_hist)
