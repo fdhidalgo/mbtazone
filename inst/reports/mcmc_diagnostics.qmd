@@ -26,6 +26,40 @@ library(igraph)
 library(mapgl)
 library(mbtazone)
 
+# Load the live MCMC tuning constants used by the targets pipeline.
+find_repo_file <- function(rel_path) {
+  candidates <- c(
+    rel_path,
+    file.path("..", rel_path),
+    file.path("../..", rel_path),
+    file.path("../../..", rel_path)
+  )
+  existing <- candidates[file.exists(candidates)]
+  if (length(existing) == 0) {
+    stop(sprintf("Could not locate repository file: %s", rel_path))
+  }
+  existing[[1]]
+}
+
+config_env <- new.env(parent = globalenv())
+source(
+  find_repo_file("inst/targets/temp_targets_config.R"),
+  local = config_env
+)
+source(
+  find_repo_file("inst/targets/temp_targets_parcel_config.R"),
+  local = config_env
+)
+
+CAPACITY_PRIOR_LAMBDA <- config_env$CAPACITY_PRIOR_LAMBDA
+K_PRIOR_LAMBDA <- config_env$K_PRIOR_LAMBDA
+SECONDARY_AREA_THRESHOLD <- config_env$SECONDARY_AREA_THRESHOLD
+DISCOVERY_CAPACITY_MULTIPLIER <- config_env$DISCOVERY_CAPACITY_MULTIPLIER
+MCMC_STEPS_MACRO <- config_env$MCMC_STEPS_MACRO
+MCMC_BURN_IN <- config_env$MCMC_BURN_IN
+REPLACE_LCC_CAP_TOLERANCE <- config_env$REPLACE_LCC_CAP_TOLERANCE
+SWAP_CAP_TOLERANCE <- config_env$SWAP_CAP_TOLERANCE
+
 # Find targets store
 store_path <- if (dir.exists(params$temp_store_path)) params$temp_store_path else paste0("../../", params$temp_store_path)
 tar_config_set(store = store_path)
@@ -68,6 +102,18 @@ stats_dt <- parcel_metrics$stats
 
 This report presents diagnostic results for MCMC sampling of feasible zoning plans. The sampler explores parcel configurations satisfying statutory constraints.
 
+### Prior Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Capacity prior λ | `r CAPACITY_PRIOR_LAMBDA` |
+| Secondary-count prior λ (k) | `r K_PRIOR_LAMBDA` |
+| Secondary minimum area | `r SECONDARY_AREA_THRESHOLD` acres |
+| Discovery capacity multiplier | `r DISCOVERY_CAPACITY_MULTIPLIER`× |
+| MCMC steps per chain | `r scales::comma(MCMC_STEPS_MACRO)` |
+| Burn-in | `r scales::comma(MCMC_BURN_IN)` |
+| Replace-LCC capacity tolerance | `r REPLACE_LCC_CAP_TOLERANCE` |
+| Swap capacity tolerance | `r SWAP_CAP_TOLERANCE` |
 
 ### Parcel Zoning Potential
 
@@ -309,7 +355,9 @@ maplibre(
 | Term | Definition |
 |------------------------|-----------------------------------------------|
 | **LCC** | Largest Connected Component: the largest contiguous group of selected parcels |
-| **Secondary** | A connected component other than the LCC; must have area ≥5 acres |
+| **Secondary** | A connected component other than the LCC; must have area ≥ 5 acres |
+| **Capacity prior** | Exponential prior on total capacity above min_capacity: π(cap) ∝ exp(−λ × (cap − min_capacity)). Higher λ penalizes excess capacity more steeply (half-life = ln 2 / λ) |
+| **K prior** | Geometric prior on number of secondary blocks: π(k) ∝ exp(−λ × k). Higher λ favors fewer secondaries (each additional block multiplies density by exp(−λ)) |
 
 ### District Constraints
 
@@ -744,6 +792,61 @@ ggplot(sec_df, aes(x = n_secondaries)) +
 **Mean:** `r round(mean(all_n_sec), 2)` secondaries
 
 **Fraction with 0 secondaries:** `r scales::percent(mean(all_n_sec == 0), accuracy = 0.1)`
+
+### Total Zoning Capacity Distribution
+
+```{r}
+#| label: parcel-total-capacity-distribution
+#| fig-height: 4
+#| fig-width: 8
+# Combine total capacity trajectories from all chains
+valid_chains_cap <- Filter(
+  function(x) !isTRUE(x$initialization_failed),
+  parcel_chain_results
+)
+all_total_cap_hist <- unlist(lapply(valid_chains_cap, function(x) {
+  x$diagnostics$capacity_trajectory
+}))
+
+cap_df <- data.table::data.table(capacity = all_total_cap_hist)
+
+ggplot(cap_df, aes(x = capacity)) +
+  geom_histogram(
+    bins = 40,
+    fill = "steelblue",
+    color = "white",
+    alpha = 0.8
+  ) +
+  geom_vline(
+    xintercept = constraints$min_capacity,
+    linetype = "dashed",
+    color = "red",
+    linewidth = 0.8
+  ) +
+  annotate(
+    "text",
+    x = constraints$min_capacity,
+    y = Inf,
+    label = paste("min_capacity =", constraints$min_capacity),
+    hjust = -0.1,
+    vjust = 1.5,
+    color = "red",
+    size = 3.5
+  ) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(
+    title = "Total Zoning Capacity Distribution (All Chains)",
+    x = "Total Capacity (housing units)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+**Range:** `r scales::comma(min(all_total_cap_hist))` – `r scales::comma(max(all_total_cap_hist))` units
+
+**Mean:** `r scales::comma(round(mean(all_total_cap_hist)))` units
+
+**Median:** `r scales::comma(round(median(all_total_cap_hist)))` units
 
 ### Example Sampled Plans
 

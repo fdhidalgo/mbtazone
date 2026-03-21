@@ -71,25 +71,29 @@ DISCOVERY_CAPACITY_MULTIPLIER <- 2.5
 #
 # Effect on MH acceptance:
 #   Birth (k → k+1): acceptance *= exp(-λ)
-#   Death (k → k-1): acceptance *= min(1, exp(+λ))
+#   Death (k → k-1): acceptance *= exp(+λ)
 #
 # Calibration table:
-#   λ    | Per-block | P(k=1)/P(k=0) | P(k=2)/P(k=0) | Interpretation
-#   -----|-----------|---------------|---------------|----------------
-#   0.5  | 0.61      | 61%           | 37%           | Gentle
-#   1.0  | 0.37      | 37%           | 14%           | Moderate
-#   2.0  | 0.14      | 14%           |  2%           | Strong
-#   3.0  | 0.05      |  5%           | 0.2%          | Very strong
+#   λ    | Per-block | P(k=0) | P(k≥1) | E[k] | Interpretation
+#   -----|-----------|--------|--------|------|----------------
+#   0.25 | 0.78      |  22%   |  78%   | 3.5  | Very gentle
+#   0.5  | 0.61      |  39%   |  61%   | 1.5  | Gentle
+#   1.0  | 0.37      |  63%   |  37%   | 0.6  | Moderate
+#   2.0  | 0.14      |  86%   |  14%   | 0.2  | Strong
+#   3.0  | 0.05      |  95%   |   5%   | 0.05 | Very strong
 #
-# A reference measure correction (lchoose term) cancels the combinatorial
-# volume C(n_pool, k), so this prior directly controls the marginal on k.
-# Without the correction, the prior is overwhelmed by configuration entropy.
+# A correction term in the MH ratio accounts for the fact that there are
+# far more ways to choose k=5 blocks than k=1 block from the pool.
+# Without it, the sampler would drift toward mid-range k values simply
+# because there are more possible configurations there, regardless of
+# the prior. With the correction, the prior above works as intended.
 #
 # NOTE: With the reference measure correction, this prior directly controls
-# the marginal on k. λ=0.5 gives E[k] ≈ 1.5 (gentle preference for low k).
+# the marginal on k (i.e., the distribution of k in MCMC output, averaging
+# over all other variables). λ=0.5 gives E[k] ≈ 1.5 (gentle preference for low k).
 # Increase to 1.0-2.0 for stronger preference toward k=0.
 #
-K_PRIOR_LAMBDA <- 0.5
+K_PRIOR_LAMBDA <- 0.25
 
 # MCMC step count (single source of truth for all MCMC runs)
 MCMC_STEPS_MACRO <- 5000L
