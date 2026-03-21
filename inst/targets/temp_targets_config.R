@@ -38,12 +38,16 @@ RHAT_CONVERGENCE_THRESHOLD <- 1.1 # R-hat < this indicates convergence
 # Calibration table (effect of adding 200 capacity, typical secondary):
 #   λ       | Prior ratio | Half-life | Interpretation
 #   --------|-------------|-----------|----------------
+#   0.000   | 1.00        |       Inf | Uniform (no penalty)
 #   0.001   | 0.82        | 693 units | Very gentle
 #   0.002   | 0.67        | 347 units | Gentle
 #   0.005   | 0.37        | 139 units | Moderate
 #   0.010   | 0.14        |  69 units | Strong
 #
-CAPACITY_PRIOR_LAMBDA <- 0.005
+# Light prior for grant analysis: allows broad exploration (~3x min_cap)
+# while penalizing extreme high-capacity outliers that hurt mixing.
+# Half-life: 693 units.  Previous values: 0.005 (moderate), 0 (uniform).
+CAPACITY_PRIOR_LAMBDA <- 0.001
 # Discovery-only capacity bound (multiplier of min_capacity)
 # Filters LCCs during tree enumeration to speed up discovery.
 # LCCs with capacity > min_capacity * DISCOVERY_CAPACITY_MULTIPLIER are skipped.
