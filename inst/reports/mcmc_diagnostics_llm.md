@@ -10,7 +10,7 @@
 
 ## Current Tuning
 
-- Capacity prior λ: 0.005
+- Capacity prior λ: 0.002
 - Secondary-count prior λ: 0.25
 - Secondary minimum area: 5 acres
 - Discovery capacity multiplier: 2.5×
@@ -49,17 +49,14 @@ discrepancy reflects the posterior distribution shape, not proposal bias
 
 | Metric                  | Library | Sampled |
 |:------------------------|:--------|:--------|
-| Mean capacity           | 2994    | 2039    |
-| Median capacity         | 2833    | 2053    |
-| High-capacity (≥2045) % | 65.0%   | 55.4%   |
+| Mean capacity           | 2994    | 2422    |
+| Median capacity         | 2833    | 2397    |
+| High-capacity (≥2045) % | 65.0%   | 70.0%   |
 
 
-    **Capacity ratio (sampled/library): 0.68**
+    **Capacity ratio (sampled/library): 0.81**
 
-    ℹ️ **Posterior favors lower-capacity LCCs**: This is expected behavior.
-    The min_lcc_fraction constraint (≥50%) limits how many secondaries can be added
-    with high-capacity LCCs. Lower-capacity LCCs allow more secondary configurations,
-    so the posterior has more mass there. This is not a proposal bias.
+    ✓ Sampled distribution matches library distribution.
 
 ### LCC Library Capacity Bands
 
@@ -89,13 +86,14 @@ secondary capacity. As k increases, fewer LCCs are accessible.*
 |   5 |       1560.320 |         1560.320 |         4231 | 84.6%     |
 |   6 |       1872.384 |         1872.384 |         3851 | 77.0%     |
 |   7 |       2184.448 |         2184.448 |         3179 | 63.6%     |
+|   8 |       2496.512 |         2496.512 |         2950 | 59.0%     |
 
 ### Posterior-Weighted Library Accessibility
 
 *Average library accessibility weighted by the observed k distribution.*
 
 - Mean secondary block capacity (library): 312
-- Posterior-weighted library accessibility: 99.9%
+- Posterior-weighted library accessibility: 99.6%
 
 ### Sampled LCC Capacity by k
 
@@ -104,16 +102,17 @@ sampled states.*
 
 |   k | N Samples | Mean LCC Cap | Min LCC Cap | Max LCC Cap |
 |----:|----------:|-------------:|------------:|------------:|
-|   0 |      8967 |         2226 |        2045 |        4295 |
-|   1 |      5841 |         2009 |        1423 |        4295 |
-|   2 |      3073 |         1782 |        1296 |        4386 |
-|   3 |      1609 |         1660 |        1188 |        4465 |
-|   4 |       414 |         1668 |        1200 |        4682 |
-|   5 |        67 |         1983 |        1392 |        5024 |
-|   6 |        18 |         3351 |        1481 |        5064 |
-|   7 |        11 |         5047 |        5025 |        5080 |
+|   0 |      6229 |         2655 |        2045 |        5131 |
+|   1 |      5190 |         2336 |        1292 |        4822 |
+|   2 |      2653 |         2262 |        1383 |        3988 |
+|   3 |      1186 |         2111 |        1311 |        3659 |
+|   4 |       431 |         2123 |        1408 |        3212 |
+|   5 |       212 |         2098 |        1406 |        3056 |
+|   6 |        82 |         2250 |        1502 |        3037 |
+|   7 |        12 |         2124 |        1889 |        3037 |
+|   8 |         5 |         3033 |        3026 |        3037 |
 
-- Correlation(k, LCC capacity): -0.48
+- Correlation(k, LCC capacity): -0.352
 
 ### Secondary Capacity per Block
 
@@ -122,16 +121,17 @@ constraint.*
 
 |   k | N Samples | Mean Total Sec Cap | Mean Cap/Block |
 |----:|----------:|-------------------:|---------------:|
-|   1 |      5841 |                255 |            255 |
-|   2 |      3073 |                550 |            275 |
-|   3 |      1609 |                750 |            250 |
-|   4 |       414 |               1009 |            252 |
-|   5 |        67 |               1509 |            302 |
-|   6 |        18 |               2987 |            498 |
-|   7 |        11 |               5025 |            718 |
+|   1 |      5190 |                282 |            282 |
+|   2 |      2653 |                536 |            268 |
+|   3 |      1186 |                837 |            279 |
+|   4 |       431 |               1034 |            259 |
+|   5 |       212 |               1421 |            284 |
+|   6 |        82 |               1627 |            271 |
+|   7 |        12 |               1892 |            270 |
+|   8 |         5 |               2972 |            372 |
 
 - Library mean secondary capacity: 312
-- Sampled mean secondary capacity per block: 261
+- Sampled mean secondary capacity per block: 277
 
 ### Total Capacity Relative to Minimum
 
@@ -140,16 +140,16 @@ constraint.*
 | Metric                    | Value |
 |:--------------------------|:------|
 | Minimum required capacity | 2045  |
-| Mean total capacity       | 2290  |
-| Median total capacity     | 2161  |
-| Mean excess capacity      | 245   |
-| Median excess capacity    | 116   |
-| 90th percentile excess    | 607   |
-| Max excess capacity       | 8060  |
-| States within +100 units  | 45.9% |
-| States within +250 units  | 68.7% |
-| States \>= 1.25× minimum  | 14.0% |
-| States \>= 1.5× minimum   | 1.8%  |
+| Mean total capacity       | 2722  |
+| Median total capacity     | 2667  |
+| Mean excess capacity      | 677   |
+| Median excess capacity    | 622   |
+| 90th percentile excess    | 1308  |
+| Max excess capacity       | 3972  |
+| States within +100 units  | 12.0% |
+| States within +250 units  | 24.0% |
+| States \>= 1.25× minimum  | 58.3% |
+| States \>= 1.5× minimum   | 20.5% |
 
 ### Excess Capacity by Secondary Count (k)
 
@@ -158,14 +158,15 @@ requirement.*
 
 |   k | N Samples | Mean Total Cap | Mean Excess | Median Excess | Pct \<= +100 |
 |----:|----------:|---------------:|------------:|--------------:|:-------------|
-|   0 |      8967 |           2226 |         181 |            61 | 69.1%        |
-|   1 |      5841 |           2265 |         220 |           159 | 32.4%        |
-|   2 |      3073 |           2332 |         287 |           227 | 23.7%        |
-|   3 |      1609 |           2410 |         365 |           259 | 21.3%        |
-|   4 |       414 |           2677 |         632 |           479 | 5.8%         |
-|   5 |        67 |           3492 |        1447 |           771 | 0.0%         |
-|   6 |        18 |           6338 |        4293 |          6846 | 0.0%         |
-|   7 |        11 |          10072 |        8027 |          8005 | 0.0%         |
+|   0 |      6229 |           2655 |         610 |           634 | 16.5%        |
+|   1 |      5190 |           2618 |         573 |           430 | 14.0%        |
+|   2 |      2653 |           2798 |         753 |           598 | 3.7%         |
+|   3 |      1186 |           2949 |         904 |           762 | 4.6%         |
+|   4 |       431 |           3157 |        1112 |          1041 | 2.8%         |
+|   5 |       212 |           3518 |        1473 |          1424 | 0.0%         |
+|   6 |        82 |           3877 |        1832 |          1693 | 0.0%         |
+|   7 |        12 |           4016 |        1972 |          1589 | 0.0%         |
+|   8 |         5 |           6005 |        3960 |          3961 | 0.0%         |
 
 ### Purge / Standalone-LCC Diagnostic
 
@@ -176,9 +177,10 @@ meets the minimum requirement on its own.*
 
 | Feasible After Dropping Secondaries | Constraint Failed    | Count | Pct   |
 |:------------------------------------|:---------------------|------:|:------|
-| TRUE                                | NA                   |   111 | 55.5% |
-| FALSE                               | min_capacity         |    87 | 43.5% |
-| FALSE                               | station_capacity_pct |     2 | 1.0%  |
+| TRUE                                | NA                   |   129 | 64.5% |
+| FALSE                               | min_capacity         |    65 | 32.5% |
+| FALSE                               | station_capacity_pct |     5 | 2.5%  |
+| FALSE                               | station_area_pct     |     1 | 0.5%  |
 
 ## Mixing Diagnostics (Multi-Chain)
 
@@ -186,25 +188,25 @@ meets the minimum requirement on its own.*
 
 *ESS via coda::effectiveSize() across all chains.*
 
-| Metric        |   ESS |
-|:--------------|------:|
-| Capacity      | 434.1 |
-| N Components  | 224.7 |
-| N Secondaries | 224.7 |
-| LCC Capacity  | 152.8 |
-| Centroid X    | 393.7 |
-| Centroid Y    | 665.2 |
+| Metric        |    ESS |
+|:--------------|-------:|
+| Capacity      |  527.7 |
+| N Components  |  497.2 |
+| N Secondaries |  497.2 |
+| LCC Capacity  |  283.8 |
+| Centroid X    | 1418.4 |
+| Centroid Y    | 1354.2 |
 
 ### Autocorrelation (Capacity)
 
-- Lag 1: 0.956
-- Lag 10: 0.644
-- Lag 50: 0.24
+- Lag 1: 0.949
+- Lag 10: 0.573
+- Lag 50: 0.081
 
 ### Secondary Dynamics
 
-- Secondary births: 538
-- Secondary deaths: 554
+- Secondary births: 1127
+- Secondary deaths: 1131
 
 ### Secondary Count Distribution
 
@@ -212,44 +214,45 @@ meets the minimum requirement on its own.*
 
 | Chain   | Mean |   SD | Min | Max | k=0 % |
 |:--------|-----:|-----:|----:|----:|:------|
-| chain_1 | 0.76 | 1.00 |   0 |   7 | 50.9% |
-| chain_2 | 0.81 | 1.07 |   0 |   6 | 53.2% |
-| chain_3 | 1.25 | 1.18 |   0 |   6 | 32.3% |
-| chain_4 | 0.98 | 1.06 |   0 |   4 | 43.0% |
+| chain_1 | 0.93 | 1.20 |   0 |   7 | 48.1% |
+| chain_2 | 1.16 | 1.24 |   0 |   8 | 35.4% |
+| chain_3 | 0.89 | 1.06 |   0 |   6 | 45.1% |
+| chain_4 | 1.38 | 1.37 |   0 |   7 | 29.8% |
 
 **Overall Distribution (All Chains):**
 
-- Mean k: 0.95
-- SD k: 1.1
-- Range: 0 - 7
-- Time at k=0: 44.84%
+- Mean k: 1.09
+- SD k: 1.21
+- Range: 0 - 8
+- Time at k=0: 38.93%
 
 | k   | Count | Pct   |
 |:----|------:|:------|
-| 0   |  8967 | 44.8% |
-| 1   |  5841 | 29.2% |
-| 2   |  3073 | 15.4% |
-| 3   |  1609 | 8.0%  |
-| 4   |   414 | 2.1%  |
-| 5   |    67 | 0.3%  |
-| 6   |    18 | 0.1%  |
-| 7   |    11 | 0.1%  |
+| 0   |  6229 | 38.9% |
+| 1   |  5190 | 32.4% |
+| 2   |  2653 | 16.6% |
+| 3   |  1186 | 7.4%  |
+| 4   |   431 | 2.7%  |
+| 5   |   212 | 1.3%  |
+| 6   |    82 | 0.5%  |
+| 7   |    12 | 0.1%  |
+| 8   |     5 | 0.0%  |
 
 ### LCC Capacity Distribution
 
-- Mean: 2039
-- SD: 366
-- Range: 1188 - 5080
+- Mean: 2422
+- SD: 490
+- Range: 1292 - 5131
 
 ## Move Acceptance (Aggregated)
 
 | Type               | Attempted | Feasible% | MH Accept% | Overall% |
 |:-------------------|----------:|----------:|-----------:|---------:|
-| lcc_local_add      |      3562 |     100.0 |       90.2 |     90.2 |
-| lcc_local_remove   |      3493 |      89.2 |       97.0 |     86.6 |
-| lifted_birth_death |      5940 |      81.5 |       22.6 |     18.4 |
-| secondary_swap     |      2049 |      82.6 |       38.4 |     31.7 |
-| replace_lcc        |      4956 |      88.0 |       38.9 |     34.3 |
+| lcc_local_add      |      3477 |      99.8 |       89.5 |     89.3 |
+| lcc_local_remove   |      3514 |      93.7 |       96.5 |     90.4 |
+| lifted_birth_death |      5924 |      89.5 |       42.6 |     38.1 |
+| secondary_swap     |      2027 |      92.0 |       51.0 |     46.9 |
+| replace_lcc        |      5058 |      95.8 |       65.4 |     62.7 |
 
 ### Birth/Death Kernel Statistics
 
@@ -260,20 +263,20 @@ acceptance, the direction persists; on rejection, it flips. This creates
 correlated sequences that can traverse k (secondary count) faster than
 reversible proposals.*
 
-- Total attempted: 5,940
-- Feasible: 4,844 (81.5%)
-- Accepted: 1,093 (22.6% of feasible)
+- Total attempted: 5,924
+- Feasible: 5,301 (89.5%)
+- Accepted: 2,259 (42.6% of feasible)
 
 **Direction breakdown (accepted moves):**
 
-- Births: 538
-- Deaths: 555
-- Birth/Death ratio: 0.97
+- Births: 1,127
+- Deaths: 1,132
+- Birth/Death ratio: 1
 
 **Universe sizes (\|U\| = \|addable\| + \|removable\|):**
 
-    - Mean |U|: 426.9
-    - Range: 2 - 490
+    - Mean |U|: 421.5
+    - Range: 2 - 500
 
 ### Birth/Death Candidate Pools by k
 
@@ -283,14 +286,15 @@ can hide a large `n_add / n_rem` skew.*
 
 | k | Attempts | Mean n_add | Mean n_rem | Mean n_add/n_rem | Pct No Addable | Pct No Removable | Accept % |
 |---:|---:|---:|---:|---:|:---|:---|:---|
-| 0 | 2654 | 444.2 | 0 | 444.23 | 0.0% | 100.0% | 9.3% |
-| 1 | 1792 | 428.0 | 1 | 427.96 | 0.0% | 0.0% | 22.8% |
-| 2 | 893 | 412.3 | 2 | 206.15 | 0.2% | 0.0% | 28.0% |
-| 3 | 456 | 379.5 | 3 | 126.51 | 0.0% | 0.0% | 28.5% |
-| 4 | 118 | 314.0 | 4 | 78.50 | 0.8% | 0.0% | 38.1% |
-| 5 | 20 | 244.8 | 5 | 48.95 | 0.0% | 0.0% | 40.0% |
-| 6 | 4 | 239.8 | 6 | 39.96 | 25.0% | 0.0% | 75.0% |
-| 7 | 3 | 0.0 | 7 | 0.00 | 100.0% | 0.0% | 33.3% |
+| 0 | 2420 | 441.8 | 0 | 441.80 | 0.0% | 100.0% | 20.6% |
+| 1 | 1862 | 427.0 | 1 | 427.02 | 0.0% | 0.0% | 45.9% |
+| 2 | 937 | 405.3 | 2 | 202.63 | 0.6% | 0.0% | 55.1% |
+| 3 | 406 | 375.0 | 3 | 125.02 | 0.0% | 0.0% | 54.9% |
+| 4 | 164 | 361.4 | 4 | 90.34 | 0.0% | 0.0% | 57.3% |
+| 5 | 90 | 281.6 | 5 | 56.33 | 5.6% | 0.0% | 54.4% |
+| 6 | 36 | 259.6 | 6 | 43.27 | 11.1% | 0.0% | 55.6% |
+| 7 | 7 | 62.7 | 7 | 8.96 | 42.9% | 0.0% | 57.1% |
+| 8 | 2 | 0.0 | 8 | 0.00 | 100.0% | 0.0% | 50.0% |
 
 ## Kernel Profiling
 
@@ -302,47 +306,47 @@ can hide a large `n_add / n_rem` skew.*
 
     |Chain | LCC Local| Birth/Death| Swap| Replace LCC| Overhead|  Total|
     |:-----|---------:|-----------:|----:|-----------:|--------:|------:|
-    |1     |      8.44|        8.10| 3.63|      382.22|    16.86| 419.25|
-    |2     |      8.57|        8.11| 3.20|      404.51|    16.14| 440.52|
-    |3     |      8.33|        8.42| 4.52|      415.37|    16.15| 452.80|
-    |4     |      8.73|        8.26| 4.08|      386.10|    15.89| 423.05|
+    |1     |      9.25|        8.13| 4.38|      405.98|    17.81| 445.55|
+    |2     |      8.85|        9.14| 4.45|      437.82|    18.06| 478.32|
+    |3     |      8.65|        8.13| 3.97|      428.64|    17.86| 467.25|
+    |4     |      8.79|        9.05| 4.73|      422.64|    17.86| 463.08|
 
     **Aggregate Time Distribution:**
 
-    - LCC Local: 2.0% (34.1s)
-    - Birth/Death: 1.9% (32.9s)
-    - Swap: 0.9% (15.4s)
-    - Replace LCC: 91.5% (1588.2s)
-    - Overhead: 3.7% (65.0s)
-    - **Total: 1735.6s** across 4 chains
+    - LCC Local: 1.9% (35.5s)
+    - Birth/Death: 1.9% (34.5s)
+    - Swap: 0.9% (17.5s)
+    - Replace LCC: 91.4% (1695.1s)
+    - Overhead: 3.9% (71.6s)
+    - **Total: 1854.2s** across 4 chains
 
 ## Convergence (Multi-Chain)
 
 ### R-hat
 
-| metric       |  rhat | rhat_upper |   n_eff |
-|:-------------|------:|-----------:|--------:|
-| capacity     | 1.008 |      1.019 | 434.128 |
-| n_components | 1.060 |      1.150 | 224.690 |
-| lcc_capacity | 1.031 |      1.064 | 152.780 |
-| centroid_x   | 1.088 |      1.237 | 393.743 |
-| centroid_y   | 1.036 |      1.080 | 665.230 |
+| metric       |  rhat | rhat_upper |    n_eff |
+|:-------------|------:|-----------:|---------:|
+| capacity     | 1.010 |      1.024 |  527.735 |
+| n_components | 1.029 |      1.080 |  497.187 |
+| lcc_capacity | 1.042 |      1.113 |  283.823 |
+| centroid_x   | 1.010 |      1.024 | 1418.416 |
+| centroid_y   | 1.012 |      1.035 | 1354.189 |
 
 ### Chain Separation (Jaccard Overlap)
 
-- Min pairwise overlap: 0.609
+- Min pairwise overlap: 0.814
 - Separated: FALSE
-- Evidence: Mixing OK: Min pairwise Jaccard overlap = 0.609 \>= 0.10
+- Evidence: Mixing OK: Min pairwise Jaccard overlap = 0.814 \>= 0.10
   threshold
 
 **Overlap Matrix:**
 
 |         | chain_1 | chain_2 | chain_3 | chain_4 |
 |:--------|--------:|--------:|--------:|--------:|
-| chain_1 |   1.000 |   0.698 |   0.679 |   0.727 |
-| chain_2 |   0.698 |   1.000 |   0.609 |   0.682 |
-| chain_3 |   0.679 |   0.609 |   1.000 |   0.659 |
-| chain_4 |   0.727 |   0.682 |   0.659 |   1.000 |
+| chain_1 |   1.000 |   0.855 |   0.868 |   0.814 |
+| chain_2 |   0.855 |   1.000 |   0.864 |   0.833 |
+| chain_3 |   0.868 |   0.864 |   1.000 |   0.836 |
+| chain_4 |   0.814 |   0.833 |   0.836 |   1.000 |
 
 ### Chain-Specific Statistics
 
@@ -350,66 +354,65 @@ can hide a large `n_add / n_rem` skew.*
 
 | Chain   | Region  | Mean |  SD |  Min |  Max |
 |:--------|:--------|-----:|----:|-----:|-----:|
-| chain_1 | chain_1 | 2133 | 373 | 1478 | 5080 |
-| chain_2 | chain_2 | 2088 | 357 | 1423 | 4465 |
-| chain_3 | chain_3 | 1942 | 350 | 1368 | 3113 |
-| chain_4 | chain_4 | 1993 | 352 | 1188 | 3260 |
+| chain_1 | chain_1 | 2541 | 474 | 1351 | 5080 |
+| chain_2 | chain_2 | 2480 | 522 | 1292 | 4465 |
+| chain_3 | chain_3 | 2480 | 455 | 1311 | 4427 |
+| chain_4 | chain_4 | 2270 | 533 | 1269 | 5131 |
 
 **N Components by Chain:**
 
 | Chain   | Mean |   SD | Min | Max |
 |:--------|-----:|-----:|----:|----:|
-| chain_1 | 1.76 | 1.00 |   1 |   8 |
-| chain_2 | 1.81 | 1.07 |   1 |   7 |
-| chain_3 | 2.25 | 1.18 |   1 |   7 |
-| chain_4 | 1.98 | 1.06 |   1 |   5 |
+| chain_1 | 1.93 | 1.20 |   1 |   8 |
+| chain_2 | 2.16 | 1.24 |   1 |   9 |
+| chain_3 | 1.89 | 1.06 |   1 |   7 |
+| chain_4 | 2.38 | 1.37 |   1 |   8 |
 
 **Capacity by Chain:**
 
 | Chain   | Mean |  SD |  Min |   Max |
 |:--------|-----:|----:|-----:|------:|
-| chain_1 | 2335 | 573 | 2046 | 10105 |
-| chain_2 | 2278 | 491 | 2045 |  8902 |
-| chain_3 | 2268 | 238 | 2045 |  3208 |
-| chain_4 | 2279 | 264 | 2045 |  3701 |
+| chain_1 | 2808 | 673 | 2047 | 10105 |
+| chain_2 | 2825 | 677 | 2046 |  8902 |
+| chain_3 | 2706 | 446 | 2045 |  4775 |
+| chain_4 | 2661 | 503 | 2045 |  5131 |
 
 **LCC Transition Rates by Chain:**
 
-| Chain   | Region  | Transitions | Rate |
-|:--------|:--------|------------:|:-----|
-| chain_1 | chain_1 |         264 | 5.3% |
-| chain_2 | chain_2 |         252 | 5.0% |
-| chain_3 | chain_3 |         293 | 5.9% |
-| chain_4 | chain_4 |         272 | 5.4% |
+| Chain   | Region  | Transitions | Rate  |
+|:--------|:--------|------------:|:------|
+| chain_1 | chain_1 |         652 | 13.0% |
+| chain_2 | chain_2 |         690 | 13.8% |
+| chain_3 | chain_3 |         714 | 14.3% |
+| chain_4 | chain_4 |         680 | 13.6% |
 
 ### Geographic Coverage by Region
 
 | Region | Parcels | Capacity | Mean Visit% | Mean Cap% | Min Visit% | Max Visit% |
 |:-------|--------:|---------:|------------:|----------:|-----------:|-----------:|
-| all    |    8052 |   141707 |        44.8 |      18.1 |       41.7 |       46.3 |
+| all    |    8052 |   141707 |        55.8 |      25.2 |       54.8 |         57 |
 
 ## State Space Exploration
 
 ### Unique LCCs Visited
 
-- Mean unique LCC capacity values per chain: 1000.2
-- Mean LCC transitions per chain: 999
-- LCC transition rate: 19.98%
+- Mean unique LCC capacity values per chain: 1446
+- Mean LCC transitions per chain: 1445
+- LCC transition rate: 28.9%
 
 ### Parcel-Unit Stickiness
 
 | Category          | Count | % of Total |
 |-------------------|-------|------------|
 | Always in (\>95%) | 0     | 0%         |
-| Rarely in (\<5%)  | 6450  | 80.1%      |
-| Variable          | 1602  | 19.9%      |
+| Rarely in (\<5%)  | 5298  | 65.8%      |
+| Variable          | 2754  | 34.2%      |
 
 | Inclusion Range | Count |
 |:----------------|------:|
-| (0.5,0.75\]     |     4 |
-| (0.25,0.5\]     |   325 |
-| (0.05,0.25\]    |  1273 |
-| \[0,0.05\]      |  6450 |
+| (0.25,0.5\]     |   130 |
+| (0.05,0.25\]    |  2624 |
+| \[0,0.05\]      |  5298 |
 
 ### Parcel Feasibility Analysis
 
@@ -456,28 +459,28 @@ can hide a large `n_add / n_rem` skew.*
 
 **Feasibility vs Stickiness:**
 
-    Rarely visited (<5%) parcels: 6,449
+    Rarely visited (<5%) parcels: 5,298
 
-      - Unreachable: 444 (6.9%)
+      - Unreachable: 444 (8.4%)
 
-      - Feasible but rarely visited: 6,005 (93.1%)
+      - Feasible but rarely visited: 4,854 (91.6%)
 
 **Stickiness by Feasibility Class:**
 
 | Classification    | Parcels | Never Visited | % Never | Mean Incl% | Max Incl% |
 |:------------------|--------:|--------------:|--------:|-----------:|----------:|
-| lcc_and_secondary |    5644 |           249 |     4.4 |       5.95 |      51.0 |
-| lcc_only          |     621 |           184 |    29.6 |       1.52 |      45.7 |
-| secondary_only    |    1343 |           382 |    28.4 |       0.19 |       1.1 |
+| lcc_and_secondary |    5644 |             5 |     0.1 |       6.69 |      30.8 |
+| lcc_only          |     621 |           140 |    22.5 |       2.36 |      29.0 |
+| secondary_only    |    1343 |             9 |     0.7 |       0.47 |       2.5 |
 | unreachable       |     444 |           444 |   100.0 |       0.00 |       0.0 |
 
-- Feasible but rarely visited: 74.6% of all parcels
+- Feasible but rarely visited: 60.3% of all parcels
 
 ### Unique States Visited
 
-- Unique parcel states (across all chains): 1,950
+- Unique parcel states (across all chains): 1,974
 - Total thinned samples: 2,000
-- Uniqueness ratio: 97.5%
+- Uniqueness ratio: 98.7%
 
 ## Kernel-Specific Diagnostics
 
@@ -485,12 +488,12 @@ can hide a large `n_add / n_rem` skew.*
 
 | Reason                            | Count | % of Attempted |
 |:----------------------------------|------:|---------------:|
-| attempted                         |  4956 |          100.0 |
-| proposed                          |  4956 |          100.0 |
-| feasible                          |  4363 |           88.0 |
-| mh_rejected                       |  2664 |           53.8 |
-| accepted                          |  1699 |           34.3 |
-| infeasible                        |   593 |           12.0 |
+| attempted                         |  5058 |          100.0 |
+| proposed                          |  5058 |          100.0 |
+| feasible                          |  4846 |           95.8 |
+| accepted                          |  3169 |           62.7 |
+| mh_rejected                       |  1677 |           33.2 |
+| infeasible                        |   212 |            4.2 |
 | proposal_failed                   |     0 |            0.0 |
 | current_lcc_not_in_library        |     0 |            0.0 |
 | no_candidates                     |     0 |            0.0 |
@@ -507,43 +510,43 @@ can hide a large `n_add / n_rem` skew.*
 
 | Constraint   | Failures | % of Failures |
 |:-------------|---------:|--------------:|
-| min_capacity |      593 |           100 |
+| min_capacity |      212 |           100 |
 
 **Replace-LCC MH Acceptance Analysis:**
 
-    - MH proposals evaluated: 4,363
-    - Mean accept prob: 0.392
-    - Median accept prob: 0.176
-    - Accept prob < 0.1: 1888 (43.3%)
-    - Accept prob > 0.9: 1036 (23.7%)
+    - MH proposals evaluated: 846
+    - Mean accept prob: 0.647
+    - Median accept prob: 0.718
+    - Accept prob < 0.1: 1 (0.1%)
+    - Accept prob > 0.9: 322 (38.1%)
 
 
     **Log proposal ratio (log q(x'→x) / q(x→x')):**
 
-    - Mean: -1.72
-    - SD: 1.85
-    - Range: -5.18 to 4.79
+    - Mean: -0.44
+    - SD: 0.98
+    - Range: -2.39 to 2.48
 
 
     **Replace-LCC proposal diagnostics:**
 
-| Metric                      |   Mean | Median | P90 |  Max |
-|:----------------------------|-------:|-------:|----:|-----:|
-| Retained k (secondaries)    |   1.05 |      1 |   3 |    7 |
-| Forward candidate LCC count | 629.91 |    607 | 903 | 1702 |
+| Metric                      |   Mean | Median |  P90 |  Max |
+|:----------------------------|-------:|-------:|-----:|-----:|
+| Retained k (secondaries)    |   1.20 |      1 |    3 |    7 |
+| Forward candidate LCC count | 983.04 |   1002 | 1332 | 1852 |
 
 **Replace-LCC Proposal Geometry:**
 
-    - Forward candidate LCCs: mean=629.9, sd=211.8
-    - Reverse candidate LCCs: mean=783.3, sd=244.5
-    - Asymmetry ratio (fwd/rev): mean=0.84
+    - Forward candidate LCCs: mean=983.0, sd=278.2
+    - Reverse candidate LCCs: mean=1074.4, sd=261.1
+    - Asymmetry ratio (fwd/rev): mean=0.95
 
 ### Birth/Death Direction Analysis
 
     **Direction of Accepted Moves:**
 
 
-    ✓ Balanced: 0.97 births per death
+    ✓ Balanced: 1.00 births per death
 
 ### Legacy Multi-Move Birth/Death (r-value)
 
@@ -559,70 +562,70 @@ blocks.*
 
     **Capacity Change for Accepted Swaps:**
 
-    - Total accepted swaps: 650
-    - Mean capacity delta: -1.5
-    - SD capacity delta: 70.3
-    - Range: -150 to 149
+    - Total accepted swaps: 951
+    - Mean capacity delta: -3.6
+    - SD capacity delta: 74.5
+    - Range: -150 to 150
 
 
     **Proposal Asymmetry (similar block counts):**
 
-    - Forward similar blocks: mean=240.6, sd=49.7
-    - Reverse similar blocks: mean=243.1, sd=53.0
+    - Forward similar blocks: mean=229.6, sd=63.1
+    - Reverse similar blocks: mean=231.2, sd=63.9
     - Ratio (fwd/rev): mean=1.02
 
     **Swap Rejection Breakdown:**
 
 | Reason          | Count | % of Attempted |
 |:----------------|------:|---------------:|
-| attempted       |  2049 |          100.0 |
-| proposed        |  1116 |           54.5 |
-| proposal_failed |   933 |           45.5 |
-| no_secondaries  |   933 |           45.5 |
-| feasible        |   759 |           37.0 |
-| accepted        |   650 |           31.7 |
-| infeasible      |   357 |           17.4 |
-| mh_rejected     |   109 |            5.3 |
+| attempted       |  2027 |          100.0 |
+| proposed        |  1210 |           59.7 |
+| feasible        |  1048 |           51.7 |
+| accepted        |   951 |           46.9 |
+| proposal_failed |   817 |           40.3 |
+| no_secondaries  |   817 |           40.3 |
+| infeasible      |   162 |            8.0 |
+| mh_rejected     |    97 |            4.8 |
 
 
     **Swap Constraint Failures:**
 
 | Constraint           | Failures |
 |:---------------------|---------:|
-| station_capacity_pct |      268 |
-| min_capacity         |       82 |
+| station_capacity_pct |      119 |
+| min_capacity         |       31 |
+| min_lcc_fraction     |        6 |
 | station_area_pct     |        6 |
-| min_lcc_fraction     |        1 |
 
 ## Capacity Prior Diagnostics
 
 The capacity prior penalizes capacity above min_capacity with a linear
-penalty: `penalty = λ × (capacity - min_capacity)` where λ = 0.005.
+penalty: `penalty = λ × (capacity - min_capacity)` where λ = 0.002.
 
 - Penalty source: runner diagnostics
-- Steps above min_capacity: 19,858 / 20,000 (99.3%)
+- Steps above min_capacity: 19,980 / 20,000 (99.9%)
 
 <!-- -->
 
     **Penalty Statistics (when above min_capacity):**
 
-    - Mean penalty: 1.2343
-    - Max penalty: 40.3000
-    - Mean excess capacity: 247
+    - Mean penalty: 1.4114
+    - Max penalty: 16.1200
+    - Mean excess capacity: 706
 
 ## Library Utilization
 
 ### LCC Library
 
 - Initial LCC library size: 5000
-- Final library sizes: 5711, 5752, 5729, 5700
-- Online enrichment adds: 2892
+- Final library sizes: 5718, 5762, 5731, 5734
+- Online enrichment adds: 2945
 
 ### Secondary Library
 
 - Secondary library size: 500
-- Lifted Birth/Death acceptance: 18.4%
-- Lifted Birth/Death feasibility: 81.5%
+- Lifted Birth/Death acceptance: 38.1%
+- Lifted Birth/Death feasibility: 89.5%
 
 ## Library Coverage Statistics
 
@@ -657,10 +660,10 @@ penalty: `penalty = λ × (capacity - min_capacity)` where λ = 0.005.
 
 | Check                           | Value             |
 |:--------------------------------|:------------------|
-| Convergence (R-hat)             | 1.088             |
-| ESS                             | 153               |
-| Chain Mixing                    | 0.609 min overlap |
-| LCC Exploration                 | 19.98%            |
-| Lifted Birth/Death Acceptance   | 18.4% acceptance  |
-| Replace-LCC Feasibility         | 88.0%             |
-| Parcel Variability (stickiness) | 80.1% sticky      |
+| Convergence (R-hat)             | 1.042             |
+| ESS                             | 284               |
+| Chain Mixing                    | 0.814 min overlap |
+| LCC Exploration                 | 28.90%            |
+| Lifted Birth/Death Acceptance   | 38.1% acceptance  |
+| Replace-LCC Feasibility         | 95.8%             |
+| Parcel Variability (stickiness) | 65.8% sticky      |
