@@ -1,20 +1,32 @@
 # mcmc_data_loading.R - Functions for loading district data for MCMC pipeline
-# 
-# Wrappers for loading district data for MCMC pipeline. Includes helper functions to find files based on district name, 
+#
+# Wrappers for loading district data for MCMC pipeline. Includes helper functions to find files based on district name,
 # and a main function to load all relevant data for a district into a structured format for MCMC processing.
 
 #' Helper function to get paths given a district name
 #'
 #' @param district_name Name of district (e.g., "Norwood")
+#' @param district_type Community type, must be one of "rapid_transit", "commuter_rail", "adjacent" or "adjacent_small_town"
 #' @param data_root Path to data directory (default: "data")
+#' @param parcels_subdir Subdirectory of `data_root` containing parcel ZIP files.
+#'   If `NULL`, uses \code{Sys.getenv("MBTAZONE_PARCELS_SUBDIR")} when set and
+#'   non-empty, otherwise `"land_record_shapefiles/basic"`.
 #' @return Named list with paths
 #' @export
 get_district_paths <- function(
     district_name,
-    data_root = "data")
+    district_type,
+    data_root = "data",
+    parcels_subdir = NULL)
 {
+  if (is.null(parcels_subdir)) {
+    parcels_subdir <- Sys.getenv("MBTAZONE_PARCELS_SUBDIR", unset = "")
+    if (!nzchar(parcels_subdir)) {
+      parcels_subdir <- "land_record_shapefiles/basic"
+    }
+  }
   # parcels data
-  parcels_matches <- list.files(file.path(data_root, "land_record_shapefiles/basic/"),
+  parcels_matches <- list.files(file.path(data_root, parcels_subdir),
                                 pattern = paste0("^\\d{1,3}_", toupper(district_name), "_basic\\.zip$"),
                                 full.names = TRUE)
   if (length(parcels_matches) == 0) {
@@ -27,9 +39,11 @@ get_district_paths <- function(
   parcels <- parcels_matches[1]
 
   # district data
-  district_matches <- list.files(file.path(data_root, "mbta_district_shapefiles/", district_name),
-                                 pattern = paste0("^", district_name, "_MBTAcommDistricts_.*\\.shp$"),
-                                 full.names = TRUE)
+  district_matches <- list.files(
+    file.path(data_root, "mbta_district_shapefiles/", district_name),
+    pattern = "\\.shp$",
+    full.names = TRUE
+  )
 
   # If no .shp files found, try any .zip file
   if (length(district_matches) == 0) {
@@ -48,7 +62,7 @@ get_district_paths <- function(
   district <- district_matches[1]
 
   # district model
-  excel_matches <- list.files(file.path(data_root, "mbta_district_models/", district_name),
+  excel_matches <- list.files(file.path(data_root, "mbta_district_models"),
                               pattern = paste0("^", district_name, " - CM.*\\.xlsx$"),
                               full.names = TRUE)
 
@@ -64,6 +78,7 @@ get_district_paths <- function(
   # Return paths
   list(
     district_name = district_name,
+    district_type = district_type,
     parcels = parcels,
     district = district,
     excel_model = excel_model
@@ -76,7 +91,7 @@ get_district_paths <- function(
 #' @param parcels Path to parcel shapefile or zip file
 #' @param district Path to district shapefile
 #' @param excel_model Path to district model
-#' @param row_path Path to right-of-way shapefile (default: "data/Right_of_Way/...")
+#' @param right_of_way Path to right-of-way shapefile (default: "data/Right_of_Way/...")
 #' @return Named list with:
 #'   - district_parcels: data.table with LOC_ID, capacity, area_acres, etc.
 #'   - district_geometry: sf object with LOC_ID, geometry, capacity, area

@@ -36,7 +36,9 @@ compute_subtree_aggregates <- function(
     root,
     capacity_aligned,
     area_aligned,
-    forbidden_mask
+    forbidden_mask,
+    capacity_in_station_aligned,
+    area_in_station_aligned
 ) {
   n <- igraph::vcount(tree)
 
@@ -61,6 +63,8 @@ compute_subtree_aggregates <- function(
   subtree_capacity <- as.numeric(capacity_aligned)
   subtree_area <- as.numeric(area_aligned)
   subtree_forbidden_count <- is_forbidden
+  subtree_capacity_in_station <- as.numeric(capacity_in_station_aligned)
+  subtree_area_in_station <- as.numeric(area_in_station_aligned)
 
   # Bottom-up aggregation: add child values to parent
   # Process in reverse BFS order (leaves to root)
@@ -70,6 +74,8 @@ compute_subtree_aggregates <- function(
       subtree_capacity[p] <- subtree_capacity[p] + subtree_capacity[v]
       subtree_area[p] <- subtree_area[p] + subtree_area[v]
       subtree_forbidden_count[p] <- subtree_forbidden_count[p] + subtree_forbidden_count[v]
+      subtree_capacity_in_station[p] <- subtree_capacity_in_station[p] + subtree_capacity_in_station[v]
+      subtree_area_in_station[p] <- subtree_area_in_station[p] + subtree_area_in_station[v]
     }
   }
 
@@ -79,9 +85,13 @@ compute_subtree_aggregates <- function(
     subtree_capacity = subtree_capacity,
     subtree_area = subtree_area,
     subtree_forbidden_count = subtree_forbidden_count,
+    subtree_capacity_in_station = subtree_capacity_in_station,
+    subtree_area_in_station = subtree_area_in_station,
     total_capacity = subtree_capacity[root],
     total_area = subtree_area[root],
-    total_forbidden = sum(is_forbidden)
+    total_forbidden = sum(is_forbidden),
+    total_capacity_in_station = subtree_capacity_in_station[root],
+    total_area_in_station = subtree_area_in_station[root]
   )
 }
 
@@ -199,6 +209,9 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
   total_capacity <- aggregates$total_capacity
   total_area <- aggregates$total_area
 
+  total_capacity_in_station <- aggregates$total_capacity_in_station
+  total_area_in_station <- aggregates$total_area_in_station
+
   # Constraints
   # NOTE: For LCC discovery, we use min_lcc_capacity (not min_capacity) because
   # LCCs can have lower capacity when secondaries contribute to total capacity.
@@ -206,6 +219,24 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
   min_lcc_fraction <- constraints$min_lcc_fraction %||% 0.5
   min_lcc_capacity <- constraints$min_capacity * min_lcc_fraction
   min_density <- constraints$min_density
+
+  # We put a conservative absolute minimum on how much of the station area/capacity must be in a given LCC
+  # It corresponds to the scenario where the LCC makes up 50% of the total area/capacity, and
+  # non-LCC parcels all have only parcels in the station, and so the LCC parcels must only make up 
+  # (station_capacity_pct/station_area_pct - 50%) of the station area/capacity
+
+  # This only applies if station_capacity_pct/station_area_pct is not NA and is more than 50%
+  check_station_cap <- !is.na(constraints$station_capacity_pct) && constraints$station_capacity_pct > 50
+  check_station_area <- !is.na(constraints$station_area_pct) && constraints$station_area_pct > 50
+
+  excess_station_cap_pct  <- max(0, constraints$station_capacity_pct - 50)
+  excess_station_area_pct <- max(0, constraints$station_area_pct - 50)
+
+  station_cap_fraction  <- if (check_station_cap)  (constraints$station_capacity_pct - 50) / 100 else 0
+  station_area_fraction <- if (check_station_area) (constraints$station_area_pct     - 50) / 100 else 0
+
+  station_cap_min <- constraints$min_capacity * station_cap_fraction
+  station_area_min <- constraints$min_area * station_area_fraction
 
   # Total forbidden count for computing complement forbidden
   total_forbidden <- aggregates$total_forbidden
@@ -218,36 +249,44 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
     sub_cap <- aggregates$subtree_capacity[v]
     sub_area <- aggregates$subtree_area[v]
     sub_forbidden_count <- aggregates$subtree_forbidden_count[v]
+    sub_cap_in_station <- aggregates$subtree_capacity_in_station[v]
+    sub_area_in_station <- aggregates$subtree_area_in_station[v]
 
     # Complement side
     comp_cap <- total_capacity - sub_cap
     comp_area <- total_area - sub_area
     # Complement forbidden = total forbidden - subtree forbidden
     comp_forbidden_count <- total_forbidden - sub_forbidden_count
+    comp_cap_in_station <- total_capacity_in_station - sub_cap_in_station
+    comp_area_in_station <- total_area_in_station - sub_area_in_station
 
-    # Check subtree side as LCC (no forbidden parcels allowed)
+    # --- Subtree side ---
     if (sub_forbidden_count == 0L &&
-      sub_cap >= min_lcc_capacity &&
-      (is.null(max_discovery_capacity) || sub_cap <= max_discovery_capacity) &&
-      (sub_area <= 0 || sub_cap / sub_area >= min_density)) {
+        sub_cap >= min_lcc_capacity &&
+        (is.null(max_discovery_capacity) || sub_cap <= max_discovery_capacity) &&
+        (sub_area <= 0 || sub_cap / sub_area >= min_density) &&
+        (!check_station_cap  || sub_cap_in_station  >= station_cap_min) &&
+        (!check_station_area || sub_area_in_station >= station_area_min)) {
       valid_cuts[[length(valid_cuts) + 1L]] <- list(
-        vertex = v,
-        side = "subtree",
+        vertex   = v,
+        side     = "subtree",
         capacity = sub_cap,
-        area = sub_area
+        area     = sub_area
       )
     }
 
-    # Check complement side as LCC (no forbidden parcels allowed)
+    # --- Complement side ---
     if (comp_forbidden_count == 0L &&
-      comp_cap >= min_lcc_capacity &&
-      (is.null(max_discovery_capacity) || comp_cap <= max_discovery_capacity) &&
-      (comp_area <= 0 || comp_cap / comp_area >= min_density)) {
+        comp_cap >= min_lcc_capacity &&
+        (is.null(max_discovery_capacity) || comp_cap <= max_discovery_capacity) &&
+        (comp_area <= 0 || comp_cap / comp_area >= min_density) &&
+        (!check_station_cap  || comp_cap_in_station  >= station_cap_min) &&
+        (!check_station_area || comp_area_in_station >= station_area_min)) {
       valid_cuts[[length(valid_cuts) + 1L]] <- list(
-        vertex = v,
-        side = "complement",
+        vertex   = v,
+        side     = "complement",
         capacity = comp_cap,
-        area = comp_area
+        area     = comp_area
       )
     }
   }
@@ -451,6 +490,16 @@ discover_lccs_from_trees <- function(
     capacity_aligned <- igraph::V(parcel_graph)$capacity[tree_to_parcel]
     area_aligned <- igraph::V(parcel_graph)$area[tree_to_parcel]
 
+    #Station-proximity attributes (default to 0 if attribute absent)
+    cap_in_station_attr  <- igraph::V(parcel_graph)$capacity_in_station
+    area_in_station_attr <- igraph::V(parcel_graph)$area_in_station
+
+    capacity_in_station_aligned <- if (!is.null(cap_in_station_attr))
+      cap_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
+
+    area_in_station_aligned <- if (!is.null(area_in_station_attr))
+      area_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
+
     # Forbidden mask for this component
     forbidden_mask <- tree_names %in% forbidden_parcels
 
@@ -488,7 +537,9 @@ discover_lccs_from_trees <- function(
         root = root,
         capacity_aligned = capacity_aligned,
         area_aligned = area_aligned,
-        forbidden_mask = forbidden_mask
+        forbidden_mask = forbidden_mask,
+        capacity_in_station_aligned = capacity_in_station_aligned,
+        area_in_station_aligned = area_in_station_aligned
       )
 
       # Find all valid cuts
@@ -859,6 +910,15 @@ discover_secondaries_from_trees <- function(
     # No forbidden mask for secondaries
     forbidden_mask <- rep(FALSE, n_tree)
 
+    cap_in_station_attr  <- igraph::V(parcel_graph)$capacity_in_station
+    area_in_station_attr <- igraph::V(parcel_graph)$area_in_station
+
+    capacity_in_station_aligned <- if (!is.null(cap_in_station_attr))
+      cap_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
+
+    area_in_station_aligned <- if (!is.null(area_in_station_attr))
+      area_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
+
     # =========================================================================
     # SAMPLE TREES FOR THIS COMPONENT
     # =========================================================================
@@ -888,7 +948,9 @@ discover_secondaries_from_trees <- function(
         root = root,
         capacity_aligned = capacity_aligned,
         area_aligned = area_aligned,
-        forbidden_mask = forbidden_mask
+        forbidden_mask = forbidden_mask,
+        capacity_in_station_aligned = capacity_in_station_aligned,
+        area_in_station_aligned = area_in_station_aligned
       )
 
       valid_cuts <- find_valid_secondary_cuts(

@@ -7,7 +7,7 @@
 compute_parcel_chain_coverage(
   parcel_result,
   parcel_graph,
-  region_assignments,
+  region_assignments = NULL,
   inclusion_threshold = 0.01
 )
 }

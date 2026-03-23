@@ -3,12 +3,13 @@
 # Implements multi-chain diagnostics for parcel MCMC approach.
 # Uses shared discovered LCC library across all chains for testing mixing.
 #
-# Region partitioning uses station-feasibility analysis to identify viable
-# station components that can satisfy the 90% station capacity constraint.
+# Chain initialisation uses maximally distant LCCs from the discovered library
+# (via generate_initial_states_from_lccs()), guaranteeing station constraint
+# satisfaction by construction rather than via separate station-feasibility
+# partitioning.
 #
 # Reuses:
-#   - partition_parcels_by_station_feasibility() from R/parcel_library.R
-#   - generate_initial_parcel_state_in_region() from R/parcel_library.R
+#   - generate_initial_states_from_lccs() from R/parcel_seeding.R
 #   - run_parcel_mcmc() from R/parcel_mcmc_runner.R
 
 # ============================================================================
@@ -75,15 +76,14 @@ compute_gelman_rubin <- function(chain_values) {
 #' @param base_config Base kernel configuration (from define_parcel_kernel_configs())
 #' @param n_chains Number of chains to run (default 4)
 #' @param n_steps Number of MCMC steps per chain (default MCMC_STEPS_MACRO)
-#' @param region_ids Character vector of region identifiers. Use
-#'   names(partition_parcels_by_station_feasibility(...)$seed_pools) to get regions.
-#'   Default c("R1", "R2", "R3", "R4") assumes 4 viable station components.
+#' @param region_ids Character vector of region identifiers for labelling chains.
+#'   Defaults to "chain_1", "chain_2", etc.
 #' @return List of chain configurations with unique seeds and region assignments
 #' @export
 define_parcel_multichain_configs <- function(base_config,
                                              n_chains = DEFAULT_N_CHAINS,
                                              n_steps = MCMC_STEPS_MACRO,
-                                             region_ids = c("R1", "R2", "R3", "R4")) {
+                                             region_ids = paste0("chain_", seq_len(n_chains))) {
   if (n_chains > length(region_ids)) {
     cli::cli_alert_warning(
       "Requested {n_chains} chains but only {length(region_ids)} regions available"
@@ -119,128 +119,77 @@ define_parcel_multichain_configs <- function(base_config,
 #' @param constraints MBTA constraints
 #' @param secondary_library Secondary block library
 #' @param lcc_library Discovered LCC library (shared across all chains)
-#' @param region_assignments Named vector from partition_parcels_by_station_feasibility()
-#' @param seed_pools Optional list of parcel ID vectors per region (from station partitioning).
-#'   If provided, seeds BFS from viable station components to guarantee constraint satisfaction.
+#' @param region_assignments Ignored, currently kept for backward compatibility only.
+#' @param initial_state Pre-generated initial parcel state from
+#'   generate_initial_states_from_lccs(). Replaces region-based BFS seeding.
 #' @return List with parcel_samples, samples, stats, diagnostics, chain_id,
-#'         region_id, initialization_failed, failure_reason
+#'         initialization_failed, failure_reason
 #' @export
+#' @param initial_state Pre-generated initial parcel state from
+#'   generate_initial_states_from_lccs(). Replaces region-based BFS seeding.
+#' @param region_assignments Ignored, kept for backward compatibility only.
 run_parcel_chain_from_region <- function(config,
                                          parcel_graph_result,
                                          constraints,
                                          secondary_library,
                                          lcc_library,
-                                         region_assignments,
-                                         seed_pools = NULL,
+                                         initial_state,
                                          verbose = FALSE) {
   parcel_graph <- parcel_graph_result$parcel_graph
 
-  # Hydrate libraries (convert safe integer indices to bit objects)
+  # Hydrate libraries
   secondary_library <- hydrate_library(secondary_library)
-  lcc_library <- hydrate_library(lcc_library)
+  lcc_library       <- hydrate_library(lcc_library)
 
-  # Get seed pool for this region if available
-  seed_pool <- if (!is.null(seed_pools)) seed_pools[[config$region_id]] else NULL
-
-  # Generate region-seeded initial state
-  initial_state <- tryCatch({
-    generate_initial_parcel_state_in_region(
-      parcel_graph = parcel_graph,
-      constraints = constraints,
-      libraries = list(secondary_library = secondary_library,
-                       lcc_library = lcc_library),
-      region_assignments = region_assignments,
-      target_region = config$region_id,
-      seed_pool = seed_pool
-    )
-  }, error = function(e) NULL)
-
+  # Validate initial state
   if (is.null(initial_state)) {
     return(list(
-      parcel_samples = NULL,
-      samples = NULL,
-      diagnostics = NULL,
-      chain_id = config$chain_id,
-      region_id = config$region_id,
-      kernel_name = config$name,
+      parcel_samples       = NULL,
+      samples              = NULL,
+      diagnostics          = NULL,
+      chain_id             = config$chain_id,
+      region_id            = config$region_id,
+      kernel_name          = config$name,
       initialization_failed = TRUE,
-      failure_reason = paste0("Failed to generate initial state in region ",
-                              config$region_id)
+      failure_reason       = paste0("NULL initial state provided for chain ", config$chain_id)
     ))
   }
 
-  # Run parcel MCMC with the shared lcc_library
-  # Enable online enrichment so chains can escape discovered library
+  # Unwrap single-element list wrapping introduced by targets iteration = "list"
+  if (is.list(initial_state) && length(initial_state) == 1 &&
+      is.null(names(initial_state))) {
+    initial_state <- initial_state[[1]]
+  }
+
+  # Run parcel MCMC
   result <- run_parcel_mcmc(
-    parcel_graph = parcel_graph,
-    initial_state = initial_state,
-    constraints = constraints,
-    secondary_library = secondary_library,
-    lcc_library = lcc_library,
-    config = config,
-    parcel_assignments = parcel_graph_result$parcel_assignments,
-    neighbor_cache = parcel_graph_result$neighbor_cache,
+    parcel_graph          = parcel_graph,
+    initial_state         = initial_state,
+    constraints           = constraints,
+    secondary_library     = secondary_library,
+    lcc_library           = lcc_library,
+    config                = config,
+    parcel_assignments    = parcel_graph_result$parcel_assignments,
+    neighbor_cache        = parcel_graph_result$neighbor_cache,
     enable_online_enrichment = TRUE,
-    verbose = verbose
+    verbose               = verbose
   )
 
-  # Add chain metadata
-  result$chain_id <- config$chain_id
-  result$region_id <- config$region_id
-  result$initial_state <- initial_state
+  result$chain_id            <- config$chain_id
+  result$region_id           <- config$region_id
+  result$initial_state       <- initial_state
   result$initialization_failed <- FALSE
-  result$failure_reason <- NULL
-
-  # Return diagnostics needed for multichain analysis:
-  # - R-hat/ESS: capacity, n_components, n_secondaries, lcc_capacity, centroid trajectories
-  # - Coverage/Separation: parcel_inclusion_count, n_steps
-  # - Kernel diagnostics: symmetric_bd_*, replace_lcc_*, swap_*
-  minimal_diagnostics <- list(
-    capacity_trajectory = result$diagnostics$capacity_trajectory,
-    n_components_trajectory = result$diagnostics$n_components_trajectory,
-    n_secondaries_trajectory = result$diagnostics$n_secondaries_trajectory,
-    lcc_capacity_trajectory = result$diagnostics$lcc_capacity_trajectory,
-    centroid_x_trajectory = result$diagnostics$centroid_x_trajectory,
-    centroid_y_trajectory = result$diagnostics$centroid_y_trajectory,
-    parcel_inclusion_count = result$diagnostics$parcel_inclusion_count,
-    n_steps = result$diagnostics$n_steps,
-    # Symmetric birth/death diagnostics
-    symmetric_bd_births = result$diagnostics$symmetric_bd_births,
-    symmetric_bd_deaths = result$diagnostics$symmetric_bd_deaths,
-    # Replace-LCC diagnostics
-    replace_lcc_reasons = result$diagnostics$replace_lcc_reasons,
-    replace_lcc_constraints = result$diagnostics$replace_lcc_constraints,
-    replace_lcc_accept_prob = result$diagnostics$replace_lcc_accept_prob,
-    replace_lcc_log_q_ratio = result$diagnostics$replace_lcc_log_q_ratio,
-    replace_lcc_k_retained = result$diagnostics$replace_lcc_k_retained,
-    replace_lcc_n_similar_forward = result$diagnostics$replace_lcc_n_similar_forward,
-    replace_lcc_n_similar_reverse = result$diagnostics$replace_lcc_n_similar_reverse,
-    # Swap kernel diagnostics
-    swap_delta_caps = result$diagnostics$swap_delta_caps,
-    swap_n_similar_fwd = result$diagnostics$swap_n_similar_fwd,
-    swap_n_similar_rev = result$diagnostics$swap_n_similar_rev,
-    swap_reasons = result$diagnostics$swap_reasons,
-    swap_constraints = result$diagnostics$swap_constraints,
-    # Cross-region transition tracking
-    cross_region_transitions = result$diagnostics$cross_region_transitions,
-    same_region_transitions = result$diagnostics$same_region_transitions,
-    # Online enrichment tracking
-    online_adds = result$diagnostics$online_adds,
-    final_library_size = result$diagnostics$final_library_size,
-    # Kernel timing (for profiling)
-    timing = result$diagnostics$timing
-  )
+  result$failure_reason      <- NULL
 
   list(
-    diagnostics = minimal_diagnostics,
-    stats = result$stats,
-    chain_id = result$chain_id,
-    region_id = result$region_id,
-    kernel_name = result$kernel_name,
+    diagnostics          = result$diagnostics,
+    stats                = result$stats,
+    chain_id             = result$chain_id,
+    region_id            = result$region_id,
+    kernel_name          = result$kernel_name,
     initialization_failed = FALSE,
-    failure_reason = NULL,
-    # Include thinned samples for visualization (minimal state format)
-    parcel_samples = result$parcel_samples
+    failure_reason       = NULL,
+    parcel_samples       = result$parcel_samples
   )
 }
 
@@ -323,44 +272,54 @@ compute_parcel_multichain_rhat <- function(chain_results) {
 #' @return data.table with region coverage statistics
 compute_parcel_chain_coverage <- function(parcel_result,
                                           parcel_graph,
-                                          region_assignments,
+                                          region_assignments = NULL,
                                           inclusion_threshold = 0.01) {
   if (isTRUE(parcel_result$initialization_failed)) return(NULL)
-  if (is.null(parcel_result$diagnostics)) return(NULL)
+  if (is.null(parcel_result$diagnostics))          return(NULL)
 
-  # Get parcel inclusion fractions
-  n_steps <- parcel_result$diagnostics$n_steps
+  n_steps         <- parcel_result$diagnostics$n_steps
   inclusion_counts <- parcel_result$diagnostics$parcel_inclusion_count
+  if (is.null(inclusion_counts) || n_steps == 0)  return(NULL)
 
-  if (is.null(inclusion_counts) || n_steps == 0) return(NULL)
-
-  inclusion_frac <- inclusion_counts / n_steps
-
-  # Parcels visited at least threshold fraction of time
+  inclusion_frac  <- inclusion_counts / n_steps
   visited_parcels <- names(inclusion_frac)[inclusion_frac >= inclusion_threshold]
 
-  # Compute coverage by region
+  # If no region assignments, return a single "all" row
+  if (is.null(region_assignments)) {
+    all_parcels     <- igraph::V(parcel_graph)$name
+    total_capacity  <- sum(igraph::V(parcel_graph)$capacity)
+    visited_capacity <- sum(igraph::V(parcel_graph)[visited_parcels]$capacity)
+    return(data.table::data.table(
+      region_id        = "all",
+      n_parcels        = length(all_parcels),
+      n_visited        = length(visited_parcels),
+      pct_visited      = 100 * length(visited_parcels) / max(length(all_parcels), 1),
+      total_capacity   = total_capacity,
+      visited_capacity = visited_capacity,
+      capacity_pct     = 100 * visited_capacity / max(total_capacity, 1)
+    ))
+  }
+
+  # Region-level breakdown (existing logic)
   region_ids <- unique(region_assignments)
   region_ids <- region_ids[!is.na(region_ids)]
 
   coverage <- lapply(region_ids, function(rid) {
-    region_parcels <- names(region_assignments)[region_assignments == rid]
-    n_in_region <- length(region_parcels)
+    region_parcels   <- names(region_assignments)[region_assignments == rid]
+    n_in_region      <- length(region_parcels)
     visited_in_region <- intersect(visited_parcels, region_parcels)
-    n_visited <- length(visited_in_region)
-
-    # Capacity coverage
-    total_capacity <- sum(igraph::V(parcel_graph)[region_parcels]$capacity)
+    n_visited        <- length(visited_in_region)
+    total_capacity   <- sum(igraph::V(parcel_graph)[region_parcels]$capacity)
     visited_capacity <- sum(igraph::V(parcel_graph)[visited_in_region]$capacity)
 
     data.table::data.table(
-      region_id = rid,
-      n_parcels = n_in_region,
-      n_visited = n_visited,
-      pct_visited = 100 * n_visited / max(n_in_region, 1),
-      total_capacity = total_capacity,
+      region_id        = rid,
+      n_parcels        = n_in_region,
+      n_visited        = n_visited,
+      pct_visited      = 100 * n_visited / max(n_in_region, 1),
+      total_capacity   = total_capacity,
       visited_capacity = visited_capacity,
-      capacity_pct = 100 * visited_capacity / max(total_capacity, 1)
+      capacity_pct     = 100 * visited_capacity / max(total_capacity, 1)
     )
   })
 
@@ -375,18 +334,17 @@ compute_parcel_chain_coverage <- function(parcel_result,
 #' @return data.table with coverage summary by chain and region
 #' @export
 summarize_parcel_geographic_coverage <- function(chain_results,
-                                                  parcel_graph,
-                                                  region_assignments) {
+                                                 parcel_graph,
+                                                 region_assignments = NULL) {
   coverage_list <- lapply(names(chain_results), function(chain_name) {
-    result <- chain_results[[chain_name]]
+    result   <- chain_results[[chain_name]]
     coverage <- compute_parcel_chain_coverage(result, parcel_graph, region_assignments)
     if (!is.null(coverage)) {
-      coverage$chain_id <- result$chain_id
+      coverage$chain_id   <- result$chain_id
       coverage$chain_name <- chain_name
     }
     coverage
   })
-
   data.table::rbindlist(Filter(Negate(is.null), coverage_list))
 }
 
@@ -615,8 +573,8 @@ plot_parcel_rhat_summary <- function(rhat_table) {
 #' @return List with all diagnostics and summary
 #' @export
 create_parcel_irreducibility_report <- function(chain_results,
-                                                 parcel_graph,
-                                                 region_assignments) {
+                                                parcel_graph,
+                                                region_assignments = NULL) {
   # Count chains
   n_attempted <- length(chain_results)
   n_valid <- sum(sapply(chain_results, function(x) !isTRUE(x$initialization_failed)))

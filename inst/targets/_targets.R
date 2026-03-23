@@ -34,6 +34,8 @@ library(tarchetypes)
 library(crew)
 library(mbtazone)
 
+source("inst/targets/path_resolution.R", local = TRUE)
+
 # Choosing district (Allows for automated calling of this script by setting these variables in environment)
 district_name <- Sys.getenv("DISTRICT_NAME", unset = "Norwood")
 district_type <- Sys.getenv("DISTRICT_TYPE", unset = "commuter_rail")
@@ -41,8 +43,10 @@ district_type <- Sys.getenv("DISTRICT_TYPE", unset = "commuter_rail")
 
 store_path <- paste0("ext/_targets_", gsub(" ", "_", district_name))
 
-#Creating the directory for the reports output if it does not already exist.
+#Creating the directory for the outputs if they do not already exist.
 dir.create("ext/reports", recursive = TRUE, showWarnings = FALSE)
+dir.create("ext/llm_reports", recursive = TRUE, showWarnings = FALSE)
+dir.create("ext/exports", showWarnings = FALSE, recursive = TRUE)
 
 # Sourcing config files
 source("inst/targets/temp_targets_config.R", local = TRUE)
@@ -93,22 +97,30 @@ list(
   # ============================================================================
   tar_target(
     district_paths,
-    get_district_paths(
-      district_name = district_name,
-      data_root = '/home/k.conyngham/data' # should be an absolute path not relative so that it can be called from the qmds
-    )
+    {
+      p <- mbtazone_pipeline_paths()
+      get_district_paths(
+        district_name = district_name,
+        district_type = district_type,
+        data_root = p$data_root,
+        parcels_subdir = p$parcels_subdir
+      )
+    }
   ),
 
   tar_target(
     district_data,
-    load_district_data(
-      district_name = district_name,
-      district_type = district_type,
-      parcels = district_paths$parcels,
-      district = district_paths$district,
-      excel_model = district_paths$excel_model,
-      right_of_way = "../../data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
-    )
+    {
+      p <- mbtazone_pipeline_paths()
+      load_district_data(
+        district_name = district_name,
+        district_type = district_type,
+        parcels = district_paths$parcels,
+        district = district_paths$district,
+        excel_model = district_paths$excel_model,
+        right_of_way = p$right_of_way
+      )
+    }
   ),
 
   tar_target(
@@ -167,28 +179,18 @@ list(
   # Tree enumeration finds ~100 valid cuts per tree, much faster than MCMC.
   # BFS supplement explores boundary perturbations to find multi-crossing LCCs.
 
-  # Compute station-feasibility regions for MCMC seeding
-  # Finds viable station components and selects maximally distant seeds
-  tar_target(
-    parcel_station_regions,
-    partition_parcels_by_station_feasibility(
-      parcel_graph_result$parcel_graph,
-      constraints,
-      n_regions = 4
-    )
-  ),
-
   # LCC Stage 1: Tree enumeration
   # Each tree yields multiple valid cuts; n_trees controls coverage
   # Fast: ~30s for 500 trees, finds ~5000 LCCs
   tar_target(
     tree_discovered_lccs,
     discover_lccs_from_trees(
-      parcel_graph = parcel_graph_result$parcel_graph,
-      constraints = constraints,
-      n_trees = TREE_LCC_N_TREES,
-      forbidden_parcels = NULL,
-      verbose = TRUE
+      parcel_graph           = parcel_graph_result$parcel_graph,
+      constraints            = constraints,
+      n_trees                = TREE_LCC_N_TREES,
+      forbidden_parcels      = NULL,
+      max_discovery_capacity = constraints$min_capacity * DISCOVERY_CAPACITY_MULTIPLIER,
+      verbose                = TRUE
     )
   ),
 
@@ -208,15 +210,24 @@ list(
     )
   ),
 
-  # LCC Stage 2b: Capacity-stratified BFS discovery
-  # Tree discovery is biased toward high-capacity LCCs (78% have capacity > 5000).
-  # The capacity prior (lambda=0.005) makes the posterior favor capacity 1200-2000.
-  # This stage explicitly targets low-capacity bands to balance the library.
+  # LCC Stage 2b: Capacity-stratified BFS discovery (parallel over bands)
+  # Tree discovery is biased toward high-capacity LCCs. This stage explicitly
+  # targets low-capacity bands to balance the library. Each band runs as a
+  # separate crew worker for parallel execution.
+
+  # Band grid for dynamic branching
   tar_target(
-    bfs_stratified_lccs,
-    discover_lccs_by_capacity_bands(
+    bfs_band_grid,
+    data.frame(band_idx = seq_along(LCC_CAPACITY_BANDS_RELATIVE))
+  ),
+
+  # Per-band discovery — crew dispatches these to separate workers
+  tar_target(
+    bfs_stratified_band,
+    discover_lccs_single_band(
       parcel_graph = parcel_graph_result$parcel_graph,
       constraints = constraints,
+      band_idx = bfs_band_grid$band_idx,
       capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
       samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
       max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
@@ -226,7 +237,15 @@ list(
         bfs_discovered_lccs$discovered_lccs$lcc_key
       ),
       verbose = TRUE
-    )
+    ),
+    pattern = map(bfs_band_grid),
+    iteration = "list"
+  ),
+
+  # Combine per-band results into format expected downstream
+  tar_target(
+    bfs_stratified_lccs,
+    combine_stratified_band_results(bfs_stratified_band)
   ),
 
   # LCC Stage 3: Combine all LCC discoveries (tree, bfs boundary, bfs stratified)
@@ -241,12 +260,12 @@ list(
   ),
 
   # LCC Stage 4: Build LCC library from combined discoveries
-  # Uses coverage-aware selection to ensure geographic diversity
   tar_target(
     discovered_lcc_library,
     build_lcc_library_from_tree_discovery(
       combined_discovered_lccs$discovered_blocks,
       parcel_graph_result$parcel_graph,
+      constraints    = constraints,
       max_library_size = LCC_LIBRARY_MAX_SIZE,
       bfs_reservation = BFS_RESERVATION_LCC
     )
@@ -346,21 +365,45 @@ list(
   # and convergence diagnostics. Uses station-feasibility partitioning to guarantee
   # each chain can satisfy the station capacity constraint.
 
-  # Region partition for parcels (uses station-feasibility partitioning)
+
+  # k>0 chains (existing behavior, with secondary blocks)
   tar_target(
-    parcel_region_assignments,
-    parcel_station_regions$region_assignments
+    parcel_initial_states_k_pos,
+    generate_initial_states_from_lccs(
+      lcc_library   = discovered_lcc_library,
+      libraries     = list(
+        secondary_library = discovered_secondary_library,
+        lcc_library       = discovered_lcc_library
+      ),
+      parcel_graph  = parcel_graph_result$parcel_graph,
+      constraints   = constraints,
+      n_chains      = 4L
+    )
+  ),
+
+  tar_target(
+    parcel_initial_states,
+    parcel_initial_states_k_pos
+  ),
+
+  # Splits the list into branchable elements
+  tar_target(
+    parcel_initial_state,          # singular — one per branch
+    parcel_initial_states,
+    pattern = map(parcel_initial_states),
+    iteration = "list"
   ),
 
   # Configuration for parcel multi-chain analysis
   # Uses actual region IDs from station-feasibility partitioning
+  # Now derived from parcel_initial_states INSTEAD OF parcel_station_regions
   tar_target(
     parcel_multichain_config,
     define_parcel_multichain_configs(
       base_config = parcel_main_config,
-      n_chains = parcel_station_regions$n_regions,
-      n_steps = MCMC_STEPS_MACRO,
-      region_ids = names(parcel_station_regions$seed_pools)
+      n_chains    = length(parcel_initial_states),
+      n_steps     = MCMC_STEPS_MACRO,
+      region_ids  = paste0("chain_", seq_along(parcel_initial_states))
     )
   ),
 
@@ -374,26 +417,25 @@ list(
   tar_target(
     parcel_chain_results,
     run_parcel_chain_from_region(
-      config = parcel_multichain_config[[parcel_chain_grid$chain_id]],
+      config              = parcel_multichain_config[[parcel_chain_grid$chain_id]],
       parcel_graph_result = parcel_graph_result,
-      constraints = constraints,
-      secondary_library = discovered_secondary_library,
-      lcc_library = discovered_lcc_library,
-      region_assignments = parcel_region_assignments,
-      seed_pools = parcel_station_regions$seed_pools,
-      verbose = TRUE
+      constraints         = constraints,
+      secondary_library   = discovered_secondary_library,
+      lcc_library         = discovered_lcc_library,
+      initial_state       = parcel_initial_state,  # now a single state per branch
+      verbose             = TRUE
     ),
-    pattern = map(parcel_chain_grid),
+    pattern   = map(parcel_chain_grid, parcel_initial_state),
     iteration = "list",
-    packages = c("data.table", "igraph", "purrr", "cli", "mbtazone")
+    packages  = c("data.table", "igraph", "purrr", "cli", "mbtazone")
   ),
 
-  # Combine all parcel chain results into named list
+  # Name chains consistently
   tar_target(
     all_parcel_chain_results,
     setNames(
       parcel_chain_results,
-      paste0("chain_", seq_along(parcel_chain_results))
+      paste0("chain_", seq_along(parcel_initial_states))
     )
   ),
 
@@ -412,12 +454,13 @@ list(
     compute_parcel_multichain_rhat(all_parcel_chain_results)
   ),
 
+  # parcel_geographic_coverage — drop region_assignments argument
   tar_target(
     parcel_geographic_coverage,
     summarize_parcel_geographic_coverage(
       all_parcel_chain_results,
-      parcel_graph_result$parcel_graph,
-      parcel_region_assignments
+      parcel_graph_result$parcel_graph
+      # region_assignments omitted — defaults to NULL
     )
   ),
 
@@ -429,12 +472,13 @@ list(
     )
   ),
 
+  # parcel_irreducibility_report — drop region_assignments argument
   tar_target(
     parcel_irreducibility_report,
     create_parcel_irreducibility_report(
       all_parcel_chain_results,
-      parcel_graph_result$parcel_graph,
-      parcel_region_assignments
+      parcel_graph_result$parcel_graph
+      # region_assignments omitted — defaults to NULL
     )
   ),
 
@@ -445,7 +489,28 @@ list(
   ),
 
   # ============================================================================
-  # TIER 5: QUARTO REPORT
+  # TIER 5A: PLAN EXPORT
+  # ============================================================================
+  tar_target(
+    mcmc_plan_export,
+    {
+      dt <- export_mcmc_plans(
+        chain_results     = all_parcel_chain_results,
+        parcel_graph_result = parcel_graph_result,
+        secondary_library = discovered_secondary_library,
+        district_name     = district_name,
+        n_samples         = 100L,
+        seed              = 42L
+      )
+      out_path <- paste0("ext/exports/",
+                         gsub(" ", "_", district_name), "_plans.csv")
+      data.table::fwrite(dt, out_path)
+      dt  # also store in targets cache for downstream use
+    }
+  ),
+
+  # ============================================================================
+  # TIER 5B: QUARTO REPORT
   # ============================================================================
 
   tar_quarto(
@@ -467,6 +532,17 @@ list(
       file.copy(
         "inst/reports/mcmc_diagnostics.html",
         paste0("ext/reports/", district_name, "_mcmc_diagnostics.html"),
+        overwrite = TRUE
+      )
+    }
+  ),
+  tar_target(
+    mcmc_diagnostics_llm_report_copy,
+    {
+      mcmc_diagnostics_llm_report  # declare dependency
+      file.copy(
+        "inst/reports/mcmc_diagnostics_llm.md",
+        paste0("ext/llm_reports/", district_name, "_mcmc_diagnostics_llm.md"),
         overwrite = TRUE
       )
     }

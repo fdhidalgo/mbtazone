@@ -49,10 +49,10 @@ define_parcel_kernel_configs <- function(n_steps = MCMC_STEPS_MACRO) {
       name = "Lifted MCMC (Non-Reversible)",
       seed = 789,
       n_steps = n_steps,
-      p_lcc_local = 0.10,
-      p_symmetric_birth_death = 0.35, # Used as lifted_birth_death (balanced)
+      p_lcc_local = 0.35,
+      p_symmetric_birth_death = 0.30, # Used as lifted_birth_death (balanced)
       p_swap = 0.10,
-      p_replace_lcc = 0.45,
+      p_replace_lcc = 0.25,
       use_lifted = TRUE # Use lifted birth/death with momentum
     ),
 

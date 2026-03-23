@@ -2,18 +2,19 @@
 % Please edit documentation in R/mcmc_parcel_library.R
 \name{select_maxmin_distant_seeds}
 \alias{select_maxmin_distant_seeds}
-\title{Select k maximally distant seed components using greedy max-min algorithm}
+\title{Select k maximally distant items using greedy max-min algorithm}
 \usage{
-select_maxmin_distant_seeds(viable_components, k)
+select_maxmin_distant_seeds(coords, k)
 }
 \arguments{
-\item{viable_components}{data.table from find_viable_station_components()}
+\item{coords}{Numeric matrix with columns x, y (one row per candidate)}
 
-\item{k}{Number of seeds to select}
+\item{k}{Number of items to select}
 }
 \value{
-Integer vector of row indices in viable_components
+Integer vector of selected row indices
 }
 \description{
-Select k maximally distant seed components using greedy max-min algorithm
+Vectorized implementation using dist() — O(n^2) memory but avoids
+the O(n^2 * k) nested loop of the naive implementation.
 }

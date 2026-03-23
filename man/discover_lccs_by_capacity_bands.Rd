@@ -22,7 +22,6 @@ discover_lccs_by_capacity_bands(
 min_lcc_fraction)}
 
 \item{capacity_bands_relative}{List of c(low_mult, high_mult) tuples.
-Each tuple defines a band as \link{low_mult * min_capacity, high_mult * min_capacity}.
 Default: LCC_CAPACITY_BANDS_RELATIVE from parcel_config.R.}
 
 \item{samples_per_band}{Number of BFS samples per band.
@@ -51,23 +50,7 @@ capacity_band (integer), tree_count = 0, source = "bfs_stratified"
 }
 \description{
 Explicitly targets capacity bands to populate the library with LCCs
-in ranges that tree enumeration under-represents. Tree discovery produces
-78\% LCCs with capacity > 5000, but the capacity prior (lambda=0.005)
-makes the posterior favor LCCs with capacity 1200-2000.
-}
-\details{
-Unlike run_bfs_lcc_supplement() which seeds from tree-discovered LCCs,
-this function seeds from random parcels across the graph, enabling
-discovery of LCCs in capacity ranges tree enumeration misses.
-
-Algorithm:
-\enumerate{
-\item For each capacity band \link{cap_low, cap_high}:
-a. Select random seed parcels from all eligible parcels
-b. BFS-grow toward target capacity within band
-c. Validate: capacity in band, area >= min_area, density >= min_density
-d. Check connectivity (guaranteed by BFS, but verified)
-e. Deduplicate via xxhash64
-\item Return all unique LCCs discovered across bands
-}
+in ranges that tree enumeration under-represents. Calls
+\code{\link{discover_lccs_single_band}} for each band sequentially.
+For parallel execution, use targets dynamic branching over bands instead.
 }

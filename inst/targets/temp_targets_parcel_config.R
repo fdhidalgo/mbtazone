@@ -121,12 +121,15 @@ BFS_RESERVATION_SEC <- 100L
 #   Band 1: [0.5, 0.75] * 2045 = [1023, 1534] - Minimum viable LCCs
 #   Band 2: [0.75, 1.0] * 2045 = [1534, 2045] - Near-minimum (posterior mode)
 #   Band 3: [1.0, 1.5] * 2045 = [2045, 3068] - Small excess
-# High-capacity LCCs (>3068) are adequately covered by tree discovery.
+#   Band 4: [1.5, 2.5] * 2045 = [3068, 5113] - High-capacity, enables low-k states
+# Norwood diagnostic: standalone feasibility peaks at 62-72% for capacity
+# 2000-3000, and remains ~29% above 3000. The old 1.5x cap excluded 10K+
+# standalone-feasible LCCs needed for low-k exploration.
 LCC_CAPACITY_BANDS_RELATIVE <- list(
   c(0.5, 0.75),   # Need substantial secondaries to hit min_capacity
-
   c(0.75, 1.0),   # Primary posterior mode under capacity prior
-  c(1.0, 1.5)     # Small excess, still favored over very high capacity
+  c(1.0, 1.5),    # Small excess, still favored over very high capacity
+  c(1.5, 2.5)     # High-capacity: critical for low-k (standalone/few secondaries)
 )
 
 # Number of LCC samples per capacity band
@@ -134,7 +137,8 @@ LCC_BAND_SAMPLES_PER_BAND <- 500L
 
 # Maximum BFS attempts per band before giving up
 # Higher than samples_per_band because many attempts fail validation
-LCC_BAND_MAX_ATTEMPTS <- 2000L
+LCC_BAND_MAX_ATTEMPTS <- 500L
+# Originally 2000, currently 500 as otherwise this step can take over half an hour.
 
 # ============================================================================
 # KERNEL PROBABILITIES
@@ -202,6 +206,16 @@ MULTI_MOVE_PROBS <- c(0.90, 0.08, 0.02)
 
 # Maximum blocks to add/remove in a single move (derived from probs length)
 MULTI_MOVE_MAX_R <- length(MULTI_MOVE_PROBS)
+
+
+# ============================================================================
+# BIRTH PROPOSAL TILT (Capacity-Weighted Births)
+# ============================================================================
+# Tilts birth proposals toward lower-capacity secondary blocks.
+# Weights: w_i = exp(-BIRTH_TILT_LAMBDA * capacity_i)
+# Set to 0 for uniform (legacy behavior).
+# Set to CAPACITY_PRIOR_LAMBDA to cancel the capacity prior on births.
+BIRTH_TILT_LAMBDA <- CAPACITY_PRIOR_LAMBDA
 
 
 # ============================================================================

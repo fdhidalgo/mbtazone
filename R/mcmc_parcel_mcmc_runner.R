@@ -400,11 +400,16 @@ run_parcel_mcmc <- function(
       "mh_rejected",
       "current_lcc_not_in_library",
       "no_candidates",
-      # Retention approach reasons
       "secondaries_incompatible",
       "no_similar_capacity_lcc",
+      "no_compatible_lcc",
+      "no_valid_lcc",
+      "invalid_forward_weights",
       "selected_lcc_invalid",
-      "no_reverse_candidates"
+      "no_reverse_candidates",
+      "old_lcc_not_in_reverse_set",
+      "invalid_reverse_weights",
+      "old_lcc_filtered_from_reverse_set"
     ),
     count = 0L
   )
@@ -444,6 +449,8 @@ run_parcel_mcmc <- function(
   symmetric_bd_births <- 0L
   symmetric_bd_deaths <- 0L
   symmetric_bd_universe_sizes <- numeric(0)
+  birth_death_attempts <- vector("list", n_steps)
+  birth_death_attempt_idx <- 0L
 
   # Multi-move r-value tracking (legacy birth/death - kept for compatibility)
   # Use named vectors so report can extract r-values via names()
@@ -452,9 +459,6 @@ run_parcel_mcmc <- function(
   multi_death_r_counts <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
   multi_birth_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
   multi_death_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-
-  # DEBUG: Death proposal failure tracking
-  death_fail_reasons <- list()
 
   # Swap move tracking (capacity-balanced swap)
   swap_delta_caps <- numeric(0) # Track capacity change for accepted swaps
@@ -616,8 +620,30 @@ run_parcel_mcmc <- function(
           }
         }
 
+        # Track birth/death attempt-level diagnostics
+        birth_death_attempt_idx <- birth_death_attempt_idx + 1L
+        birth_death_attempts[[birth_death_attempt_idx]] <- data.table::data.table(
+          step = step,
+          kernel = "symmetric_birth_death",
+          direction = if (is.null(r$direction)) NA_character_ else as.character(r$direction),
+          new_direction = NA_character_,
+          k_before = if (is.null(r$k_before)) NA_integer_ else as.integer(r$k_before),
+          k_after = if (is.null(r$k_after)) NA_integer_ else as.integer(r$k_after),
+          n_add = if (is.null(r$n_add)) NA_integer_ else as.integer(r$n_add),
+          n_rem = if (is.null(r$n_rem)) NA_integer_ else as.integer(r$n_rem),
+          n_universe = if (is.null(r$n_universe)) NA_integer_ else as.integer(r$n_universe),
+          n_add_new = if (is.null(r$n_add_new)) NA_integer_ else as.integer(r$n_add_new),
+          n_rem_new = if (is.null(r$n_rem_new)) NA_integer_ else as.integer(r$n_rem_new),
+          n_universe_new = if (is.null(r$n_universe_new)) NA_integer_ else as.integer(r$n_universe_new),
+          accepted = isTRUE(r$accepted),
+          proposal_failed = isTRUE(r$proposal_failed),
+          infeasible = isTRUE(r$infeasible),
+          constraint_failed = if (is.null(r$constraint_failed)) NA_character_ else as.character(r$constraint_failed),
+          accept_prob = if (is.null(r$accept_prob)) NA_real_ else as.numeric(r$accept_prob)
+        )
+
         # Track universe sizes for analysis
-        if (!is.null(r$n_universe)) {
+        if (!is.null(r$n_universe) && is.finite(r$n_universe)) {
           symmetric_bd_universe_sizes <- c(symmetric_bd_universe_sizes, r$n_universe)
         }
 
@@ -663,6 +689,28 @@ run_parcel_mcmc <- function(
             lifted_bd_deaths <- lifted_bd_deaths + 1L
           }
         }
+
+        # Track birth/death attempt-level diagnostics
+        birth_death_attempt_idx <- birth_death_attempt_idx + 1L
+        birth_death_attempts[[birth_death_attempt_idx]] <- data.table::data.table(
+          step = step,
+          kernel = "lifted_birth_death",
+          direction = if (is.null(r$direction)) NA_character_ else as.character(r$direction),
+          new_direction = if (is.null(r$new_direction)) NA_character_ else as.character(r$new_direction),
+          k_before = if (is.null(r$k_before)) NA_integer_ else as.integer(r$k_before),
+          k_after = if (is.null(r$k_after)) NA_integer_ else as.integer(r$k_after),
+          n_add = if (is.null(r$n_add)) NA_integer_ else as.integer(r$n_add),
+          n_rem = if (is.null(r$n_rem)) NA_integer_ else as.integer(r$n_rem),
+          n_universe = if (is.null(r$n_universe)) NA_integer_ else as.integer(r$n_universe),
+          n_add_new = if (is.null(r$n_add_new)) NA_integer_ else as.integer(r$n_add_new),
+          n_rem_new = if (is.null(r$n_rem_new)) NA_integer_ else as.integer(r$n_rem_new),
+          n_universe_new = if (is.null(r$n_universe_new)) NA_integer_ else as.integer(r$n_universe_new),
+          accepted = isTRUE(r$accepted),
+          proposal_failed = isTRUE(r$proposal_failed),
+          infeasible = isTRUE(r$infeasible),
+          constraint_failed = if (is.null(r$constraint_failed)) NA_character_ else as.character(r$constraint_failed),
+          accept_prob = if (is.null(r$accept_prob)) NA_real_ else as.numeric(r$accept_prob)
+        )
 
         r
       },
@@ -951,12 +999,13 @@ run_parcel_mcmc <- function(
     # Periodic purge diagnostic (test if k=0 is feasible from current state)
     if (step %% purge_diagnostic_interval == 0) {
       purge_idx <- step %/% purge_diagnostic_interval
-      purge_results[[purge_idx]] <- purge_diagnostic_move(
+      purge_result <- purge_diagnostic_move(
         current_state,
         secondary_library,
         parcel_graph,
         constraints
       )
+      purge_results[[purge_idx]] <- c(list(step = step), purge_result)
     }
 
     # Log progress at milestones
@@ -994,20 +1043,6 @@ run_parcel_mcmc <- function(
       cli::cli_alert_info("{mt}: {acc}/{att} accepted ({rate}%)")
     }
 
-    # DEBUG: Death proposal failure breakdown
-    if (length(death_fail_reasons) > 0) {
-      cli::cli_h3("Death Proposal Failure Analysis (DEBUG)")
-      reasons <- sapply(death_fail_reasons, `[[`, "reason")
-      k_values <- sapply(death_fail_reasons, `[[`, "k")
-      reason_counts <- table(reasons)
-      for (r_name in names(reason_counts)) {
-        cli::cli_alert_info("  {r_name}: {reason_counts[r_name]}")
-      }
-      cli::cli_alert_info("  k distribution at failure: min={min(k_values)}, median={median(k_values)}, max={max(k_values)}")
-      cli::cli_alert_info("  k=0 failures: {sum(k_values == 0)}")
-      cli::cli_alert_info("  k>=3 failures (should be rare): {sum(k_values >= 3)}")
-    }
-
     # Capacity prior summary
     cli::cli_h3("Capacity Prior")
     mean_pen <- round(mean(penalty_trajectory), 4)
@@ -1015,7 +1050,7 @@ run_parcel_mcmc <- function(
     cli::cli_alert_info("Penalty: mean={mean_pen}, max={max_pen}")
 
     if (replace_lcc_reasons[reason == "attempted", count] > 0) {
-      cli::cli_h3("Replace-LCC Diagnostics")
+      cli::cli_h3("Joint Core Refresh Diagnostics")
       for (i in seq_len(nrow(replace_lcc_reasons))) {
         r <- replace_lcc_reasons$reason[i]
         c <- replace_lcc_reasons$count[i]
@@ -1024,7 +1059,7 @@ run_parcel_mcmc <- function(
         }
       }
       if (sum(replace_lcc_constraints$count) > 0) {
-        cli::cli_h3("Replace-LCC Constraint Failures")
+        cli::cli_h3("Joint Core Refresh Constraint Failures")
         for (i in seq_len(nrow(replace_lcc_constraints))) {
           cn <- replace_lcc_constraints$constraint[i]
           c <- replace_lcc_constraints$count[i]
@@ -1081,6 +1116,33 @@ run_parcel_mcmc <- function(
     lcc_library$block_hashes <- NULL
   }
 
+  birth_death_attempts <- if (birth_death_attempt_idx > 0L) {
+    data.table::rbindlist(
+      birth_death_attempts[seq_len(birth_death_attempt_idx)],
+      fill = TRUE
+    )
+  } else {
+    data.table::data.table(
+      step = integer(0),
+      kernel = character(0),
+      direction = character(0),
+      new_direction = character(0),
+      k_before = integer(0),
+      k_after = integer(0),
+      n_add = integer(0),
+      n_rem = integer(0),
+      n_universe = integer(0),
+      n_add_new = integer(0),
+      n_rem_new = integer(0),
+      n_universe_new = integer(0),
+      accepted = logical(0),
+      proposal_failed = logical(0),
+      infeasible = logical(0),
+      constraint_failed = character(0),
+      accept_prob = numeric(0)
+    )
+  }
+
   list(
     # Thinned minimal states (for visualization/metrics)
     parcel_samples = parcel_samples,
@@ -1116,6 +1178,7 @@ run_parcel_mcmc <- function(
       final_library_size = lcc_library$n_blocks,
       purge_results = purge_results,
       birth_accepted_caps = birth_accepted_caps,
+      birth_death_attempts = birth_death_attempts,
       # Symmetric birth/death diagnostics
       symmetric_bd_births = symmetric_bd_births,
       symmetric_bd_deaths = symmetric_bd_deaths,

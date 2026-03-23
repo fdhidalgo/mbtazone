@@ -7,6 +7,7 @@
 build_lcc_library_from_tree_discovery(
   discovered_lccs,
   parcel_graph,
+  constraints,
   max_library_size = 5000,
   bfs_reservation = 500
 )
@@ -17,6 +18,8 @@ combine_discovered_lccs(). Expected columns: lcc_key, parcel_ids (list),
 capacity, area, tree_count, source (optional)}
 
 \item{parcel_graph}{igraph object}
+
+\item{constraints}{MBTA constraints list — must contain min_capacity}
 
 \item{max_library_size}{Maximum number of LCCs to include (default 5000)}
 
@@ -38,4 +41,16 @@ tree discoveries exceed the library size limit.
 
 Selection uses coverage-aware greedy algorithm that maximizes geographic
 coverage by favoring LCCs that cover under-represented parcels.
+
+When capacity-stratified discoveries are present, fixed band quotas are used
+instead of proportional allocation. This is necessary because tree discovery
+is biased toward high-capacity LCCs (cuts near the root of large trees tend
+to produce large subtrees). Fixed quotas ensure the library has enough
+low-capacity LCCs for good mixing near the posterior mode.
+
+Band definitions are relative to min_capacity from constraints:
+band_1: < 0.75 * min_capacity  (below LCC minimum - rarely sampled)
+band_2: 0.75x - 1.0x           (near-minimum LCCs, posterior favored)
+band_3: 1.0x - 1.5x            (moderate capacity)
+band_4: > 1.5x                  (high capacity)
 }

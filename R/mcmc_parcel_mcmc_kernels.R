@@ -201,6 +201,61 @@ compute_lcc_capacity_weights <- function(lcc_ids, lcc_library) {
   )
 }
 
+#' Compute capacity-tilted weights for birth proposals
+#'
+#' Returns weights w_i = exp(-tilt_lambda * capacity_i) for biasing birth
+#' proposals toward lower-capacity blocks. When tilt_lambda = 0, returns
+#' uniform weights (equivalent to legacy behavior). Uses log-sum-exp for
+#' numerical stability.
+#'
+#' @param block_ids Integer vector of addable block IDs
+#' @param library Secondary library with $metadata$capacity
+#' @param tilt_lambda Tilt strength (default: BIRTH_TILT_LAMBDA)
+#' @return List with weights, log_weights, log_sum_w, valid
+compute_birth_tilt_weights <- function(block_ids, library,
+                                       tilt_lambda = NULL) {
+  if (is.null(tilt_lambda)) {
+    tilt_lambda <- BIRTH_TILT_LAMBDA
+  }
+
+  n <- length(block_ids)
+  if (n == 0) {
+    return(list(
+      weights = numeric(0),
+      log_weights = numeric(0),
+      log_sum_w = -Inf,
+      valid = FALSE
+    ))
+  }
+
+  # Uniform case: skip computation
+  if (tilt_lambda == 0) {
+    return(list(
+      weights = rep(1 / n, n),
+      log_weights = rep(0, n),
+      log_sum_w = log(n),
+      valid = TRUE
+    ))
+  }
+
+  caps <- library$metadata$capacity[block_ids]
+  log_w <- -tilt_lambda * caps
+
+  # Log-sum-exp for numerical stability
+  max_log_w <- max(log_w)
+  log_sum_w <- max_log_w + log(sum(exp(log_w - max_log_w)))
+
+  # Normalized weights for sampling
+  weights <- exp(log_w - log_sum_w)
+
+  list(
+    weights = weights,
+    log_weights = log_w,
+    log_sum_w = log_sum_w,
+    valid = TRUE
+  )
+}
+
 # ============================================================================
 # KERNEL 1: LCC-LOCAL REFINEMENT
 # ============================================================================
@@ -455,6 +510,8 @@ symmetric_birth_death_move <- function(
   constraints,
   neighbor_idx = NULL
 ) {
+  k_current <- length(state$secondary_blocks)
+
   # Step 1: Identify Universe
   # Addable: blocks that can be added (geometrically valid)
   addable_all <- get_addable_blocks_unconstrained(state, library)
@@ -481,8 +538,12 @@ symmetric_birth_death_move <- function(
   n_add <- length(addable)
   n_rem <- length(removable)
 
-  # Total universe size
-  Z_old <- n_add + n_rem
+  # Compute capacity-tilted birth weights
+  birth_weights <- compute_birth_tilt_weights(addable, library)
+  W_add <- exp(birth_weights$log_sum_w)  # sum of birth weights (= n_add when tilt=0)
+
+  # Total universe size: weighted births + uniform deaths
+  Z_old <- W_add + n_rem
 
   if (Z_old == 0) {
     return(list(
@@ -490,15 +551,28 @@ symmetric_birth_death_move <- function(
       accepted = FALSE,
       proposal_failed = TRUE,
       move_type = "symmetric_birth_death",
-      reason = "empty_universe"
+      reason = "empty_universe",
+      direction = NA_character_,
+      k_before = k_current,
+      k_after = k_current,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      constraint_failed = NA_character_,
+      accept_prob = NA_real_
     ))
   }
 
-  # Step 2: Sample block uniformly from universe
-  is_birth <- runif(1) < (n_add / Z_old)
+  # Step 2: Select direction proportional to weight mass
+  is_birth <- runif(1) < (W_add / Z_old)
 
   if (is_birth) {
-    block_id <- addable[sample.int(n_add, 1)]
+    idx <- sample.int(n_add, 1, prob = birth_weights$weights)
+    block_id <- addable[idx]
+    log_w_selected <- birth_weights$log_weights[idx]
     direction <- "birth"
     proposed_state <- add_secondary_block(
       state,
@@ -508,7 +582,7 @@ symmetric_birth_death_move <- function(
       neighbor_idx
     )
   } else {
-    # Sample from removable (weighted uniform, so just sample uniform)
+    # Sample from removable (uniform)
     sampled_idx <- sample.int(n_rem, 1)
     block_id <- removable[sampled_idx]
     direction <- "death"
@@ -537,7 +611,17 @@ symmetric_birth_death_move <- function(
       infeasible = TRUE,
       constraint_failed = feasibility$constraint_failed,
       move_type = "symmetric_birth_death",
-      direction = direction
+      direction = direction,
+      block_id = block_id,
+      k_before = k_current,
+      k_after = length(proposed_state$secondary_blocks),
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -566,15 +650,21 @@ symmetric_birth_death_move <- function(
   }
   n_add_new <- length(addable_rev)
 
-  # Universe size in proposed state
-  Z_new <- n_add_new + n_rem_new
+  # Universe size in proposed state (weighted births + uniform deaths)
+  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library)
+  W_add_new <- exp(rev_birth_weights$log_sum_w)
+  Z_new <- W_add_new + n_rem_new
 
-  # Step 5: MH Ratio
-  # q(y|x) = 1 / Z_old (uniform sampling)
-  # q(x|y) = 1 / Z_new
-  # ratio = Z_old / Z_new
-
-  log_q_ratio <- log(Z_old) - log(Z_new)
+  # Step 5: MH Ratio with capacity-tilted birth proposals
+  # Birth of block i: q(y|x) = w_i / Z_old, reverse (death): q(x|y) = 1 / Z_new
+  # Death of block j: q(y|x) = 1 / Z_old, reverse (birth): q(x|y) = w_j / Z_new
+  if (is_birth) {
+    log_q_ratio <- log(Z_old) - log(Z_new) - log_w_selected
+  } else {
+    removed_cap <- library$metadata$capacity[block_id]
+    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_q_ratio <- log_w_removed + log(Z_old) - log(Z_new)
+  }
 
   # Capacity prior penalty difference
   log_pi_ratio <- compute_penalty_difference(
@@ -586,11 +676,16 @@ symmetric_birth_death_move <- function(
   # K prior penalty difference (linear: penalizes birth, favors death)
   # Birth: k_proposed = k+1, so (k - (k+1)) = -1, log_k_ratio = -lambda
   # Death: k_proposed = k-1, so (k - (k-1)) = +1, log_k_ratio = +lambda
-  k_current <- length(state$secondary_blocks)
   k_proposed <- length(proposed_state$secondary_blocks)
   log_k_ratio <- K_PRIOR_LAMBDA * (k_current - k_proposed)
 
-  log_accept <- log_pi_ratio + log_k_ratio + log_q_ratio
+  # Reference measure correction: cancel combinatorial volume C(n_pool, k)
+  # so the marginal on k matches the intended geometric prior
+  n_pool <- library$n_blocks
+  log_ref_measure <- lchoose(n_pool, k_current) - lchoose(n_pool, k_proposed)
+
+  log_accept <- log_pi_ratio + log_k_ratio + log_ref_measure + log_q_ratio
+  accept_prob <- min(1, exp(log_accept))
   accept <- log(runif(1)) < log_accept
 
   if (accept) {
@@ -600,7 +695,17 @@ symmetric_birth_death_move <- function(
       proposal_failed = FALSE,
       move_type = "symmetric_birth_death",
       direction = direction,
-      n_universe = n_add + n_rem
+      block_id = block_id,
+      k_before = k_current,
+      k_after = k_proposed,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = n_add_new,
+      n_rem_new = n_rem_new,
+      n_universe_new = Z_new,
+      constraint_failed = NA_character_,
+      accept_prob = accept_prob
     ))
   } else {
     return(list(
@@ -608,7 +713,18 @@ symmetric_birth_death_move <- function(
       accepted = FALSE,
       proposal_failed = FALSE,
       move_type = "symmetric_birth_death",
-      direction = direction
+      direction = direction,
+      block_id = block_id,
+      k_before = k_current,
+      k_after = k_proposed,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = Z_old,
+      n_add_new = n_add_new,
+      n_rem_new = n_rem_new,
+      n_universe_new = Z_new,
+      constraint_failed = NA_character_,
+      accept_prob = accept_prob
     ))
   }
 }
@@ -675,7 +791,17 @@ lifted_birth_death_move <- function(
       move_type = "lifted_birth_death",
       direction = direction,
       forced_flip = TRUE,
-      proposal_failed = TRUE
+      proposal_failed = TRUE,
+      k_before = k,
+      k_after = k,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      constraint_failed = NA_character_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -687,13 +813,29 @@ lifted_birth_death_move <- function(
       move_type = "lifted_birth_death",
       direction = direction,
       forced_flip = TRUE,
-      proposal_failed = TRUE
+      proposal_failed = TRUE,
+      k_before = k,
+      k_after = k,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = NA_integer_,
+      n_rem_new = NA_integer_,
+      n_universe_new = NA_integer_,
+      constraint_failed = NA_character_,
+      accept_prob = NA_real_
     ))
   }
 
   # Propose move in current direction only
   if (direction == "birth") {
-    block_id <- addable[sample.int(n_add, 1)]
+    # Capacity-tilted birth proposal
+    birth_weights <- compute_birth_tilt_weights(addable, library)
+    idx <- sample.int(n_add, 1, prob = birth_weights$weights)
+    block_id <- addable[idx]
+    log_w_selected <- birth_weights$log_weights[idx]
+    log_W_addable <- birth_weights$log_sum_w
+
     proposed_state <- add_secondary_block(
       state, block_id, library, parcel_graph, neighbor_idx
     )
@@ -712,14 +854,26 @@ lifted_birth_death_move <- function(
         move_type = "lifted_birth_death",
         direction = direction,
         no_reverse = TRUE,
-        proposal_failed = FALSE
+        proposal_failed = FALSE,
+        block_id = block_id,
+        k_before = k,
+        k_after = length(proposed_state$secondary_blocks),
+        n_add = n_add,
+        n_rem = n_rem,
+        n_universe = n_add + n_rem,
+        n_add_new = NA_integer_,
+        n_rem_new = n_rem_new,
+        n_universe_new = NA_integer_,
+        constraint_failed = NA_character_,
+        accept_prob = NA_real_
       ))
     }
 
-    # Proposal ratio for lifted kernel
-    # Forward: select from n_add addable blocks
-    # Reverse: select from n_rem_new removable blocks
-    log_q_ratio <- log(n_add) - log(n_rem_new)
+    # Proposal ratio for lifted kernel with capacity-tilted birth
+    # Forward: q(y|x) = w_selected / W(addable)  [weighted birth]
+    # Reverse: q(x|y) = 1 / n_rem_new             [uniform death]
+    # log(q(x|y)/q(y|x)) = log(W(addable)) - log(w_selected) - log(n_rem_new)
+    log_q_ratio <- log_W_addable - log_w_selected - log(n_rem_new)
 
   } else { # death
     block_id <- removable[sample.int(n_rem, 1)]
@@ -750,14 +904,30 @@ lifted_birth_death_move <- function(
         move_type = "lifted_birth_death",
         direction = direction,
         no_reverse = TRUE,
-        proposal_failed = FALSE
+        proposal_failed = FALSE,
+        block_id = block_id,
+        k_before = k,
+        k_after = length(proposed_state$secondary_blocks),
+        n_add = n_add,
+        n_rem = n_rem,
+        n_universe = n_add + n_rem,
+        n_add_new = n_add_new,
+        n_rem_new = NA_integer_,
+        n_universe_new = NA_integer_,
+        constraint_failed = NA_character_,
+        accept_prob = NA_real_
       ))
     }
 
-    # Proposal ratio for lifted kernel
-    # Forward: select from n_rem removable blocks
-    # Reverse: select from n_add_new addable blocks
-    log_q_ratio <- log(n_rem) - log(n_add_new)
+    # Proposal ratio for lifted kernel with capacity-tilted reverse birth
+    # Forward: q(y|x) = 1 / n_rem                      [uniform death]
+    # Reverse: q(x|y) = w_removed / W(addable_new)      [weighted birth]
+    # log(q(x|y)/q(y|x)) = log(w_removed) - log(W(addable_new)) + log(n_rem)
+    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library)
+    removed_cap <- library$metadata$capacity[block_id]
+    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_W_addable_new <- rev_birth_weights$log_sum_w
+    log_q_ratio <- log_w_removed - log_W_addable_new + log(n_rem)
   }
 
   # Check feasibility (hard constraints only - capacity handled by prior)
@@ -775,7 +945,17 @@ lifted_birth_death_move <- function(
       direction = direction,
       constraint_failed = feasibility$constraint_failed,
       infeasible = TRUE,
-      proposal_failed = FALSE
+      proposal_failed = FALSE,
+      block_id = block_id,
+      k_before = k,
+      k_after = length(proposed_state$secondary_blocks),
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = if (exists("n_add_new")) n_add_new else NA_integer_,
+      n_rem_new = if (exists("n_rem_new")) n_rem_new else NA_integer_,
+      n_universe_new = NA_integer_,
+      accept_prob = NA_real_
     ))
   }
 
@@ -789,7 +969,11 @@ lifted_birth_death_move <- function(
   k_new <- length(proposed_state$secondary_blocks)
   log_k_ratio <- K_PRIOR_LAMBDA * (k - k_new)
 
-  log_alpha <- log_k_ratio + log_cap_ratio + log_q_ratio
+  # Reference measure correction: cancel combinatorial volume C(n_pool, k)
+  n_pool <- library$n_blocks
+  log_ref_measure <- lchoose(n_pool, k) - lchoose(n_pool, k_new)
+
+  log_alpha <- log_k_ratio + log_ref_measure + log_cap_ratio + log_q_ratio
   accept <- log(runif(1)) < log_alpha
 
   if (accept) {
@@ -803,7 +987,16 @@ lifted_birth_death_move <- function(
       block_id = block_id,
       accept_prob = min(1, exp(log_alpha)),
       proposal_failed = FALSE,
-      infeasible = FALSE
+      infeasible = FALSE,
+      constraint_failed = NA_character_,
+      k_before = k,
+      k_after = k_new,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = if (exists("n_add_new")) n_add_new else NA_integer_,
+      n_rem_new = if (exists("n_rem_new")) n_rem_new else NA_integer_,
+      n_universe_new = NA_integer_
     ))
   } else {
     # Reject -> flip direction (bounce)
@@ -815,7 +1008,16 @@ lifted_birth_death_move <- function(
       direction = direction,
       accept_prob = min(1, exp(log_alpha)),
       proposal_failed = FALSE,
-      infeasible = FALSE
+      infeasible = FALSE,
+      constraint_failed = NA_character_,
+      k_before = k,
+      k_after = k_new,
+      n_add = n_add,
+      n_rem = n_rem,
+      n_universe = n_add + n_rem,
+      n_add_new = if (exists("n_add_new")) n_add_new else NA_integer_,
+      n_rem_new = if (exists("n_rem_new")) n_rem_new else NA_integer_,
+      n_universe_new = NA_integer_
     ))
   }
 }
@@ -1206,41 +1408,13 @@ find_lcc_in_library <- function(lcc_parcels, lcc_library) {
 # KERNEL 4: REPLACE-LCC (GLOBAL RELOCATION)
 # ============================================================================
 
-#' Replace-LCC move with retention + capacity-matched sampling
-#'
-#' Proposes jumping to a new LCC while keeping ALL current secondaries.
-#' The new LCC is sampled from a capacity-similar set to improve acceptance.
-#'
-#' This approach solves the k-mismatch problem: birth/death creates states
-#' with k≈5, but resampling proposals generate k≈1-2. By retaining secondaries,
-#' k stays constant and MH acceptance improves dramatically.
-#'
-#' Proposal:
-#' 1. Find LCCs with capacity within ±cap_tolerance of current
-#' 2. Sample new LCC with capacity-aware weights (prefer smaller LCCs near max_cap)
-#' 3. Check all current secondaries are compatible with new LCC
-#' 4. Keep all secondaries (no resampling)
-#'
-#' MH ratio corrects for weighted proposal asymmetry:
-#'   log_q_ratio = log(w_old) - log(w_new) + log(Z_forward) - log(Z_reverse)
-#'
-#' @param state Current state
-#' @param lcc_library LCC candidate library
-#' @param secondary_library Secondary library
-#' @param parcel_graph igraph object
-#' @param constraints MBTA constraints
-#' @param cap_tolerance Capacity tolerance for similar-LCC sampling (default 4000).
-#'   Wide tolerance allows escaping from high-cap to low-cap modes.
-#' @param neighbor_idx List of integer neighbor indices (for incremental tracking)
-#' @param parcel_names Character vector of all parcel names (for incremental tracking)
-#' @return List with new_state, accepted, move_type, details
 replace_lcc_move <- function(
   state,
   lcc_library,
   secondary_library,
   parcel_graph,
   constraints,
-  cap_tolerance = 4000,
+  cap_tolerance = REPLACE_LCC_CAP_TOLERANCE,
   neighbor_idx = NULL,
   parcel_names = NULL
 ) {
@@ -1651,14 +1825,12 @@ purge_diagnostic_move <- function(state, library, parcel_graph, constraints) {
 
   if (k_current == 0) {
     return(list(
-      new_state = state,
-      accepted = FALSE,
-      proposal_failed = TRUE,
-      move_type = "purge_diagnostic",
       k_before = 0L,
+      total_capacity_before = state$total_capacity,
       feasible = TRUE,
       constraint_failed = NA_character_,
-      lcc_capacity = NA_real_
+      lcc_capacity = NA_real_,
+      lcc_minus_min_capacity = NA_real_
     ))
   }
 
@@ -1679,17 +1851,15 @@ purge_diagnostic_move <- function(state, library, parcel_graph, constraints) {
 
   # Return diagnostic result (never actually transition)
   list(
-    new_state = state,
-    accepted = FALSE,
-    proposal_failed = FALSE,
-    move_type = "purge_diagnostic",
     k_before = k_current,
+    total_capacity_before = state$total_capacity,
     feasible = feasibility$feasible,
     constraint_failed = if (is.null(feasibility$constraint_failed)) {
       NA_character_
     } else {
       feasibility$constraint_failed
     },
-    lcc_capacity = lcc_capacity
+    lcc_capacity = lcc_capacity,
+    lcc_minus_min_capacity = lcc_capacity - constraints$min_capacity
   )
 }
