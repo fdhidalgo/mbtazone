@@ -1763,9 +1763,9 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
 
   # Compute centroids for max-min seed selection in chain initialisation
   centroid_x <- vapply(blocks, function(pids)
-    mean(igraph::V(parcel_graph)[pids]$centroid_x), numeric(1))
+    mean(igraph::V(parcel_graph)[pids]$centroid_x, na.rm = TRUE), numeric(1))
   centroid_y <- vapply(blocks, function(pids)
-    mean(igraph::V(parcel_graph)[pids]$centroid_y), numeric(1))
+    mean(igraph::V(parcel_graph)[pids]$centroid_y, na.rm = TRUE), numeric(1))
 
   metadata <- data.table::data.table(
     block_id            = seq_len(n_blocks),
@@ -1964,6 +1964,12 @@ build_secondary_library_from_discovery <- function(
     size_bands <- rep("discovered", n_blocks)
   }
 
+  # Compute station metrics (mirrors LCC library build at lines 1759-1762)
+  area_in_station <- vapply(blocks, function(pids)
+    sum(igraph::V(parcel_graph)[pids]$area_in_station, na.rm = TRUE), numeric(1))
+  capacity_in_station <- vapply(blocks, function(pids)
+    sum(igraph::V(parcel_graph)[pids]$capacity_in_station, na.rm = TRUE), numeric(1))
+
   # Build metadata
   metadata <- data.table::data.table(
     block_id = seq_len(n_blocks),
@@ -1972,7 +1978,9 @@ build_secondary_library_from_discovery <- function(
     n_parcels = vapply(blocks, length, integer(1)),
     size_band = size_bands,
     density = selected$capacity / selected$area,
-    source = block_sources
+    source = block_sources,
+    area_in_station = area_in_station,
+    capacity_in_station = capacity_in_station
   )
 
   # Store blocks as integer indices
@@ -2840,9 +2848,21 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
 
   if (length(compatible_ids) == 0) return(integer(0))
 
-  # Sort by capacity (largest first for greedy fill)
+  # Sort order: if station constraints are active, prioritize blocks with
+  # station coverage so the greedy fill satisfies station requirements first.
   block_caps <- library$metadata$capacity[compatible_ids]
-  order_idx <- order(block_caps, decreasing = TRUE)
+  has_station_constraint <- !is.null(constraints$station_capacity_pct) &&
+    !is.na(constraints$station_capacity_pct) && constraints$station_capacity_pct > 0
+  has_station_meta <- "capacity_in_station" %in% names(library$metadata)
+
+  if (has_station_constraint && has_station_meta) {
+    block_station_caps <- library$metadata$capacity_in_station[compatible_ids]
+    block_station_caps[is.na(block_station_caps)] <- 0
+    # Primary: station capacity desc, secondary: total capacity desc
+    order_idx <- order(block_station_caps, block_caps, decreasing = TRUE)
+  } else {
+    order_idx <- order(block_caps, decreasing = TRUE)
+  }
   compatible_ids <- compatible_ids[order_idx]
   block_caps <- block_caps[order_idx]
 

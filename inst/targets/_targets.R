@@ -57,11 +57,11 @@ if (dir.exists("./ext/worker_logs")) {
   unlink("worker_logs", recursive = TRUE)
 }
 
-# System resource allocation
-DEFAULT_CREW_WORKERS <- max(
-  1L,
-  10L
-)
+# System resource allocation — 4 workers matches actual parallelism
+# (4 BFS capacity bands, 4 MCMC chains). Previous 10 caused OOM crashes
+# on larger municipalities (Norwood, Salem, Bourne) from excessive
+# concurrent memory usage.
+DEFAULT_CREW_WORKERS <- 4L
 
 # Global options with crew controller for parallel execution
 tar_option_set(
@@ -82,10 +82,10 @@ tar_option_set(
   memory = "transient", # Unload after use
   garbage_collection = TRUE, # Run gc() between targets
   controller = crew_controller_local(
-    workers = DEFAULT_CREW_WORKERS, # Auto-detect cores, leave reserve for system
-    seconds_idle = 60, # Shut down idle workers after 60s
+    workers = DEFAULT_CREW_WORKERS,
+    seconds_idle = 30, # Shorter idle timeout to reclaim memory sooner
     options_local = crew_options_local(
-      log_directory = "./ext/worker_logs" # Capture worker stdout/stderr for monitoring
+      log_directory = "./ext/worker_logs"
     )
   )
 )
@@ -221,7 +221,9 @@ list(
     data.frame(band_idx = seq_along(LCC_CAPACITY_BANDS_RELATIVE))
   ),
 
-  # Per-band discovery — crew dispatches these to separate workers
+  # Per-band discovery — run in main process to avoid worker OOM on large graphs.
+  # Bands run sequentially but each is fast (~30s); parallel overhead is not worth
+  # the memory cost of serializing the parcel graph to 4 separate worker processes.
   tar_target(
     bfs_stratified_band,
     discover_lccs_single_band(
@@ -239,7 +241,8 @@ list(
       verbose = TRUE
     ),
     pattern = map(bfs_band_grid),
-    iteration = "list"
+    iteration = "list",
+    deployment = "main"
   ),
 
   # Combine per-band results into format expected downstream

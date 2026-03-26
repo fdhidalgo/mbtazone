@@ -18,7 +18,7 @@ define_constraints <- function(district_data) {
   req <- district_data$district_requirements
   list(
     min_capacity = req$min_units,
-    min_area = req$min_acres,
+    min_area = if (is.na(req$min_acres)) 0 else req$min_acres,
     min_density = req$min_gross_density,
     min_lcc_fraction = 0.5, # Default LCC fraction requirement
     station_capacity_pct = req$station_area_unit_pct,

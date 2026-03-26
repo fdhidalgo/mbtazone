@@ -38,18 +38,20 @@ get_district_paths <- function(
   cli::cli_alert_info('Using parcels data: {parcels_matches[1]}')
   parcels <- parcels_matches[1]
 
-  # district data
+  # district data (recurse into subdirectories for municipalities with nested layouts)
   district_matches <- list.files(
     file.path(data_root, "mbta_district_shapefiles/", district_name),
     pattern = "\\.shp$",
-    full.names = TRUE
+    full.names = TRUE,
+    recursive = TRUE
   )
 
   # If no .shp files found, try any .zip file
   if (length(district_matches) == 0) {
     district_matches <- list.files(file.path(data_root, "mbta_district_shapefiles/", district_name),
                                    pattern = "\\.zip$",
-                                   full.names = TRUE)
+                                   full.names = TRUE,
+                                   recursive = TRUE)
   }
 
   if (length(district_matches) == 0) {
