@@ -126,9 +126,10 @@ list(
   tar_target(
     adjacency_graph,
     build_adjacency_graph(
-      geometry_sf = district_data$district_geometry,
-      right_of_way_sf = district_data$district_right_of_way,
-      row_proximity_ft = ROW_PROXIMITY_THRESHOLD
+      geometry_sf        = district_data$district_geometry,
+      right_of_way_sf    = district_data$district_right_of_way,
+      max_dist_ft        = MAX_DIST_FEET,
+      min_coverage_ratio = MIN_COVERAGE_RATIO
     )
   ),
 

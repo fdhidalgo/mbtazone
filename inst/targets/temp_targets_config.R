@@ -10,9 +10,15 @@
 # Secondary component area threshold (acres)
 SECONDARY_AREA_THRESHOLD <- 5
 
-# Right-of-way (ROW) parameters for adjacency graph
-ROW_PROXIMITY_THRESHOLD <- 180 # feet
-ROW_MIN_CROSSING_LENGTH <- 20 # feet
+# Parameters for adjacency graph creation
+
+MAX_DIST_FEET <- 120
+# Maximum boundary-to-boundary distance (ft) for any two parcels to be considered
+# for adjacency.
+
+MIN_COVERAGE_RATIO <- 0.9
+# Minimum fraction of the nearest-points line that must lie within ROW for a
+# cross-ROW connection to be accepted. At 0.9, 90% of the line must be ROW.
 
 # Convergence diagnostics thresholds
 RHAT_CONVERGENCE_THRESHOLD <- 1.1 # R-hat < this indicates convergence
@@ -96,7 +102,7 @@ DISCOVERY_CAPACITY_MULTIPLIER <- 2.5
 K_PRIOR_LAMBDA <- 0.1
 
 # MCMC step count (single source of truth for all MCMC runs)
-MCMC_STEPS_MACRO <- 5000L
+MCMC_STEPS_MACRO <- 10000L
 
 # Burn-in: number of initial samples to discard when computing diagnostics
 # Chains start from different regions and need time to reach stationary distribution
