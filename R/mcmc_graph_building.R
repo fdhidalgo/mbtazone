@@ -1,369 +1,320 @@
 # graph_building.R - Adjacency graph construction and boundary computation
 #
-# Functions for building parcel adjacency graphs with ROW support
-# and for computing/maintaining boundary state during MCMC.
+# Functions for building parcel adjacency graphs with ROW support.
+#
+# Pipeline overview:
+#
+#   build_adjacency_graph()
+#     |
+#     |-- 1. Buffer parcels by max_dist_ft/2, find overlapping pairs (candidates)
+#     |-- 2. Boundary-to-boundary distance: pairs <= touch_threshold_ft -> direct edges
+#     |-- 3. Remaining candidates -> find_row_edges():
+#     |         a. Filter to parcels within row_gap_tolerance_m of ROW
+#     |         b. Build nearest-points lines (cap at max_dist_ft)
+#     |         c. validate_row_crossing_lines(): ROW coverage ratio >= min_coverage_ratio
+#     |-- 4. Merge direct + ROW edges -> igraph
 
 # ============================================================================
-# ADJACENCY GRAPH CONSTRUCTION
+# HELPERS
 # ============================================================================
 
-#' Validate direct adjacency edges (vectorized)
+#' Build nearest-points lines between two sets of parcel geometries
 #'
-#' Filters candidate edges from buffered intersection to only keep edges where
-#' parcels either physically touch OR are separated by a valid ROW crossing.
-#' This prevents spurious edges between parcels that are merely close but not
-#' truly adjacent.
+#' Uses st_nearest_points() so endpoints lie on parcel boundaries rather than
+#' centroids — correct for irregular or concave parcels. Lines exceeding
+#' max_dist_m are excluded before any further geometry work.
 #'
-#' Note: Assumes geometry_sf uses EPSG:26986 (meters). Thresholds are specified
-#' in feet and converted internally.
-#'
-#' @param edges data.table with "from" and "to" columns (parcel IDs)
-#' @param geometry_sf sf object with LOC_ID and geometry (must be in meters CRS)
-#' @param right_of_way_sf Optional sf object with ROW polygons
-#' @param touch_threshold_ft Max distance (ft) to consider as "touching" (default 2)
-#' @param row_min_crossing_ft Min ROW crossing length (ft) to validate cross-ROW edge
-#' @param verbose Print progress messages
-#' @return Filtered data.table of validated edges
-validate_direct_edges <- function(edges, geometry_sf, right_of_way_sf = NULL,
-                                   touch_threshold_ft = 2,
-                                   row_min_crossing_ft = ROW_MIN_CROSSING_LENGTH,
-                                   verbose = TRUE) {
-  if (nrow(edges) == 0) return(edges)
+#' @param from_geoms sfc of "from" parcel geometries
+#' @param to_geoms   sfc of "to" parcel geometries (same length)
+#' @param crs        CRS for the output sfc
+#' @param max_dist_m Hard cap on boundary-to-boundary line length in metres
+#' @return list(lines, lengths_m, keep) where keep is a logical index into the
+#'   input vectors indicating which pairs survived the distance cap
+build_nearest_point_lines <- function(from_geoms, to_geoms, crs,
+                                      max_dist_m = Inf) {
+  raw <- lapply(seq_along(from_geoms), function(i) {
+    line <- sf::st_geometry(sf::st_nearest_points(from_geoms[i], to_geoms[i]))[[1]]
+    len  <- as.numeric(sf::st_length(sf::st_sfc(line, crs = crs)))
+    list(line = line, len = len)
+  })
 
-  if (verbose) message("Validating direct adjacency edges (vectorized)...")
+  lengths <- vapply(raw, `[[`, numeric(1), "len")
+  keep    <- lengths <= max_dist_m
 
-
-  # ---- Unit conversion: feet to meters (EPSG:26986 uses meters) ----
-  FEET_TO_METERS <- 0.3048
-
-  touch_threshold_m <- touch_threshold_ft * FEET_TO_METERS
-  row_min_crossing_m <- row_min_crossing_ft * FEET_TO_METERS
-
-  # Pre-compute ROW union if available
-  row_union <- NULL
-  if (!is.null(right_of_way_sf) && nrow(right_of_way_sf) > 0) {
-    if (verbose) message("  Computing ROW union...")
-    row_union <- sf::st_union(right_of_way_sf)
-  }
-
-  n_edges <- nrow(edges)
-  keep <- logical(n_edges)
-  is_row_crossing <- logical(n_edges)
-
-  # ---- Build index lookup ----
-  geom_idx <- stats::setNames(seq_len(nrow(geometry_sf)), geometry_sf$LOC_ID)
-  from_idx <- geom_idx[edges$from]
-  to_idx <- geom_idx[edges$to]
-
-  # Identify valid edges (both parcels have geometry)
-  valid_geom <- !is.na(from_idx) & !is.na(to_idx)
-  valid_indices <- which(valid_geom)
-
-  if (length(valid_indices) == 0) {
-    if (verbose) message("  No valid edges to process")
-    result <- edges[keep, ]
-    result$is_row_crossing <- logical(0)
-    return(result)
-  }
-
-  # ---- Vectorized distance computation ----
-  if (verbose) message(glue::glue("  Computing distances for {length(valid_indices)} edges..."))
-
-  from_geoms <- sf::st_geometry(geometry_sf)[from_idx[valid_indices]]
-  to_geoms <- sf::st_geometry(geometry_sf)[to_idx[valid_indices]]
-
-  # Single vectorized distance call
-  distances <- as.numeric(sf::st_distance(from_geoms, to_geoms, by_element = TRUE))
-
-  # ---- First filter: touching edges ----
-  is_touching <- distances <= touch_threshold_m
-  keep[valid_indices[is_touching]] <- TRUE
-
-  n_touching <- sum(is_touching)
-  if (verbose) message(glue::glue("  Found {n_touching} touching edges"))
-
-  # ---- ROW crossing validation for non-touching edges ----
-  non_touching_mask <- !is_touching
-  non_touching_local_idx <- which(non_touching_mask)
-  non_touching_global_idx <- valid_indices[non_touching_mask]
-
-  if (length(non_touching_global_idx) > 0 && !is.null(row_union)) {
-    if (verbose) message(glue::glue("  Checking ROW crossings for {length(non_touching_global_idx)} non-touching edges..."))
-
-    # Get geometries for non-touching edges
-    from_geoms_nt <- from_geoms[non_touching_local_idx]
-    to_geoms_nt <- to_geoms[non_touching_local_idx]
-
-    # Compute centroids (vectorized)
-    centroids_from <- sf::st_centroid(from_geoms_nt)
-    centroids_to <- sf::st_centroid(to_geoms_nt)
-
-    coords_from <- sf::st_coordinates(centroids_from)
-    coords_to <- sf::st_coordinates(centroids_to)
-
-    # Build all connecting lines at once
-    n_check <- length(non_touching_global_idx)
-    lines <- lapply(seq_len(n_check), function(i) {
-      sf::st_linestring(matrix(c(
-        coords_from[i, 1], coords_to[i, 1],
-        coords_from[i, 2], coords_to[i, 2]
-      ), ncol = 2))
-    })
-    lines_sfc <- sf::st_sfc(lines, crs = sf::st_crs(geometry_sf))
-
-    # Single vectorized intersection test
-    crosses_row <- sf::st_intersects(lines_sfc, row_union, sparse = FALSE)[, 1]
-    crossing_idx <- which(crosses_row)
-
-    if (length(crossing_idx) > 0) {
-      if (verbose) message(glue::glue("  Validating {length(crossing_idx)} ROW crossings..."))
-
-      # Compute intersection lengths only for crossing lines
-      crossing_lines <- lines_sfc[crossing_idx]
-      intersections <- sf::st_intersection(crossing_lines, row_union)
-
-      # FIX: Sum all segment lengths for multi-segment intersections
-      # st_intersection can return multiple segments; st_length returns a vector
-      intersection_lengths <- vapply(seq_along(intersections), function(i) {
-        sum(as.numeric(sf::st_length(intersections[i])))
-      }, numeric(1))
-
-      valid_crossings <- intersection_lengths >= row_min_crossing_m
-      keep[non_touching_global_idx[crossing_idx[valid_crossings]]] <- TRUE
-      is_row_crossing[non_touching_global_idx[crossing_idx[valid_crossings]]] <- TRUE
-
-      n_valid_crossings <- sum(valid_crossings)
-      if (verbose) message(glue::glue("  Found {n_valid_crossings} valid ROW crossings"))
-    }
-  }
-
-  # ---- Report and return ----
-  n_removed <- sum(!keep)
-  n_kept <- sum(keep)
-  if (verbose) {
-    message(glue::glue("  Removed {n_removed} spurious edges (kept {n_kept})"))
-  }
-
-  result <- edges[keep, ]
-  result$is_row_crossing <- is_row_crossing[keep]
-  result
+  list(
+    lines     = sf::st_sfc(lapply(raw[keep], `[[`, "line"), crs = crs),
+    lengths_m = lengths[keep],
+    keep      = keep
+  )
 }
 
-#' Find cross-ROW edges between parcels
+#' Validate nearest-points lines as genuine ROW crossings
 #'
-#' Finds pairs of parcels that are separated by right-of-way (roads/railways)
-#' and should be considered adjacent.
+#' A line is valid if the fraction of its length that lies within the ROW
+#' meets min_coverage_ratio. For a genuine cross-road connection the
+#' nearest-points line runs directly from one parcel boundary across the road
+#' to the other, so ROW_length / total_length should be close to 1.
 #'
-#' @param parcels_sf sf object with LOC_ID and geometry
-#' @param row_sf sf object with ROW polygons
-#' @param proximity_ft Maximum distance for cross-ROW adjacency
-#' @param min_crossing_ft Minimum ROW crossing length
-#' @param verbose Print progress messages
-#' @return data.table with "from", "to", and "is_row_crossing" columns, or NULL if none found
-find_cross_row_edges <- function(parcels_sf, row_sf, proximity_ft,
-                                 min_crossing_ft = ROW_MIN_CROSSING_LENGTH,
-                                 verbose = TRUE) {
-  if (verbose) message("Finding parcels that touch ROW...")
+#' A line running along a street between same-side parcels scores low because
+#' most of its length lies outside the ROW polygon.
+#'
+#' Endpoint-parcel lengths are intentionally excluded from the coverage
+#' calculation: with nearest-points lines the endpoints sit on the parcel
+#' boundary, so the within-parcel portion of the line is near-zero for valid
+#' connections and including it would mask same-side false positives where the
+#' line clips through a corner of the ROW polygon.
+#'
+#' @param lines_sfc      sfc of LINESTRINGs
+#' @param line_lengths_m Pre-computed line lengths in metres (from
+#'   build_nearest_point_lines — avoids recomputing)
+#' @param row_union      Unioned ROW sfc
+#' @param min_coverage_ratio Minimum ROW_length / total_length (default 0.9)
+#' @return logical vector, TRUE where line is a valid ROW crossing
+validate_row_crossing_lines <- function(lines_sfc, line_lengths_m,
+                                        row_union,
+                                        min_coverage_ratio = 0.9) {
+  n     <- length(lines_sfc)
+  valid <- logical(n)
+  if (n == 0) return(valid)
 
- # ---- Unit conversion: feet to meters (EPSG:26986 uses meters) ----
-  FEET_TO_METERS <- 0.3048
-  proximity_m <- proximity_ft * FEET_TO_METERS
-  min_crossing_m <- min_crossing_ft * FEET_TO_METERS
-
-  row_union <- sf::st_union(row_sf)
-  touches_row <- sf::st_intersects(parcels_sf, row_union, sparse = FALSE)[, 1]
-  row_parcels <- parcels_sf[touches_row, ]
-  n_row_parcels <- nrow(row_parcels)
-
-  if (verbose) {
-    msg <- "  {n_row_parcels} parcels touch ROW (of {nrow(parcels_sf)} total)"
-    message(glue::glue(msg))
-  }
-
-  if (n_row_parcels < 2) return(NULL)
-
-  if (verbose) message("Computing parcel centroids...")
-  centroids <- sf::st_centroid(sf::st_geometry(row_parcels))
-
-  if (verbose) {
-    msg <- "Finding nearby pairs (within {proximity_ft} ft)..."
-    message(glue::glue(msg))
-  }
-  centroid_buf <- sf::st_buffer(centroids, dist = proximity_m / 2)
-  nearby_pairs <- sf::st_intersects(centroid_buf)
-
-  candidates <- data.table::rbindlist(
-    lapply(seq_along(nearby_pairs), function(i) {
-      neighbors <- nearby_pairs[[i]]
-      neighbors <- neighbors[neighbors > i]
-      if (length(neighbors) == 0) return(NULL)
-      data.table::data.table(i = i, j = neighbors)
-    })
-  )
-
-  if (nrow(candidates) == 0) {
-    if (verbose) message("  No candidate pairs found")
-    return(NULL)
-  }
-
-  n_initial <- nrow(candidates)
-  if (verbose) message(glue::glue("  {n_initial} nearby pairs found"))
-
-  if (verbose) message("Filtering out already-adjacent pairs...")
-  direct_adj <- sf::st_touches(row_parcels)
-
-  keep <- sapply(seq_len(nrow(candidates)), function(idx) {
-    i <- candidates$i[idx]
-    j <- candidates$j[idx]
-    !(j %in% direct_adj[[i]])
-  })
-  candidates <- candidates[keep, , drop = FALSE]
-
-  if (nrow(candidates) == 0) {
-    if (verbose) message("  No non-adjacent pairs found")
-    return(NULL)
-  }
-
-  n_candidates <- nrow(candidates)
-  if (verbose) {
-    message(glue::glue("  {n_candidates} candidate pairs to test"))
-  }
-
-  if (verbose) message("Creating connecting lines (vectorized)...")
-  coords <- sf::st_coordinates(centroids)
-
-  lines <- lapply(seq_len(n_candidates), function(idx) {
-    i <- candidates$i[idx]
-    j <- candidates$j[idx]
-    sf::st_linestring(matrix(c(coords[i, 1], coords[j, 1],
-                                coords[i, 2], coords[j, 2]), ncol = 2))
-  })
-  lines_sfc <- sf::st_sfc(lines, crs = sf::st_crs(parcels_sf))
-
-  if (verbose) message("Testing intersections with ROW (vectorized)...")
-  crosses_row <- sf::st_intersects(lines_sfc, row_union, sparse = FALSE)[, 1]
+  # Pre-filter: only intersect lines that actually cross the ROW at all
+  crosses_row  <- sf::st_intersects(lines_sfc, row_union, sparse = FALSE)[, 1]
   crossing_idx <- which(crosses_row)
+  if (length(crossing_idx) == 0) return(valid)
 
-  if (length(crossing_idx) == 0) {
-    if (verbose) message("  No lines cross ROW")
-    return(NULL)
-  }
+  # Vectorised intersection with ROW for all crossing lines at once
+  crossing_lines    <- lines_sfc[crossing_idx]
+  row_intersections <- sf::st_intersection(crossing_lines, row_union)
 
-  if (verbose) message(glue::glue("  {length(crossing_idx)} lines cross ROW"))
+  row_lengths <- vapply(seq_along(row_intersections), function(i) {
+    sum(as.numeric(sf::st_length(row_intersections[i])))
+  }, numeric(1))
 
-  if (verbose) message(glue::glue("Filtering by intersection length (>= {min_crossing_ft} ft)..."))
+  coverage <- row_lengths / line_lengths_m[crossing_idx]
+  passes   <- coverage >= min_coverage_ratio
 
-  crossing_lines <- lines_sfc[crossing_idx]
-  intersections <- sf::st_intersection(crossing_lines, row_union)
-  intersection_lengths <- as.numeric(sf::st_length(intersections))
+  valid[crossing_idx[passes]] <- TRUE
+  valid
+}
 
-  valid <- intersection_lengths >= min_crossing_m
-  final_idx <- crossing_idx[valid]
+# ============================================================================
+# MAIN FUNCTIONS
+# ============================================================================
 
-  n_found <- length(final_idx)
-  if (verbose) {
-    message(glue::glue("  {n_found} edges with >= {min_crossing_ft} ft crossing"))
-  }
+#' Find cross-ROW edges for a set of candidate parcel pairs
+#'
+#' Given candidate pairs (already filtered to non-touching), validates them as
+#' genuine cross-ROW connections using nearest-points lines and a ROW coverage
+#' ratio. Parcels not within row_gap_tolerance_m of the ROW are excluded early
+#' as they cannot participate in cross-ROW connections.
+#'
+#' @param parcels_sf       sf with LOC_ID and geometry for ALL district parcels
+#' @param candidate_from   integer indices into parcels_sf for "from" parcels
+#' @param candidate_to     integer indices into parcels_sf for "to" parcels
+#' @param row_union        Pre-computed unioned ROW sfc
+#' @param max_dist_m       Hard cap on nearest-points line length in metres
+#' @param min_coverage_ratio Minimum ROW coverage fraction (default 0.9)
+#' @param row_gap_tolerance_m Tolerance for parcel-to-ROW gap (data quality) (default 1m)
+#' @param verbose          Print progress messages
+#' @return logical vector (length == nrow candidates), TRUE for valid ROW edges
+find_row_edges <- function(parcels_sf, candidate_from, candidate_to,
+                           row_union, max_dist_m,
+                           min_coverage_ratio = 0.9,
+                           row_gap_tolerance_m = 1,
+                           verbose = TRUE) {
 
-  if (n_found == 0) return(NULL)
+  n_candidates <- length(candidate_from)
+  valid <- logical(n_candidates)
 
-  data.table::data.table(
-    from = row_parcels$LOC_ID[candidates$i[final_idx]],
-    to = row_parcels$LOC_ID[candidates$j[final_idx]],
-    is_row_crossing = TRUE
+  if (n_candidates == 0) return(valid)
+
+  all_geoms <- sf::st_geometry(parcels_sf)
+
+  # ---- Filter to pairs where BOTH parcels are near the ROW ----
+  # Parcels with no proximity to ROW cannot have a cross-ROW connection.
+  # Uses a small gap tolerance to handle hairline mismatches between parcel
+  # and ROW datasets from different sources.
+  near_row <- sf::st_is_within_distance(
+    parcels_sf, row_union,
+    dist   = row_gap_tolerance_m,
+    sparse = FALSE
+  )[, 1]
+
+  both_near_row <- near_row[candidate_from] & near_row[candidate_to]
+  row_candidate_idx <- which(both_near_row)
+
+  n_near <- sum(both_near_row)
+  n_excluded <- n_candidates - n_near
+  if (verbose) message(glue::glue(
+    "  {n_near} candidate pairs with both parcels near ROW",
+    " ({n_excluded} excluded — not near ROW)"
+  ))
+
+  if (n_near == 0) return(valid)
+
+  # ---- Build nearest-points lines with hard distance cap ----
+  from_geoms <- all_geoms[candidate_from[row_candidate_idx]]
+  to_geoms   <- all_geoms[candidate_to[row_candidate_idx]]
+
+  np <- build_nearest_point_lines(
+    from_geoms, to_geoms,
+    crs        = sf::st_crs(parcels_sf),
+    max_dist_m = max_dist_m
   )
+
+  n_capped <- sum(!np$keep)
+  if (verbose && n_capped > 0) message(glue::glue(
+    "  {n_capped} pairs removed by distance cap"
+  ))
+
+  if (length(np$lines) == 0) return(valid)
+
+  within_cap_idx <- row_candidate_idx[np$keep]
+
+  # ---- Validate ROW coverage ratio ----
+  row_valid <- validate_row_crossing_lines(
+    lines_sfc          = np$lines,
+    line_lengths_m     = np$lengths_m,
+    row_union          = row_union,
+    min_coverage_ratio = min_coverage_ratio
+  )
+
+  valid[within_cap_idx[row_valid]] <- TRUE
+  valid
 }
 
 #' Build adjacency graph from parcel geometries
 #'
-#' Creates an igraph object with parcels as vertices and adjacency edges.
-#' Edges are validated to ensure parcels either physically touch OR are
-#' connected across a valid ROW crossing. This prevents spurious edges
-#' between parcels that are merely close but not truly adjacent.
+#' Creates an igraph where parcels are vertices and edges represent genuine
+#' spatial adjacency — either direct touching or cross-ROW connection.
 #'
-#' @param geometry_sf sf object with LOC_ID, geometry, capacity, area
-#' @param buffer_dist Buffer distance for candidate edge detection (default 10 feet)
-#' @param right_of_way_sf Optional sf object with ROW polygons
-#' @param row_proximity_ft Max distance for cross-ROW adjacency
-#' @param row_min_crossing_ft Min ROW crossing length
-#' @param touch_threshold_ft Max distance to consider as "touching" (default 2 feet)
-#' @param verbose Print progress messages
-#' @return igraph object with vertices from geometry_sf and edge attribute `is_row_crossing`
+#' A single candidate generation step buffers all parcels by max_dist_ft/2 and
+#' finds overlapping pairs. Touching pairs (boundary distance <= touch_threshold_ft)
+#' become direct edges. Non-touching pairs are tested as potential cross-ROW
+#' connections via find_row_edges().
+#'
+#' Note: Assumes geometry_sf uses EPSG:26986 (metres). All threshold parameters
+#' are in feet and converted internally.
+#'
+#' @param geometry_sf      sf with LOC_ID, geometry, capacity, area
+#' @param right_of_way_sf  Optional sf with ROW polygons
+#' @param max_dist_ft      Maximum boundary-to-boundary distance (ft) for any
+#'   connection — controls both candidate generation and the nearest-points cap.
+#'   Default 120 ft.
+#' @param touch_threshold_ft Distance (ft) below which parcels are considered
+#'   directly touching (default 2 ft)
+#' @param min_coverage_ratio Minimum fraction of nearest-points line within ROW
+#'   to accept a cross-ROW connection (default 0.9)
+#' @param verbose          Print progress messages
+#' @return igraph with edge attribute is_row_crossing
 #' @export
-build_adjacency_graph <- function(geometry_sf, buffer_dist = 10,
-                                  right_of_way_sf = NULL,
-                                  row_proximity_ft = ROW_PROXIMITY_THRESHOLD,
-                                  row_min_crossing_ft = ROW_MIN_CROSSING_LENGTH,
+build_adjacency_graph <- function(geometry_sf,
+                                  right_of_way_sf    = NULL,
+                                  max_dist_ft        = 120,
                                   touch_threshold_ft = 2,
-                                  verbose = TRUE) {
+                                  min_coverage_ratio = 0.9,
+                                  verbose            = TRUE) {
+  FEET_TO_METERS <- 0.3048
+  max_dist_m        <- max_dist_ft        * FEET_TO_METERS
+  touch_threshold_m <- touch_threshold_ft * FEET_TO_METERS
+
+  # ---- Candidate generation ----
+  # Buffer by half the max distance so overlapping buffers <=> pairs within
+  # max_dist_ft of each other (boundary-to-boundary).
   if (verbose) message("Building candidate adjacency edges...")
 
-  geometry_buf <- sf::st_buffer(geometry_sf, dist = buffer_dist)
-  direct_adj <- sf::st_intersects(geometry_buf)
+  geom_buf     <- sf::st_buffer(geometry_sf, dist = max_dist_m / 2)
+  buf_pairs    <- sf::st_intersects(geom_buf, sparse = TRUE)
 
-  edges <- data.table::rbindlist(
-    lapply(seq_along(direct_adj), function(i) {
-      neigh <- direct_adj[[i]]
-      neigh <- neigh[neigh > i]
-      if (length(neigh) == 0) return(NULL)
-      data.table::data.table(
-        from = geometry_sf$LOC_ID[i],
-        to = geometry_sf$LOC_ID[neigh]
-      )
+  candidates <- data.table::rbindlist(
+    lapply(seq_along(buf_pairs), function(i) {
+      j <- buf_pairs[[i]]
+      j <- j[j > i]
+      if (length(j) == 0) return(NULL)
+      data.table::data.table(from_idx = i, to_idx = j)
     })
   )
 
-  if (verbose) message(glue::glue("  Found {nrow(edges)} candidate edges"))
+  if (verbose) message(glue::glue("  {nrow(candidates)} candidate pairs"))
 
-  # Validate edges: keep only those that physically touch OR cross ROW
+  if (nrow(candidates) == 0) {
+    vertices_df <- as.data.frame(geometry_sf)
+    vertices_df$geometry <- NULL
+    return(igraph::graph_from_data_frame(
+      data.frame(from = character(), to = character(), is_row_crossing = logical()),
+      directed = FALSE, vertices = vertices_df
+    ))
+  }
 
-  edges <- validate_direct_edges(
-    edges = edges,
-    geometry_sf = geometry_sf,
-    right_of_way_sf = right_of_way_sf,
-    touch_threshold_ft = touch_threshold_ft,
-    row_min_crossing_ft = row_min_crossing_ft,
-    verbose = verbose
+  # ---- Boundary-to-boundary distances ----
+  if (verbose) message("Computing boundary distances...")
+
+  all_geoms  <- sf::st_geometry(geometry_sf)
+  from_geoms <- all_geoms[candidates$from_idx]
+  to_geoms   <- all_geoms[candidates$to_idx]
+
+  distances <- as.numeric(
+    sf::st_distance(from_geoms, to_geoms, by_element = TRUE)
   )
 
-  if (verbose) message(glue::glue("After validation: {nrow(edges)} edges"))
+  is_touching    <- distances <= touch_threshold_m
+  is_nontouching <- !is_touching
 
-  # Add additional cross-ROW edges for parcels beyond buffer distance
-  # (These are parcels that are further apart but still across a road)
-  if (!is.null(right_of_way_sf) && nrow(right_of_way_sf) > 0) {
-    if (verbose) {
-      message(glue::glue("Adding distant cross-ROW edges (proximity: {row_proximity_ft} ft)..."))
-    }
-    row_edges <- find_cross_row_edges(
-      geometry_sf, right_of_way_sf, row_proximity_ft,
-      min_crossing_ft = row_min_crossing_ft,
-      verbose = verbose
+  n_touch    <- sum(is_touching)
+  n_nontouch <- sum(is_nontouching)
+  if (verbose) message(glue::glue(
+    "  {n_touch} touching pairs, {n_nontouch} non-touching pairs to validate"
+  ))
+
+  # ---- Cross-ROW validation for non-touching pairs ----
+  is_row_edge <- logical(nrow(candidates))
+
+  if (n_nontouch > 0 && !is.null(right_of_way_sf) && nrow(right_of_way_sf) > 0) {
+
+    if (verbose) message("Computing ROW union...")
+    row_union <- sf::st_union(right_of_way_sf)
+
+    nontouch_idx <- which(is_nontouching)
+
+    if (verbose) message(glue::glue(
+      "Validating {n_nontouch} non-touching pairs as cross-ROW edges..."
+    ))
+
+    row_valid <- find_row_edges(
+      parcels_sf         = geometry_sf,
+      candidate_from     = candidates$from_idx[nontouch_idx],
+      candidate_to       = candidates$to_idx[nontouch_idx],
+      row_union          = row_union,
+      max_dist_m         = max_dist_m,
+      min_coverage_ratio = min_coverage_ratio,
+      verbose            = verbose
     )
-    if (!is.null(row_edges) && nrow(row_edges) > 0) {
-      n_before <- nrow(edges)
-      edges <- rbind(edges, row_edges)
-      # Aggregate duplicates: is_row_crossing = TRUE if any source detected ROW crossing
-      edges <- edges[, .(is_row_crossing = any(is_row_crossing)), by = .(from, to)]
-      n_new <- nrow(edges) - n_before
-      if (verbose) {
-        message(glue::glue("  Added {n_new} new distant cross-ROW edges"))
-      }
-    }
+
+    is_row_edge[nontouch_idx[row_valid]] <- TRUE
   }
 
-  if (verbose) message(glue::glue("Total: {nrow(edges)} edges"))
+  # ---- Assemble edge table ----
+  keep <- is_touching | is_row_edge
 
-  # Optimization: Strip heavy geometry column to speed up igraph operations
+  LOC_IDs <- geometry_sf$LOC_ID
+  edges <- data.table::data.table(
+    from            = LOC_IDs[candidates$from_idx[keep]],
+    to              = LOC_IDs[candidates$to_idx[keep]],
+    is_row_crossing = is_row_edge[keep]
+  )
+
+  if (verbose) message(glue::glue(
+    "Total: {nrow(edges)} edges ",
+    "({sum(is_touching)} direct, {sum(is_row_edge)} cross-ROW)"
+  ))
+
+  # Strip geometry before building igraph (significant memory/speed saving)
   vertices_df <- as.data.frame(geometry_sf)
-  if ("geometry" %in% names(vertices_df)) {
-    vertices_df$geometry <- NULL
-  }
+  vertices_df$geometry <- NULL
 
-  g <- igraph::graph_from_data_frame(
+  igraph::graph_from_data_frame(
     edges,
     directed = FALSE,
     vertices = vertices_df
   )
-
-  g
 }

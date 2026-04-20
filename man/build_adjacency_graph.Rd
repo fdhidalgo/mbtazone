@@ -6,35 +6,43 @@
 \usage{
 build_adjacency_graph(
   geometry_sf,
-  buffer_dist = 10,
   right_of_way_sf = NULL,
-  row_proximity_ft = ROW_PROXIMITY_THRESHOLD,
-  row_min_crossing_ft = ROW_MIN_CROSSING_LENGTH,
+  max_dist_ft = 120,
   touch_threshold_ft = 2,
+  min_coverage_ratio = 0.9,
   verbose = TRUE
 )
 }
 \arguments{
-\item{geometry_sf}{sf object with LOC_ID, geometry, capacity, area}
+\item{geometry_sf}{sf with LOC_ID, geometry, capacity, area}
 
-\item{buffer_dist}{Buffer distance for candidate edge detection (default 10 feet)}
+\item{right_of_way_sf}{Optional sf with ROW polygons}
 
-\item{right_of_way_sf}{Optional sf object with ROW polygons}
+\item{max_dist_ft}{Maximum boundary-to-boundary distance (ft) for any
+connection — controls both candidate generation and the nearest-points cap.
+Default 120 ft.}
 
-\item{row_proximity_ft}{Max distance for cross-ROW adjacency}
+\item{touch_threshold_ft}{Distance (ft) below which parcels are considered
+directly touching (default 2 ft)}
 
-\item{row_min_crossing_ft}{Min ROW crossing length}
-
-\item{touch_threshold_ft}{Max distance to consider as "touching" (default 2 feet)}
+\item{min_coverage_ratio}{Minimum fraction of nearest-points line within ROW
+to accept a cross-ROW connection (default 0.9)}
 
 \item{verbose}{Print progress messages}
 }
 \value{
-igraph object with vertices from geometry_sf and edge attribute \code{is_row_crossing}
+igraph with edge attribute is_row_crossing
 }
 \description{
-Creates an igraph object with parcels as vertices and adjacency edges.
-Edges are validated to ensure parcels either physically touch OR are
-connected across a valid ROW crossing. This prevents spurious edges
-between parcels that are merely close but not truly adjacent.
+Creates an igraph where parcels are vertices and edges represent genuine
+spatial adjacency — either direct touching or cross-ROW connection.
+}
+\details{
+A single candidate generation step buffers all parcels by max_dist_ft/2 and
+finds overlapping pairs. Touching pairs (boundary distance <= touch_threshold_ft)
+become direct edges. Non-touching pairs are tested as potential cross-ROW
+connections via find_row_edges().
+
+Note: Assumes geometry_sf uses EPSG:26986 (metres). All threshold parameters
+are in feet and converted internally.
 }
