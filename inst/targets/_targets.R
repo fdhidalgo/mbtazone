@@ -221,6 +221,15 @@ list(
     data.frame(band_idx = seq_along(LCC_CAPACITY_BANDS_RELATIVE))
   ),
 
+  # Precomputing existing-lcc keys as a target to prevent crashing if timing is off
+  tar_target(
+    existing_lcc_keys,
+    c(
+      tree_discovered_lccs$discovered_lccs$lcc_key,
+      bfs_discovered_lccs$discovered_lccs$lcc_key
+    )
+  ),
+
   # Per-band discovery — crew dispatches these to separate workers
   tar_target(
     bfs_stratified_band,
@@ -232,10 +241,7 @@ list(
       samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
       max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
       forbidden_parcels = NULL,
-      existing_keys = c(
-        tree_discovered_lccs$discovered_lccs$lcc_key,
-        bfs_discovered_lccs$discovered_lccs$lcc_key
-      ),
+      existing_keys = existing_lcc_keys,
       verbose = TRUE
     ),
     pattern = map(bfs_band_grid),
