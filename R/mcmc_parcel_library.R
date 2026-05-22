@@ -1657,22 +1657,24 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     # library covers the full capacity range the posterior explores.
     cli::cli_alert_info("Using capacity-stratified selection with fixed quotas")
 
-    # Assign bands relative to actual min_capacity
+    # Assign bands relative to actual min_capacity.
+    # Band 3 ([1.0, 1.25]) is the stepping-stone zone: LCCs just above minimum
+    # allow the chain to increase LCC capacity gradually while shedding secondaries,
+    # enabling transitions between the high-k and low-k modes.
     valid_lccs[, capacity_band := data.table::fcase(
-      capacity < 0.75 * min_cap, "band_1",
-      capacity < min_cap,        "band_2",
-      capacity < 1.5 * min_cap,  "band_3",
-      default =                  "band_4"
+      capacity < 0.75 * min_cap,  "band_1",
+      capacity < min_cap,         "band_2",
+      capacity < 1.25 * min_cap,  "band_3",
+      capacity < 1.5  * min_cap,  "band_4",
+      default =                   "band_5"
     )]
 
-    # Fixed quotas balancing posterior mode (bands 1-2) with low-k feasibility
-    # (bands 3-4). Bands 3-4 supply LCCs that can meet min_capacity with few
-    # or no secondaries — critical for exploring low-k states.
     band_quotas <- list(
-      band_1 = round(max_library_size * 0.15),
-      band_2 = round(max_library_size * 0.20),
-      band_3 = round(max_library_size * 0.30),
-      band_4 = max_library_size - round(max_library_size * 0.65)
+      band_1 = round(max_library_size * 0.20),
+      band_2 = round(max_library_size * 0.25),
+      band_3 = round(max_library_size * 0.25),
+      band_4 = round(max_library_size * 0.20),
+      band_5 = max_library_size - round(max_library_size * 0.90)
     )
 
     cli::cli_alert_info(
