@@ -803,7 +803,6 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
-          cap_tolerance = REPLACE_LCC_CAP_TOLERANCE,
           neighbor_idx = neighbor_idx,
           parcel_names = parcel_names
         )

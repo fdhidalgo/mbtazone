@@ -1535,7 +1535,6 @@ replace_lcc_move <- function(
   secondary_library,
   parcel_graph,
   constraints,
-  cap_tolerance = REPLACE_LCC_CAP_TOLERANCE,
   neighbor_idx = NULL,
   parcel_names = NULL
 ) {
@@ -1620,9 +1619,10 @@ replace_lcc_move <- function(
     all_compatible_lccs <- all_active_ids
   }
 
-  # Find similar-capacity LCCs among active entries, excluding current
-  similar_mask <- active_mask &
-    (abs(all_caps - current_lcc_cap) <= cap_tolerance)
+  # All active LCCs are candidates — no capacity window restriction.
+  # The MH ratio and existing pre-filters (min_lcc_fraction, station
+  # constraints) handle feasibility; capacity is handled by the prior.
+  similar_mask <- active_mask
   similar_mask[current_lcc_id] <- FALSE # Exclude self to avoid no-op
 
   # Pre-filter by min_lcc_fraction constraint:
@@ -1778,8 +1778,8 @@ replace_lcc_move <- function(
   }
 
   # Step 6: Compute MH ratio
-  similar_reverse_mask <- active_mask &
-    (abs(all_caps - new_lcc_cap) <= cap_tolerance)
+  # Reverse candidate set mirrors forward: all active LCCs, same pre-filters.
+  similar_reverse_mask <- active_mask
   similar_reverse_mask[new_lcc_id] <- FALSE # Exclude self for reverse
 
   # Apply same min_lcc_fraction pre-filter as forward (same secondaries, same threshold)
