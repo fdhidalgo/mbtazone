@@ -42,3 +42,7 @@ inst/reports/_targets.yaml
 _targets.yaml
 CLAUDE.md
 AGENTS.md
+
+# Test outputs
+dev/mcmc_testing/compactness/outputs/
+dev/mcmc_testing/plots/
