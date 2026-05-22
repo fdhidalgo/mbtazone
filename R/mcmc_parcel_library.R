@@ -2854,11 +2854,16 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
 
   if (length(compatible_ids) == 0) return(integer(0))
 
-  # Draw k from the same geometric prior used in the birth/death MH ratio,
-  # so chains start at k values consistent with the prior rather than always
-  # filling greedily to the capacity ceiling. k=0 is valid when the LCC
-  # alone meets min_capacity; the outer retry loop checks full feasibility
-  # and draws a fresh k if needed.
+  # High-capacity LCCs start with no secondaries — the chain's birth/death
+  # kernel adds them naturally from a clean low-capacity starting point.
+  # Without this guard, drawing k from the geometric prior (E[k] ≈ 9.5) on
+  # a band-5 LCC (cap ≈ 2× min_capacity) fills secondary capacity to the
+  # min_lcc_fraction ceiling, producing initial states at 4–6× minimum.
+  if (lcc_capacity >= constraints$min_capacity) return(integer(0))
+
+  # Low-cap LCCs (bands 1–2) need secondaries to reach min_capacity.
+  # Draw k from the geometric prior — conservatively, since only a handful
+  # of blocks are needed to cross the feasibility threshold.
   # Loop bound: at most length(compatible_ids) iterations; exits early via
   # break once k_target blocks are placed.
   k_target <- rgeom(1, prob = 1 - exp(-K_PRIOR_LAMBDA))
