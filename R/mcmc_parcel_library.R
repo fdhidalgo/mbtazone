@@ -1624,8 +1624,14 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
 
   all_parcels <- igraph::V(parcel_graph)$name
 
-  # Filter out empty LCCs and those with zero capacity
-  valid_lccs <- discovered_lccs[capacity > 0]
+  # Filter out empty LCCs and those with zero or very high capacity.
+  # Upper cap (2.5x min_capacity)
+  max_lcc_cap <- 2.5 * min_cap
+  valid_lccs  <- discovered_lccs[capacity > 0 & capacity <= max_lcc_cap]
+  n_excluded  <- nrow(discovered_lccs[capacity > max_lcc_cap])
+  if (n_excluded > 0) {
+    cli::cli_alert_info("Excluded {n_excluded} LCCs above 2x min_capacity ({max_lcc_cap})")
+  }
 
   # Handle empty library case
   if (nrow(valid_lccs) == 0) {
