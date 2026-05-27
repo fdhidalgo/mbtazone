@@ -174,15 +174,6 @@ LCC_BAND_MAX_ATTEMPTS <- 1000L
 # but resampling proposals generate k≈1-2, causing MH rejection.
 # By retaining secondaries, k stays constant and MH acceptance improves.
 
-# Capacity tolerance for Replace-LCC similar-capacity sampling
-# LCCs within ±CAP_TOLERANCE of current LCC capacity are candidates
-# Larger values = more candidates but higher capacity mismatch
-# Smaller values = better capacity match but fewer candidates
-# Note: Wider tolerance (800) allows replace_lcc to propose larger capacity jumps,
-# enabling chains to explore different capacity regions.
-# Tradeoff: more candidates to filter, but enables n_secondaries mixing.
-REPLACE_LCC_CAP_TOLERANCE <- 800
-
 # Capacity tolerance for secondary swap similar-capacity sampling
 # Blocks within ±SWAP_CAP_TOLERANCE of removed block are candidates for swap
 # Larger values = more geographic diversity, lower acceptance rate
