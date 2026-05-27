@@ -117,28 +117,30 @@ BFS_RESERVATION_SEC <- 100L
 # seeds from random parcels and grows toward explicit capacity targets.
 
 # Capacity bands for stratified BFS discovery (relative to min_capacity)
-# Band boundaries are multipliers of min_capacity (2045 for Norwood):
-#   Band 1: [0.5, 0.75] * 2045 = [1023, 1534] - Minimum viable LCCs
-#   Band 2: [0.75, 1.0] * 2045 = [1534, 2045] - Near-minimum (posterior mode)
-#   Band 3: [1.0, 1.5] * 2045 = [2045, 3068] - Small excess
-#   Band 4: [1.5, 2.5] * 2045 = [3068, 5113] - High-capacity, enables low-k states
-# Norwood diagnostic: standalone feasibility peaks at 62-72% for capacity
-# 2000-3000, and remains ~29% above 3000. The old 1.5x cap excluded 10K+
-# standalone-feasible LCCs needed for low-k exploration.
+#   Band 1: [0.5,  0.75] - Sub-minimum, needs substantial secondaries
+#   Band 2: [0.75, 1.0]  - Near-minimum (primary posterior mode)
+#   Band 3: [1.0,  1.25] - Stepping-stone zone: just above minimum, enables
+#                          gradual k reduction without crossing high-capacity states
+#   Band 4: [1.25, 1.5]  - Moderate capacity
+#   Band 5: [1.5,  2.0]  - High-capacity, enables low-k / standalone LCCs
+#                          Capped at 2.0x — LCCs beyond this are rarely useful
+#
+# Band 3 was previously [1.0, 1.5] — too wide. BFS drew targets uniformly from
+# that range (mean ~1.25×), crowding out near-minimum LCCs and leaving the
+# replace_lcc kernel with almost no stepping-stone candidates.
 LCC_CAPACITY_BANDS_RELATIVE <- list(
-  c(0.5, 0.75),   # Need substantial secondaries to hit min_capacity
-  c(0.75, 1.0),   # Primary posterior mode under capacity prior
-  c(1.0, 1.5),    # Small excess, still favored over very high capacity
-  c(1.5, 2.5)     # High-capacity: critical for low-k (standalone/few secondaries)
+  c(0.5,  0.75),  # Sub-minimum
+  c(0.75, 1.0),   # Primary posterior mode
+  c(1.0,  1.25),  # Near-minimum stepping stones — critical for k-mode mixing
+  c(1.25, 1.5),   # Moderate capacity
+  c(1.5,  2.0)    # High-capacity: enables low-k (capped at 2x)
 )
 
 # Number of LCC samples per capacity band
 LCC_BAND_SAMPLES_PER_BAND <- 500L
 
 # Maximum BFS attempts per band before giving up
-# Higher than samples_per_band because many attempts fail validation
-LCC_BAND_MAX_ATTEMPTS <- 500L
-# Originally 2000, currently 500 as otherwise this step can take over half an hour.
+LCC_BAND_MAX_ATTEMPTS <- 1000L
 
 # ============================================================================
 # KERNEL PROBABILITIES
@@ -171,15 +173,6 @@ LCC_BAND_MAX_ATTEMPTS <- 500L
 # This approach solves the k-mismatch problem: chain has k≈5 from birth/death,
 # but resampling proposals generate k≈1-2, causing MH rejection.
 # By retaining secondaries, k stays constant and MH acceptance improves.
-
-# Capacity tolerance for Replace-LCC similar-capacity sampling
-# LCCs within ±CAP_TOLERANCE of current LCC capacity are candidates
-# Larger values = more candidates but higher capacity mismatch
-# Smaller values = better capacity match but fewer candidates
-# Note: Wider tolerance (800) allows replace_lcc to propose larger capacity jumps,
-# enabling chains to explore different capacity regions.
-# Tradeoff: more candidates to filter, but enables n_secondaries mixing.
-REPLACE_LCC_CAP_TOLERANCE <- 800
 
 # Capacity tolerance for secondary swap similar-capacity sampling
 # Blocks within ±SWAP_CAP_TOLERANCE of removed block are candidates for swap

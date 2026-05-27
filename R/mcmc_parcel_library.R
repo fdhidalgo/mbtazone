@@ -1624,8 +1624,14 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
 
   all_parcels <- igraph::V(parcel_graph)$name
 
-  # Filter out empty LCCs and those with zero capacity
-  valid_lccs <- discovered_lccs[capacity > 0]
+  # Filter out empty LCCs and those with zero or very high capacity.
+  # Upper cap (2.5x min_capacity)
+  max_lcc_cap <- 2.5 * min_cap
+  valid_lccs  <- discovered_lccs[capacity > 0 & capacity <= max_lcc_cap]
+  n_excluded  <- nrow(discovered_lccs[capacity > max_lcc_cap])
+  if (n_excluded > 0) {
+    cli::cli_alert_info("Excluded {n_excluded} LCCs above 2.5x min_capacity ({max_lcc_cap})")
+  }
 
   # Handle empty library case
   if (nrow(valid_lccs) == 0) {
@@ -1657,22 +1663,24 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     # library covers the full capacity range the posterior explores.
     cli::cli_alert_info("Using capacity-stratified selection with fixed quotas")
 
-    # Assign bands relative to actual min_capacity
+    # Assign bands relative to actual min_capacity.
+    # Band 3 ([1.0, 1.25]) is the stepping-stone zone: LCCs just above minimum
+    # allow the chain to increase LCC capacity gradually while shedding secondaries,
+    # enabling transitions between the high-k and low-k modes.
     valid_lccs[, capacity_band := data.table::fcase(
-      capacity < 0.75 * min_cap, "band_1",
-      capacity < min_cap,        "band_2",
-      capacity < 1.5 * min_cap,  "band_3",
-      default =                  "band_4"
+      capacity < 0.75 * min_cap,  "band_1",
+      capacity < min_cap,         "band_2",
+      capacity < 1.25 * min_cap,  "band_3",
+      capacity < 1.5  * min_cap,  "band_4",
+      default =                   "band_5"
     )]
 
-    # Fixed quotas balancing posterior mode (bands 1-2) with low-k feasibility
-    # (bands 3-4). Bands 3-4 supply LCCs that can meet min_capacity with few
-    # or no secondaries — critical for exploring low-k states.
     band_quotas <- list(
-      band_1 = round(max_library_size * 0.15),
-      band_2 = round(max_library_size * 0.20),
-      band_3 = round(max_library_size * 0.30),
-      band_4 = max_library_size - round(max_library_size * 0.65)
+      band_1 = round(max_library_size * 0.20),
+      band_2 = round(max_library_size * 0.25),
+      band_3 = round(max_library_size * 0.25),
+      band_4 = round(max_library_size * 0.20),
+      band_5 = max_library_size - round(max_library_size * 0.90)
     )
 
     cli::cli_alert_info(
@@ -2419,39 +2427,51 @@ generate_initial_states_from_lccs <- function(
       lcc_indices <- lcc_library$blocks[[bid]]
       lcc_parcels <- all_parcels[lcc_indices]
 
-      secondary_block_ids <- select_initial_secondary_blocks(
-        lcc_parcels  = lcc_parcels,
-        library      = libraries$secondary_library,
-        parcel_graph = parcel_graph,
-        constraints  = constraints
-      )
+      # Try up to n_sec_attempts random secondary draws for this LCC before
+      # moving to the next fallback seed. Each attempt draws a fresh k from
+      # the geometric prior and a fresh random shuffle, so the same LCC gets
+      # a genuine second chance when the first draw happened to be infeasible.
+      n_sec_attempts <- 5L
+      state <- NULL
+      feas  <- list(feasible = FALSE, constraint_failed = "no_attempt")
 
-      sec_parcels <- library_blocks_parcels(
-        libraries$secondary_library,
-        secondary_block_ids
-      )
+      for (sec_attempt in seq_len(n_sec_attempts)) {
+        secondary_block_ids <- select_initial_secondary_blocks(
+          lcc_parcels  = lcc_parcels,
+          library      = libraries$secondary_library,
+          parcel_graph = parcel_graph,
+          constraints  = constraints
+        )
 
-      state <- initialize_parcel_state(
-        parcel_ids          = c(lcc_parcels, sec_parcels),
-        secondary_block_ids = secondary_block_ids,
-        library             = libraries$secondary_library,
-        parcel_graph        = parcel_graph
-      )
+        sec_parcels <- library_blocks_parcels(
+          libraries$secondary_library,
+          secondary_block_ids
+        )
 
-      # Use the runner's own feasibility check — single source of truth
-      feas <- check_parcel_feasibility(
-        state        = state,
-        library      = libraries$secondary_library,
-        parcel_graph = parcel_graph,
-        constraints  = constraints
-      )
+        candidate_state <- initialize_parcel_state(
+          parcel_ids          = c(lcc_parcels, sec_parcels),
+          secondary_block_ids = secondary_block_ids,
+          library             = libraries$secondary_library,
+          parcel_graph        = parcel_graph
+        )
+
+        feas <- check_parcel_feasibility(
+          state        = candidate_state,
+          library      = libraries$secondary_library,
+          parcel_graph = parcel_graph,
+          constraints  = constraints
+        )
+
+        if (feas$feasible) {
+          state <- candidate_state
+          break
+        }
+      }
 
       if (!feas$feasible) {
-        if (!(bid %in% candidates$block_id[selected_rows[-seq_len(i-1)]])) {
-          # Only warn for fallbacks to avoid noise from expected misses
-        } else {
+        if (bid %in% candidates$block_id[selected_rows]) {
           cli::cli_alert_warning(
-            "Chain {i}: preferred seed block_id={bid} fails '{feas$constraint_failed}' after secondaries, trying fallbacks..."
+            "Chain {i}: preferred seed block_id={bid} fails '{feas$constraint_failed}' after {n_sec_attempts} attempts, trying fallbacks..."
           )
         }
         next
@@ -2462,7 +2482,7 @@ generate_initial_states_from_lccs <- function(
 
       lcc_cap <- sum(igraph::V(parcel_graph)[lcc_parcels]$capacity)
       cli::cli_alert_success(
-        "  Chain {i}: block_id={bid}, {length(lcc_parcels)} LCC parcels (cap={lcc_cap}), {length(secondary_block_ids)} secondary blocks"
+        "  Chain {i}: block_id={bid}, {length(lcc_parcels)} LCC parcels (cap={lcc_cap}), k={length(secondary_block_ids)} secondary blocks"
       )
 
       success <- TRUE
@@ -2840,48 +2860,59 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
 
   if (length(compatible_ids) == 0) return(integer(0))
 
-  # Sort by capacity (largest first for greedy fill)
-  block_caps <- library$metadata$capacity[compatible_ids]
-  order_idx <- order(block_caps, decreasing = TRUE)
-  compatible_ids <- compatible_ids[order_idx]
-  block_caps <- block_caps[order_idx]
+  # High-capacity LCCs start with no secondaries — the chain's birth/death
+  # kernel adds them naturally from a clean low-capacity starting point.
+  # Without this guard, drawing k from the geometric prior (E[k] ≈ 9.5) on
+  # a band-5 LCC (cap ≈ 2× min_capacity) fills secondary capacity to the
+  # min_lcc_fraction ceiling, producing initial states at 4–6× minimum.
+  if (lcc_capacity >= constraints$min_capacity) return(integer(0))
 
-  # Greedy selection maintaining mutual disjointness and non-adjacency
-  selected <- integer(0)
-  selected_union <- logical(n_parcels)  # Union of selected block parcels
-  selected_nbrs <- logical(n_parcels)   # Neighbors of selected blocks
+  # Low-cap LCCs (bands 1–2) need secondaries to reach min_capacity.
+  # Draw k from the geometric prior — conservatively, since only a handful
+  # of blocks are needed to cross the feasibility threshold.
+  # Loop bound: at most length(compatible_ids) iterations; exits early via
+  # break once k_target blocks are placed.
+  k_target <- rgeom(1, prob = 1 - exp(-K_PRIOR_LAMBDA))
+  k_target <- min(k_target, length(compatible_ids))
+
+  if (k_target == 0L) return(integer(0))
+
+  # Random shuffle — no capacity ordering. The iterative non-adjacency walk
+  # is identical to before; only the visit order changes.
+  shuffled_ids <- sample(compatible_ids)
+  block_caps   <- library$metadata$capacity[shuffled_ids]
+
+  selected             <- integer(0)
+  selected_union       <- logical(n_parcels)
+  selected_nbrs        <- logical(n_parcels)
   current_sec_capacity <- 0
 
+  for (i in seq_along(shuffled_ids)) {
+    if (length(selected) >= k_target) break
 
-  for (i in seq_along(compatible_ids)) {
-    bid <- compatible_ids[i]
+    bid  <- shuffled_ids[i]
     bcap <- block_caps[i]
 
-    # Check capacity limit
+    # Respect min_lcc_fraction ceiling (hard constraint)
     if (current_sec_capacity + bcap > max_sec_capacity) next
 
     block_indices <- blocks[[bid]]
 
-    # Check disjoint from already-selected blocks
     if (any(selected_union[block_indices])) next
-
-    # Check non-adjacent to already-selected blocks
     if (any(selected_nbrs[block_indices])) next
 
-    # Accept this block
-    selected <- c(selected, bid)
+    selected               <- c(selected, bid)
     selected_union[block_indices] <- TRUE
-    current_sec_capacity <- current_sec_capacity + bcap
+    current_sec_capacity   <- current_sec_capacity + bcap
 
-    # Update neighbor set for next iteration
-    block_parcels <- parcel_names[block_indices]
+    block_parcels   <- parcel_names[block_indices]
     block_nbr_names <- unique(unlist(
       lapply(block_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
       use.names = FALSE
     ))
     block_nbr_names <- setdiff(block_nbr_names, block_parcels)
-    block_nbr_idx <- match(block_nbr_names, parcel_names)
-    block_nbr_idx <- block_nbr_idx[!is.na(block_nbr_idx)]
+    block_nbr_idx   <- match(block_nbr_names, parcel_names)
+    block_nbr_idx   <- block_nbr_idx[!is.na(block_nbr_idx)]
     selected_nbrs[block_nbr_idx] <- TRUE
   }
 

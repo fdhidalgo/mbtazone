@@ -61,7 +61,7 @@ check_parcel_feasibility <- function(
       return(list(feasible = FALSE, constraint_failed = "lcc_connectivity"))
     }
   }
-  
+
   # Check min area and capacity near transit if specified in constraints
   if (!is.null(constraints$station_area_pct) && !is.na(constraints$station_area_pct)) {
     area_in_station_required <- (constraints$station_area_pct / 100) * constraints$min_area
@@ -260,10 +260,46 @@ compute_birth_tilt_weights <- function(block_ids, library,
 # KERNEL 1: LCC-LOCAL REFINEMENT
 # ============================================================================
 
+#' Count LCC neighbours for a set of parcels
+#'
+#' For each parcel in `parcels`, counts how many of its neighbours in the full
+#' graph are members of `lcc_set`. Used to weight boundary proposals.
+#'
+#' @param parcels Character vector of parcel IDs to score
+#' @param lcc_set Character vector of current LCC parcel IDs
+#' @param neighbor_cache Named list parcel_id -> neighbour IDs (optional)
+#' @param parcel_graph igraph, used when neighbor_cache is NULL
+#' @return Integer vector of LCC-neighbour counts, same length as parcels
+count_lcc_neighbours <- function(parcels, lcc_set,
+                                 neighbor_cache = NULL, parcel_graph = NULL) {
+  vapply(parcels, function(v) {
+    nbrs <- if (!is.null(neighbor_cache)) {
+      neighbor_cache[[v]]
+    } else {
+      igraph::neighbors(parcel_graph, v, mode = "all")$name
+    }
+    sum(nbrs %in% lcc_set)
+  }, integer(1L))
+}
+
 #' LCC-local toggle move
 #'
 #' Proposes adding or removing a single parcel from the LCC boundary.
 #' Respects locked zone (does not modify secondaries).
+#'
+#' Candidates are weighted by their LCC-neighbour count raised to
+#' `boundary_weight_alpha`:
+#'   ADD:    w(v) = count^alpha    — prefers parcels well-connected to LCC
+#'   REMOVE: w(v) = count^(-alpha) — prefers tendril tips for removal
+#'
+#' When boundary_weight_alpha = 0 this reduces exactly to the original
+#' uniform proposal. Detailed balance is preserved via the corrected MH ratio.
+#'
+#' Two additional reversibility filters are applied vs the original kernel:
+#'   ADD:    reject if selected would become fully interior (all neighbours in X)
+#'           since no reverse remove would be possible via this kernel.
+#'   REMOVE: filter B_in to exclude parcels adjacent to secondaries since
+#'           removing them leaves them forbidden from B_out_new.
 #'
 #' @param state Current state
 #' @param library Secondary library
@@ -274,17 +310,19 @@ compute_birth_tilt_weights <- function(block_ids, library,
 #' @param degrees Optional named integer vector of vertex degrees (for fast boundary)
 #' @param neighbor_idx Optional named list of integer neighbor indices (for incremental updates)
 #' @param p_add Probability of add vs remove when both possible
+#' @param boundary_weight_alpha Exponent for boundary weighting (0 = uniform)
 #' @return List with new_state, accepted, move_type, details
 lcc_local_move <- function(
-  state,
-  library,
-  parcel_graph,
-  constraints,
-  neighbor_cache = NULL,
-  neighbor_indices = NULL,
-  degrees = NULL,
-  neighbor_idx = NULL,
-  p_add = 0.5
+    state,
+    library,
+    parcel_graph,
+    constraints,
+    neighbor_cache = NULL,
+    neighbor_indices = NULL,
+    degrees = NULL,
+    neighbor_idx = NULL,
+    p_add = 0.5,
+    boundary_weight_alpha = 1
 ) {
   # Get LCC boundary candidates
   boundary <- get_lcc_boundary(
@@ -311,8 +349,24 @@ lcc_local_move <- function(
     ))
   }
 
+  # Filter B_in to exclude parcels adjacent to secondaries — removing such
+  # a parcel leaves it forbidden from B_out_new (secondary neighbour rule
+  # in get_lcc_boundary), making the reverse add impossible.
+  if (length(state$secondary_neighbor_indices) > 0) {
+    forbidden_names <- library$parcel_names[state$secondary_neighbor_indices]
+    B_in <- B_in[!B_in %in% forbidden_names]
+    n_in <- length(B_in)
+  }
+
   # Decide add vs remove
-  if (n_in == 0) {
+  if (n_in == 0 && n_out == 0) {
+    return(list(
+      new_state = state,
+      accepted = FALSE,
+      proposal_failed = TRUE,
+      move_type = "lcc_local"
+    ))
+  } else if (n_in == 0) {
     action <- "add"
   } else if (n_out == 0) {
     action <- "remove"
@@ -320,10 +374,22 @@ lcc_local_move <- function(
     action <- if (runif(1) < p_add) "add" else "remove"
   }
 
+  lcc_set <- state$lcc_parcels
+
   # Select parcel
   # NOTE: Use sample.int + indexing to avoid R's sample(n,1) gotcha when length=1
   if (action == "add") {
-    selected <- B_out[sample.int(length(B_out), 1)]
+
+    # Weight B_out by (LCC-neighbour count)^alpha
+    # Every parcel in B_out has >= 1 LCC neighbour, so log is safe
+    fwd_counts  <- count_lcc_neighbours(B_out, lcc_set, neighbor_cache, parcel_graph)
+    fwd_log_w   <- boundary_weight_alpha * log(fwd_counts)
+    fwd_log_sum <- log(sum(exp(fwd_log_w - max(fwd_log_w)))) + max(fwd_log_w)
+    fwd_probs   <- exp(fwd_log_w - fwd_log_sum)
+
+    idx      <- sample.int(n_out, 1, prob = fwd_probs)
+    selected <- B_out[idx]
+
     new_state <- update_lcc(
       state,
       selected,
@@ -332,6 +398,7 @@ lcc_local_move <- function(
       parcel_graph,
       neighbor_idx
     )
+
     # Compute reverse move size
     new_boundary <- get_lcc_boundary(
       new_state,
@@ -341,10 +408,66 @@ lcc_local_move <- function(
       neighbor_indices,
       degrees
     )
-    n_in_new <- length(new_boundary$B_in)
-    n_out_new <- length(new_boundary$B_out)
+    B_in_new  <- new_boundary$B_in
+    B_out_new <- new_boundary$B_out
+    n_in_new  <- length(B_in_new)
+    n_out_new <- length(B_out_new)
+
+    # Reject if selected would not appear in B_in_new (fully interior after add)
+    # — reverse remove is impossible, violating detailed balance
+    if (!selected %in% B_in_new) {
+      return(list(
+        new_state         = state,
+        accepted          = FALSE,
+        infeasible        = TRUE,
+        constraint_failed = "fully_interior_add",
+        move_type         = "lcc_local_add"
+      ))
+    }
+
+    # Check feasibility (hard constraints only - capacity handled by prior)
+    feasibility <- check_hard_constraints_only(
+      new_state,
+      library,
+      parcel_graph,
+      constraints
+    )
+    if (!feasibility$feasible) {
+      return(list(
+        new_state = state,
+        accepted = FALSE,
+        infeasible = TRUE,
+        constraint_failed = feasibility$constraint_failed,
+        move_type = "lcc_local_add"
+      ))
+    }
+
+    # Compute MH ratio
+    # ADD move:
+    #   Forward  q(X→X') = w(selected) / W_out
+    #   Reverse  q(X'→X) = w^-1(selected) / W_in_new
+    #   Ratio = (w^-1(selected) / W_in_new) / (w(selected) / W_out)
+    new_lcc_set <- new_state$lcc_parcels
+    rev_counts  <- count_lcc_neighbours(B_in_new, new_lcc_set, neighbor_cache, parcel_graph)
+    rev_log_w   <- -boundary_weight_alpha * log(pmax(rev_counts, 1L))
+    rev_log_sum <- log(sum(exp(rev_log_w - max(rev_log_w)))) + max(rev_log_w)
+    rev_idx     <- match(selected, B_in_new)
+
+    log_accept_ratio <- (rev_log_w[rev_idx] - rev_log_sum) -
+      (fwd_log_w[idx]     - fwd_log_sum)
+
   } else {
-    selected <- B_in[sample.int(length(B_in), 1)]
+
+    # Weight B_in by (LCC-neighbour count)^(-alpha) — prefer tendril tips
+    # Every parcel in B_in has >= 1 LCC neighbour, so log is safe
+    fwd_counts  <- count_lcc_neighbours(B_in, lcc_set, neighbor_cache, parcel_graph)
+    fwd_log_w   <- -boundary_weight_alpha * log(fwd_counts)
+    fwd_log_sum <- log(sum(exp(fwd_log_w - max(fwd_log_w)))) + max(fwd_log_w)
+    fwd_probs   <- exp(fwd_log_w - fwd_log_sum)
+
+    idx      <- sample.int(n_in, 1, prob = fwd_probs)
+    selected <- B_in[idx]
+
     # Check LCC would remain connected
     remaining_lcc <- setdiff(state$lcc_parcels, selected)
     if (length(remaining_lcc) > 0) {
@@ -359,6 +482,7 @@ lcc_local_move <- function(
         ))
       }
     }
+
     new_state <- update_lcc(
       state,
       selected,
@@ -367,6 +491,7 @@ lcc_local_move <- function(
       parcel_graph,
       neighbor_idx
     )
+
     new_boundary <- get_lcc_boundary(
       new_state,
       library,
@@ -375,44 +500,41 @@ lcc_local_move <- function(
       neighbor_indices,
       degrees
     )
-    n_in_new <- length(new_boundary$B_in)
-    n_out_new <- length(new_boundary$B_out)
-  }
+    B_in_new  <- new_boundary$B_in
+    B_out_new <- new_boundary$B_out
+    n_in_new  <- length(B_in_new)
+    n_out_new <- length(B_out_new)
 
-  # Check feasibility (hard constraints only - capacity handled by prior)
-  feasibility <- check_hard_constraints_only(
-    new_state,
-    library,
-    parcel_graph,
-    constraints
-  )
-  if (!feasibility$feasible) {
-    return(list(
-      new_state = state,
-      accepted = FALSE,
-      infeasible = TRUE,
-      constraint_failed = feasibility$constraint_failed,
-      move_type = paste0("lcc_local_", action)
-    ))
-  }
+    # Check feasibility (hard constraints only - capacity handled by prior)
+    feasibility <- check_hard_constraints_only(
+      new_state,
+      library,
+      parcel_graph,
+      constraints
+    )
+    if (!feasibility$feasible) {
+      return(list(
+        new_state = state,
+        accepted = FALSE,
+        infeasible = TRUE,
+        constraint_failed = feasibility$constraint_failed,
+        move_type = "lcc_local_remove"
+      ))
+    }
 
-  # Compute MH ratio (balanced boundary move)
-  # For uniform target: α = min(1, q(X'→X) / q(X→X'))
-  #
-  # ADD move:
-  #   Forward q(X→X') = 1/n_out (pick from outer boundary)
-  #   Reverse q(X'→X) = 1/n_in_new (pick from inner boundary of new state)
-  #   Ratio = n_out / n_in_new
-  #
-  # REMOVE move:
-  #   Forward q(X→X') = 1/n_in (pick from inner boundary)
-  #   Reverse q(X'→X) = 1/n_out_new (pick from outer boundary of new state)
-  #   Ratio = n_in / n_out_new
+    # Compute MH ratio
+    # REMOVE move:
+    #   Forward  q(X→X') = w^-1(selected) / W_in
+    #   Reverse  q(X'→X) = w(selected) / W_out_new
+    #   Ratio = (w(selected) / W_out_new) / (w^-1(selected) / W_in)
+    new_lcc_set <- new_state$lcc_parcels
+    rev_counts  <- count_lcc_neighbours(B_out_new, new_lcc_set, neighbor_cache, parcel_graph)
+    rev_log_w   <- boundary_weight_alpha * log(pmax(rev_counts, 1L))
+    rev_log_sum <- log(sum(exp(rev_log_w - max(rev_log_w)))) + max(rev_log_w)
+    rev_idx     <- match(selected, B_out_new)
 
-  if (action == "add") {
-    log_accept_ratio <- log(n_out) - log(n_in_new)
-  } else {
-    log_accept_ratio <- log(n_in) - log(n_out_new)
+    log_accept_ratio <- (rev_log_w[rev_idx] - rev_log_sum) -
+      (fwd_log_w[idx]     - fwd_log_sum)
   }
 
   # Account for p_add asymmetry when direction is forced in either state
@@ -425,7 +547,6 @@ lcc_local_move <- function(
   #
   # Six valid transition cases:
   # 1. Both → Both: p_add cancels, no correction
-
   # 2. Both → Forced add: forward used p_add, reverse uses 1 → divide by p_add
   # 3. Both → Forced remove: forward used 1-p_add, reverse uses 1 → divide by 1-p_add
   # 4. Forced add → Both: forward used 1, reverse uses 1-p_add → multiply by 1-p_add
@@ -1414,7 +1535,6 @@ replace_lcc_move <- function(
   secondary_library,
   parcel_graph,
   constraints,
-  cap_tolerance = REPLACE_LCC_CAP_TOLERANCE,
   neighbor_idx = NULL,
   parcel_names = NULL
 ) {
@@ -1499,9 +1619,10 @@ replace_lcc_move <- function(
     all_compatible_lccs <- all_active_ids
   }
 
-  # Find similar-capacity LCCs among active entries, excluding current
-  similar_mask <- active_mask &
-    (abs(all_caps - current_lcc_cap) <= cap_tolerance)
+  # All active LCCs are candidates — no capacity window restriction.
+  # The MH ratio and existing pre-filters (min_lcc_fraction, station
+  # constraints) handle feasibility; capacity is handled by the prior.
+  similar_mask <- active_mask
   similar_mask[current_lcc_id] <- FALSE # Exclude self to avoid no-op
 
   # Pre-filter by min_lcc_fraction constraint:
@@ -1657,8 +1778,8 @@ replace_lcc_move <- function(
   }
 
   # Step 6: Compute MH ratio
-  similar_reverse_mask <- active_mask &
-    (abs(all_caps - new_lcc_cap) <= cap_tolerance)
+  # Reverse candidate set mirrors forward: all active LCCs, same pre-filters.
+  similar_reverse_mask <- active_mask
   similar_reverse_mask[new_lcc_id] <- FALSE # Exclude self for reverse
 
   # Apply same min_lcc_fraction pre-filter as forward (same secondaries, same threshold)

@@ -13,7 +13,8 @@ lcc_local_move(
   neighbor_indices = NULL,
   degrees = NULL,
   neighbor_idx = NULL,
-  p_add = 0.5
+  p_add = 0.5,
+  boundary_weight_alpha = 1
 )
 }
 \arguments{
@@ -34,6 +35,8 @@ lcc_local_move(
 \item{neighbor_idx}{Optional named list of integer neighbor indices (for incremental updates)}
 
 \item{p_add}{Probability of add vs remove when both possible}
+
+\item{boundary_weight_alpha}{Exponent for boundary weighting (0 = uniform)}
 }
 \value{
 List with new_state, accepted, move_type, details
@@ -41,4 +44,19 @@ List with new_state, accepted, move_type, details
 \description{
 Proposes adding or removing a single parcel from the LCC boundary.
 Respects locked zone (does not modify secondaries).
+}
+\details{
+Candidates are weighted by their LCC-neighbour count raised to
+\code{boundary_weight_alpha}:
+ADD:    w(v) = count^alpha    — prefers parcels well-connected to LCC
+REMOVE: w(v) = count^(-alpha) — prefers tendril tips for removal
+
+When boundary_weight_alpha = 0 this reduces exactly to the original
+uniform proposal. Detailed balance is preserved via the corrected MH ratio.
+
+Two additional reversibility filters are applied vs the original kernel:
+ADD:    reject if selected would become fully interior (all neighbours in X)
+since no reverse remove would be possible via this kernel.
+REMOVE: filter B_in to exclude parcels adjacent to secondaries since
+removing them leaves them forbidden from B_out_new.
 }
