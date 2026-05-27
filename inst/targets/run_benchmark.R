@@ -30,7 +30,7 @@ BENCHMARK_DISTRICTS <- list(
   list(name = "Ayer",    type = "commuter_rail"), # Area constraint bites, converges above minimum
   list(name = "Ashland",   type = "commuter_rail"), # Commuter rail with centroid_x drift
   list(name = "Malden",    type = "rapid_transit"), # Poor convergence rapid transit
-  list(name = "Bedford",   type = "adjacent"), # Very well behaved adjacent district
+  list(name = "Amesbury",   type = "adjacent"), # Well behaved adjacent district
   list(name = "Auburn",   type = "adjacent") # Slighyly less well-behaved adjacent district
 )
 
