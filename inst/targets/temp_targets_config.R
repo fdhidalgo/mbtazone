@@ -49,7 +49,7 @@ RHAT_CONVERGENCE_THRESHOLD <- 1.1 # R-hat < this indicates convergence
 #   0.005   | 0.37        | 139 units | Moderate
 #   0.010   | 0.14        |  69 units | Strong
 #
-CAPACITY_PRIOR_LAMBDA <- 0.005
+CAPACITY_PRIOR_LAMBDA <- 0.002
 # Discovery-only capacity bound (multiplier of min_capacity)
 # Filters LCCs during tree enumeration to speed up discovery.
 # LCCs with capacity > min_capacity * DISCOVERY_CAPACITY_MULTIPLIER are skipped.
@@ -102,7 +102,7 @@ DISCOVERY_CAPACITY_MULTIPLIER <- 2.5
 K_PRIOR_LAMBDA <- 0.1
 
 # MCMC step count (single source of truth for all MCMC runs)
-MCMC_STEPS_MACRO <- 10000L
+MCMC_STEPS_MACRO <- 20000L
 
 # Burn-in: number of initial samples to discard when computing diagnostics
 # Chains start from different regions and need time to reach stationary distribution
