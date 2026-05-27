@@ -78,38 +78,24 @@ copy_if_exists <- function(src, dst) {
   if (file.exists(src)) { file.copy(src, dst, overwrite = TRUE); TRUE } else FALSE
 }
 
-# Source config files into an isolated environment and return it.
-# The two files must be sourced in order: temp_targets_config.R defines
-# CAPACITY_PRIOR_LAMBDA which temp_targets_parcel_config.R references.
+# Read config files into an isolated environment.
+# parse()+eval() is used instead of source()/sys.source() to avoid targets
+# interactions. parent=baseenv() so base functions (list, c, etc.) are found.
 read_config <- function() {
-  # parent = baseenv() so base functions (list, c, etc.) are found during sourcing
   env <- new.env(parent = baseenv())
-  tryCatch({
-    sys.source("inst/targets/temp_targets_config.R",        envir = env)
-    sys.source("inst/targets/temp_targets_parcel_config.R", envir = env)
-  }, error = function(e) warning("Config read error: ", conditionMessage(e)))
+  for (f in c("inst/targets/temp_targets_config.R",
+              "inst/targets/temp_targets_parcel_config.R")) {
+    tryCatch(
+      eval(parse(file = f), envir = env),
+      error = function(e) warning("Config read error in ", f, ": ", conditionMessage(e))
+    )
+  }
   env
 }
 
-# Pull kernel weights from the first successful district's parcel_main_config.
-read_kernel_config <- function(results) {
-  for (r in results) {
-    if (!identical(r$status, "success")) next
-    store <- file.path(
-      "ext", paste0("_targets_", gsub(" ", "_", r$name))
-    )
-    cfg <- tryCatch(
-      tar_read("parcel_main_config", store = store),
-      error = function(e) NULL
-    )
-    if (!is.null(cfg)) return(cfg)
-  }
-  NULL
-}
-
-cfg_val <- function(cfg, name, suffix = "") {
+cfg_val <- function(cfg, name) {
   v <- get0(name, envir = cfg, inherits = FALSE)
-  if (is.null(v)) "N/A" else paste0(as.character(v), suffix)
+  if (is.null(v)) "N/A" else as.character(v)
 }
 
 # ============================================================================
@@ -178,14 +164,6 @@ for (i in seq_len(n)) {
 
 cfg <- read_config()
 
-# Supplement with kernel weights from a successful district's targets store
-kernel_cfg <- read_kernel_config(results)
-if (!is.null(kernel_cfg)) {
-  for (nm in c("p_replace_lcc", "p_symmetric_birth_death", "p_lcc_local", "p_swap")) {
-    if (!is.null(kernel_cfg[[nm]])) assign(nm, kernel_cfg[[nm]], envir = cfg)
-  }
-}
-
 # Copy raw config files verbatim for exact reproducibility
 file.copy("inst/targets/temp_targets_config.R",
           file.path(out_dir, "temp_targets_config.R"),        overwrite = TRUE)
@@ -222,8 +200,6 @@ md <- c(
   paste0("| CAPACITY_PRIOR_LAMBDA        | ", cfg_val(cfg, "CAPACITY_PRIOR_LAMBDA"),        " |"),
   paste0("| K_PRIOR_LAMBDA               | ", cfg_val(cfg, "K_PRIOR_LAMBDA"),               " |"),
   paste0("| SWAP_CAP_TOLERANCE           | ", cfg_val(cfg, "SWAP_CAP_TOLERANCE"),           " |"),
-  paste0("| REPLACE_LCC_CAP_TOLERANCE    | ", cfg_val(cfg, "REPLACE_LCC_CAP_TOLERANCE"),
-         if (!is.null(get0("REPLACE_LCC_CAP_TOLERANCE", cfg))) " *(config only — removed from kernel)*" else "", " |"),
   paste0("| MAX_DIST_FEET                | ", cfg_val(cfg, "MAX_DIST_FEET"),                " |"),
   paste0("| MIN_COVERAGE_RATIO           | ", cfg_val(cfg, "MIN_COVERAGE_RATIO"),           " |"),
   paste0("| LCC_LIBRARY_MAX_SIZE         | ", cfg_val(cfg, "LCC_LIBRARY_MAX_SIZE"),         " |"),
@@ -233,15 +209,6 @@ md <- c(
   paste0("| LCC_BAND_MAX_ATTEMPTS        | ", cfg_val(cfg, "LCC_BAND_MAX_ATTEMPTS"),        " |"),
   paste0("| ENABLE_ONLINE_ENRICHMENT     | ", cfg_val(cfg, "ENABLE_ONLINE_ENRICHMENT"),     " |"),
   paste0("| DEBUG_INVARIANT_CHECKS       | ", cfg_val(cfg, "DEBUG_INVARIANT_CHECKS"),       " |"),
-  "",
-  "## Kernel Mix",
-  "",
-  "| Kernel | Weight |",
-  "|:---|---:|",
-  paste0("| p_replace_lcc           | ", cfg_val(cfg, "p_replace_lcc"),           " |"),
-  paste0("| p_symmetric_birth_death | ", cfg_val(cfg, "p_symmetric_birth_death"), " |"),
-  paste0("| p_lcc_local             | ", cfg_val(cfg, "p_lcc_local"),             " |"),
-  paste0("| p_swap                  | ", cfg_val(cfg, "p_swap"),                  " |"),
   "",
   "## District Results",
   "",
