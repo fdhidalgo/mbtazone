@@ -82,12 +82,29 @@ copy_if_exists <- function(src, dst) {
 # The two files must be sourced in order: temp_targets_config.R defines
 # CAPACITY_PRIOR_LAMBDA which temp_targets_parcel_config.R references.
 read_config <- function() {
-  env <- new.env(parent = emptyenv())
+  # parent = baseenv() so base functions (list, c, etc.) are found during sourcing
+  env <- new.env(parent = baseenv())
   tryCatch({
     sys.source("inst/targets/temp_targets_config.R",        envir = env)
     sys.source("inst/targets/temp_targets_parcel_config.R", envir = env)
   }, error = function(e) warning("Config read error: ", conditionMessage(e)))
   env
+}
+
+# Pull kernel weights from the first successful district's parcel_main_config.
+read_kernel_config <- function(results) {
+  for (r in results) {
+    if (!identical(r$status, "success")) next
+    store <- file.path(
+      "ext", paste0("_targets_", gsub(" ", "_", r$name))
+    )
+    cfg <- tryCatch(
+      tar_read("parcel_main_config", store = store),
+      error = function(e) NULL
+    )
+    if (!is.null(cfg)) return(cfg)
+  }
+  NULL
 }
 
 cfg_val <- function(cfg, name, suffix = "") {
@@ -127,12 +144,20 @@ for (i in seq_len(n)) {
     cat(sprintf("  x FAILED: %s\n", run_error))
   })
 
-  # Copy reports — use district_name directly (pipeline uses it without substitution)
-  llm_src  <- file.path("ext", "llm_reports", paste0(name, "_mcmc_diagnostics_llm.md"))
-  html_src <- file.path("ext", "reports",     paste0(name, "_mcmc_diagnostics.html"))
+  # Copy reports (pipeline writes using district_name verbatim)
+  llm_src  <- file.path(
+    "ext", "llm_reports", paste0(name, "_mcmc_diagnostics_llm.md")
+  )
+  html_src <- file.path(
+    "ext", "reports", paste0(name, "_mcmc_diagnostics.html")
+  )
 
-  llm_ok  <- copy_if_exists(llm_src,  file.path(out_dir, paste0(name, "_llm.md")))
-  html_ok <- copy_if_exists(html_src, file.path(out_dir, paste0(name, "_report.html")))
+  llm_ok  <- copy_if_exists(
+    llm_src,  file.path(out_dir, paste0(name, "_llm.md"))
+  )
+  html_ok <- copy_if_exists(
+    html_src, file.path(out_dir, paste0(name, "_report.html"))
+  )
 
   if (!llm_ok)  cat(sprintf("  ! LLM report not found:  %s\n", llm_src))
   if (!html_ok) cat(sprintf("  ! HTML report not found: %s\n", html_src))
@@ -152,6 +177,14 @@ for (i in seq_len(n)) {
 # ============================================================================
 
 cfg <- read_config()
+
+# Supplement with kernel weights from a successful district's targets store
+kernel_cfg <- read_kernel_config(results)
+if (!is.null(kernel_cfg)) {
+  for (nm in c("p_replace_lcc", "p_symmetric_birth_death", "p_lcc_local", "p_swap")) {
+    if (!is.null(kernel_cfg[[nm]])) assign(nm, kernel_cfg[[nm]], envir = cfg)
+  }
+}
 
 # Copy raw config files verbatim for exact reproducibility
 file.copy("inst/targets/temp_targets_config.R",
