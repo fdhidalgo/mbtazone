@@ -48,7 +48,6 @@ SECONDARY_AREA_THRESHOLD <- config_env$SECONDARY_AREA_THRESHOLD
 DISCOVERY_CAPACITY_MULTIPLIER <- config_env$DISCOVERY_CAPACITY_MULTIPLIER
 MCMC_STEPS_MACRO <- config_env$MCMC_STEPS_MACRO
 MCMC_BURN_IN <- config_env$MCMC_BURN_IN
-REPLACE_LCC_CAP_TOLERANCE <- config_env$REPLACE_LCC_CAP_TOLERANCE
 SWAP_CAP_TOLERANCE <- config_env$SWAP_CAP_TOLERANCE
 
 # Load targets
@@ -165,7 +164,6 @@ if (!use_lifted) {
 - Discovery capacity multiplier: `r DISCOVERY_CAPACITY_MULTIPLIER`×
 - MCMC steps per chain: `r MCMC_STEPS_MACRO`
 - Burn-in: `r MCMC_BURN_IN`
-- Replace-LCC capacity tolerance: `r REPLACE_LCC_CAP_TOLERANCE`
 - Swap capacity tolerance: `r SWAP_CAP_TOLERANCE`
 
 ## Graph Statistics

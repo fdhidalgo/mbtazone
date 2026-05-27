@@ -121,7 +121,6 @@ This report presents diagnostic results for MCMC sampling of feasible zoning pla
 | Discovery capacity multiplier | `r DISCOVERY_CAPACITY_MULTIPLIER`× |
 | MCMC steps per chain | `r scales::comma(MCMC_STEPS_MACRO)` |
 | Burn-in | `r scales::comma(MCMC_BURN_IN)` |
-| Replace-LCC capacity tolerance | `r REPLACE_LCC_CAP_TOLERANCE` |
 | Swap capacity tolerance | `r SWAP_CAP_TOLERANCE` |
 
 ### Parcel Zoning Potential
