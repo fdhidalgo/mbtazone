@@ -130,5 +130,5 @@ if (nrow(compactness_dt) > 0) {
   if (nrow(flagged) > 0) print(flagged) else cat("  None\n")
 }
 
-data.table::fwrite(compactness_dt, "./dev/mcmc_testing/compactness_graph_results.csv")
+data.table::fwrite(compactness_dt, "./dev/mcmc_testing/compactness/compactness_graph_results.csv")
 cat("\nResults written to compactness_graph_results.csv\n")

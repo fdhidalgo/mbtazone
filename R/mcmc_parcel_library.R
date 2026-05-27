@@ -1630,7 +1630,7 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
   valid_lccs  <- discovered_lccs[capacity > 0 & capacity <= max_lcc_cap]
   n_excluded  <- nrow(discovered_lccs[capacity > max_lcc_cap])
   if (n_excluded > 0) {
-    cli::cli_alert_info("Excluded {n_excluded} LCCs above 2x min_capacity ({max_lcc_cap})")
+    cli::cli_alert_info("Excluded {n_excluded} LCCs above 2.5x min_capacity ({max_lcc_cap})")
   }
 
   # Handle empty library case
