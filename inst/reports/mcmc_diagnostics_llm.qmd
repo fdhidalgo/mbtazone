@@ -1,0 +1,1773 @@
+---
+title: "MCMC Diagnostics Summary (LLM)"
+format: gfm
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  temp_store_path: "/ext/_targets_Norwood"
+---
+
+```{r}
+#| label: setup
+library(targets)
+library(data.table)
+library(knitr)
+library(coda)
+
+# Find targets store
+store_path <- if (dir.exists(params$temp_store_path)) params$temp_store_path else paste0("../../", params$temp_store_path)
+tar_config_set(store = store_path)
+
+# Source functions through package
+library(mbtazone)
+
+# Load the live MCMC tuning constants used by the targets pipeline.
+find_repo_file <- function(rel_path) {
+  candidates <- c(
+    rel_path,
+    file.path("..", rel_path),
+    file.path("../..", rel_path),
+    file.path("../../..", rel_path)
+  )
+  existing <- candidates[file.exists(candidates)]
+  if (length(existing) == 0) {
+    stop(sprintf("Could not locate repository file: %s", rel_path))
+  }
+  existing[[1]]
+}
+
+config_env <- new.env(parent = globalenv())
+source(find_repo_file("inst/targets/temp_targets_config.R"), local = config_env)
+source(find_repo_file("inst/targets/temp_targets_parcel_config.R"), local = config_env)
+
+CAPACITY_PRIOR_LAMBDA <- config_env$CAPACITY_PRIOR_LAMBDA
+K_PRIOR_LAMBDA <- config_env$K_PRIOR_LAMBDA
+SECONDARY_AREA_THRESHOLD <- config_env$SECONDARY_AREA_THRESHOLD
+DISCOVERY_CAPACITY_MULTIPLIER <- config_env$DISCOVERY_CAPACITY_MULTIPLIER
+MCMC_STEPS_MACRO <- config_env$MCMC_STEPS_MACRO
+MCMC_BURN_IN <- config_env$MCMC_BURN_IN
+SWAP_CAP_TOLERANCE <- config_env$SWAP_CAP_TOLERANCE
+
+# Load targets
+parcel_chain_results <- tar_read(all_parcel_chain_results)
+parcel_metrics <- tar_read(parcel_metrics)
+parcel_graph_result <- tar_read(parcel_graph_result)
+discovered_lcc_library <- tar_read(discovered_lcc_library)
+discovered_secondary_library <- tar_read(discovered_secondary_library)
+parcel_rhat_table <- tar_read(parcel_rhat_table)
+parcel_irreducibility_report <- tar_read(parcel_irreducibility_report)
+parcel_separation <- tar_read(parcel_chain_separation)
+parcel_feasibility <- tar_read(parcel_feasibility)
+parcel_feasibility_summary <- tar_read(parcel_feasibility_summary)
+parcel_geographic_coverage <- tar_read(parcel_geographic_coverage)
+constraints <- tar_read(constraints)
+
+# Get first valid chain for trajectory data
+valid_chains <- Filter(
+
+  function(x) !isTRUE(x$initialization_failed),
+  parcel_chain_results
+)
+if (length(valid_chains) == 0) {
+  stop("No valid parcel MCMC chains available for diagnostics report.")
+}
+first_valid_chain <- valid_chains[[1]]
+
+strip_burnin <- function(traj) {
+  if (MCMC_BURN_IN > 0 && length(traj) > MCMC_BURN_IN) {
+    traj[(MCMC_BURN_IN + 1):length(traj)]
+  } else {
+    traj
+  }
+}
+
+diag_vec <- function(chains, field) {
+  unlist(lapply(chains, function(ch) {
+    value <- ch$diagnostics[[field]]
+    if (is.null(value)) numeric(0) else strip_burnin(value)
+  }), use.names = FALSE)
+}
+
+diag_vec_fallback <- function(chains, primary, fallback = NULL) {
+  values <- diag_vec(chains, primary)
+  if (length(values) > 0 || is.null(fallback)) {
+    return(values)
+  }
+  diag_vec(chains, fallback)
+}
+
+diag_dt_fallback <- function(chains, primary, fallback = NULL) {
+  dt_list <- lapply(chains, function(ch) {
+    dt <- ch$diagnostics[[primary]]
+    if (is.null(dt) && !is.null(fallback)) {
+      dt <- ch$diagnostics[[fallback]]
+    }
+    dt
+  })
+  Filter(Negate(is.null), dt_list)
+}
+
+all_lcc_cap <- diag_vec(valid_chains, "lcc_capacity_trajectory")
+all_n_sec <- diag_vec(valid_chains, "n_secondaries_trajectory")
+all_total_cap <- diag_vec(valid_chains, "capacity_trajectory")
+all_n_comp <- diag_vec(valid_chains, "n_components_trajectory")
+min_cap <- constraints$min_capacity
+all_sec_cap <- all_total_cap - all_lcc_cap
+all_excess_cap <- all_total_cap - min_cap
+
+purge_results <- rbindlist(lapply(seq_along(valid_chains), function(i) {
+  pr <- valid_chains[[i]]$diagnostics$purge_results
+  if (is.null(pr) || length(pr) == 0) return(NULL)
+  dt <- rbindlist(pr, fill = TRUE)
+  if (nrow(dt) == 0) return(NULL)
+  dt[, chain := names(valid_chains)[i]]
+  dt
+}), fill = TRUE)
+
+birth_death_attempts <- rbindlist(lapply(seq_along(valid_chains), function(i) {
+  attempts <- valid_chains[[i]]$diagnostics$birth_death_attempts
+  if (is.null(attempts) || nrow(attempts) == 0) return(NULL)
+  dt <- copy(attempts)
+  dt[, chain := names(valid_chains)[i]]
+  dt
+}), fill = TRUE)
+
+# Detect whether lifted or symmetric birth/death was used
+# Check diagnostics flag first, then fall back to checking which kernel has attempts
+use_lifted <- isTRUE(first_valid_chain$diagnostics$use_lifted)
+if (!use_lifted) {
+  # Fallback: check stats for which kernel was actually used
+  lifted_attempts <- first_valid_chain$stats[
+    move_type == "lifted_birth_death", n_attempted
+  ]
+  symmetric_attempts <- first_valid_chain$stats[
+    move_type == "symmetric_birth_death", n_attempted
+  ]
+  use_lifted <- isTRUE(lifted_attempts > 0 && symmetric_attempts == 0)
+}
+```
+
+# MCMC Diagnostics Summary
+
+## Overview
+
+- Total Chains: `r parcel_metrics$n_chains`
+- Total Steps: `r parcel_metrics$total_steps` (`r parcel_metrics$n_steps_per_chain[1]` per chain)
+
+## Current Tuning
+
+- Capacity prior λ: `r CAPACITY_PRIOR_LAMBDA`
+- Secondary-count prior λ: `r K_PRIOR_LAMBDA`
+- Secondary minimum area: `r SECONDARY_AREA_THRESHOLD` acres
+- Discovery capacity multiplier: `r DISCOVERY_CAPACITY_MULTIPLIER`×
+- MCMC steps per chain: `r MCMC_STEPS_MACRO`
+- Burn-in: `r MCMC_BURN_IN`
+- Swap capacity tolerance: `r SWAP_CAP_TOLERANCE`
+
+## Graph Statistics
+
+```{r}
+#| label: graph-setup
+pg <- parcel_graph_result$parcel_graph
+pa <- parcel_graph_result$parcel_attributes
+```
+
+- Parcels: `r nrow(parcel_graph_result$parcel_assignments)`
+- Parcel units: `r igraph::vcount(pg)` (compression: `r round(nrow(parcel_graph_result$parcel_assignments) / igraph::vcount(pg), 1)`x)
+- Parcel edges: `r igraph::ecount(pg)`
+- Avg degree: `r round(mean(igraph::degree(pg)), 1)`
+
+## Library Coverage
+
+### Secondary Library
+
+```{r}
+sec_coverage <- discovered_secondary_library$metadata[, .N, by = size_band]
+kable(sec_coverage, col.names = c("Size Band", "Count"))
+```
+
+### LCC Library
+
+- Candidates: `r discovered_lcc_library$n_blocks`
+- Capacity range: `r min(discovered_lcc_library$metadata$capacity)` - `r max(discovered_lcc_library$metadata$capacity)`
+
+### LCC Capacity: Library vs Sampled
+
+*Compares library capacity distribution to sampled distribution. A discrepancy reflects the posterior distribution shape, not proposal bias (proposals are uniform).*
+
+```{r}
+#| label: lcc-capacity-comparison
+# Library capacity stats
+library_caps <- discovered_lcc_library$metadata$capacity
+library_mean_cap <- mean(library_caps)
+library_median_cap <- median(library_caps)
+
+# Sampled LCC capacity stats (from all chains)
+sampled_mean_cap <- mean(all_lcc_cap)
+sampled_median_cap <- median(all_lcc_cap)
+
+# Capacity ratio (< 1 means chain visiting lower-capacity LCCs than library average)
+capacity_ratio <- sampled_mean_cap / library_mean_cap
+
+# High-capacity threshold (min_capacity constraint)
+high_cap_threshold <- constraints$min_capacity
+library_high_cap_pct <- 100 * mean(library_caps >= high_cap_threshold)
+sampled_high_cap_pct <- 100 * mean(all_lcc_cap >= high_cap_threshold)
+
+# Build comparison table
+bias_dt <- data.table(
+  Metric = c(
+    "Mean capacity",
+    "Median capacity",
+    sprintf("High-capacity (≥%d) %%", high_cap_threshold)
+  ),
+  Library = c(
+    round(library_mean_cap, 0),
+    round(library_median_cap, 0),
+    sprintf("%.1f%%", library_high_cap_pct)
+  ),
+  Sampled = c(
+    round(sampled_mean_cap, 0),
+    round(sampled_median_cap, 0),
+    sprintf("%.1f%%", sampled_high_cap_pct)
+  )
+)
+kable(bias_dt)
+
+# Diagnosis
+cat(sprintf("\n**Capacity ratio (sampled/library): %.2f**\n\n", capacity_ratio))
+
+if (capacity_ratio < 0.8) {
+  cat(
+    "ℹ️ **Posterior favors lower-capacity LCCs**: This is expected behavior.\n"
+  )
+  cat(
+    "The min_lcc_fraction constraint (≥50%) limits how many secondaries can be added\n"
+  )
+  cat(
+    "with high-capacity LCCs. Lower-capacity LCCs allow more secondary configurations,\n"
+  )
+  cat("so the posterior has more mass there. This is not a proposal bias.\n")
+} else if (capacity_ratio > 1.2) {
+  cat(
+    "ℹ️ **Posterior favors higher-capacity LCCs**: Chain visiting higher-capacity LCCs than library average.\n"
+  )
+  cat(
+    "This may indicate few feasible configurations exist with low-capacity LCCs.\n"
+  )
+} else {
+  cat("✓ Sampled distribution matches library distribution.\n")
+}
+```
+
+### LCC Library Capacity Bands
+
+*Distribution of LCC capacities in the library relative to min_capacity.*
+
+```{r}
+#| label: lcc-capacity-bands
+min_cap <- constraints$min_capacity
+
+# Define capacity bands
+capacity_bands <- data.table(
+  Band = c(
+    sprintf("< min_capacity (%d)", min_cap),
+    sprintf("[min_cap, 1.25×min_cap)"),
+    sprintf("[1.25×, 1.5×min_cap)"),
+    sprintf("[1.5×, 2×min_cap)"),
+    sprintf(">= 2×min_capacity")
+  ),
+  Lower = c(0, min_cap, 1.25 * min_cap, 1.5 * min_cap, 2 * min_cap),
+  Upper = c(min_cap, 1.25 * min_cap, 1.5 * min_cap, 2 * min_cap, Inf)
+)
+
+# Count LCCs in each band
+capacity_bands[,
+  Count := sapply(seq_len(.N), function(i) {
+    sum(library_caps >= Lower[i] & library_caps < Upper[i])
+  })
+]
+capacity_bands[, Pct := sprintf("%.1f%%", 100 * Count / length(library_caps))]
+
+kable(
+  capacity_bands[, .(Band, Count, Pct)],
+  col.names = c("Capacity Band", "N LCCs", "% of Library")
+)
+```
+
+### Library Accessibility by Secondary Count (k)
+
+*The min_lcc_fraction constraint requires LCC capacity >= total secondary capacity. As k increases, fewer LCCs are accessible.*
+
+```{r}
+#| label: library-accessibility-by-k
+# Get secondary library mean capacity
+sec_caps <- discovered_secondary_library$metadata$capacity
+mean_sec_cap <- mean(sec_caps)
+
+# Compute accessibility for k = 0 to max observed
+max_k <- max(all_n_sec)
+accessibility_dt <- data.table(k = 0:max_k)
+accessibility_dt[, est_sec_cap := k * mean_sec_cap]
+accessibility_dt[, min_lcc_required := est_sec_cap]
+accessibility_dt[,
+  n_accessible := sapply(min_lcc_required, function(m) sum(library_caps >= m))
+]
+accessibility_dt[,
+  pct_accessible := sprintf("%.1f%%", 100 * n_accessible / length(library_caps))
+]
+
+kable(
+  accessibility_dt,
+  col.names = c(
+    "k",
+    "Est. Sec. Cap.",
+    "Min LCC Required",
+    "N Accessible",
+    "% Library"
+  )
+)
+```
+
+### Posterior-Weighted Library Accessibility
+
+*Average library accessibility weighted by the observed k distribution.*
+
+```{r}
+#| label: posterior-weighted-accessibility
+# Get k distribution from sampled data
+k_counts <- table(all_n_sec)
+k_probs <- as.numeric(k_counts) / sum(k_counts)
+k_vals <- as.integer(names(k_counts))
+
+# Compute accessibility for each k
+k_accessibility <- sapply(k_vals, function(kval) {
+  min_req <- kval * mean_sec_cap
+  sum(library_caps >= min_req) / length(library_caps)
+})
+
+# Weighted average
+weighted_accessibility <- sum(k_probs * k_accessibility)
+```
+
+- Mean secondary block capacity (library): `r round(mean_sec_cap, 0)`
+- Posterior-weighted library accessibility: `r sprintf("%.1f%%", 100 * weighted_accessibility)`
+
+### Sampled LCC Capacity by k
+
+*Observed relationship between secondary count and LCC capacity in sampled states.*
+
+```{r}
+#| label: sampled-lcc-by-k
+# Combine trajectory data from all chains
+all_k <- all_n_sec
+
+# Summary by k
+lcc_by_k <- data.table(k = all_k, lcc_cap = all_lcc_cap)
+lcc_by_k_summary <- lcc_by_k[,
+  .(
+    n_samples = .N,
+    mean_lcc = round(mean(lcc_cap), 0),
+    min_lcc = min(lcc_cap),
+    max_lcc = max(lcc_cap)
+  ),
+  by = k
+][order(k)]
+
+kable(
+  lcc_by_k_summary,
+  col.names = c("k", "N Samples", "Mean LCC Cap", "Min LCC Cap", "Max LCC Cap")
+)
+```
+
+- Correlation(k, LCC capacity): `r round(cor(all_k, all_lcc_cap), 3)`
+
+### Secondary Capacity per Block
+
+*The chain selects secondary blocks to satisfy the min_lcc_fraction constraint.*
+
+```{r}
+#| label: secondary-cap-per-block
+# Mean secondary capacity per block (for k > 0)
+samples_with_sec <- data.table(k = all_k, sec_cap = all_sec_cap)[k > 0]
+samples_with_sec[, cap_per_block := sec_cap / k]
+
+overall_mean_per_block <- round(mean(samples_with_sec$cap_per_block), 0)
+
+# Summary by k
+sec_per_block_summary <- samples_with_sec[,
+  .(
+    n_samples = .N,
+    mean_total_sec = round(mean(sec_cap), 0),
+    mean_per_block = round(mean(cap_per_block), 0)
+  ),
+  by = k
+][order(k)]
+
+kable(
+  sec_per_block_summary,
+  col.names = c("k", "N Samples", "Mean Total Sec Cap", "Mean Cap/Block")
+)
+```
+
+- Library mean secondary capacity: `r round(mean_sec_cap, 0)`
+- Sampled mean secondary capacity per block: `r overall_mean_per_block`
+
+### Total Capacity Relative to Minimum
+
+*Shows how far sampled plans sit above the statutory minimum capacity.*
+
+```{r}
+#| label: excess-capacity-summary
+capacity_slack_dt <- data.table(
+  Metric = c(
+    "Minimum required capacity",
+    "Mean total capacity",
+    "Median total capacity",
+    "Mean excess capacity",
+    "Median excess capacity",
+    "90th percentile excess",
+    "Max excess capacity",
+    "States within +100 units",
+    "States within +250 units",
+    "States >= 1.25× minimum",
+    "States >= 1.5× minimum"
+  ),
+  Value = c(
+    round(min_cap, 0),
+    round(mean(all_total_cap), 0),
+    round(median(all_total_cap), 0),
+    round(mean(all_excess_cap), 0),
+    round(median(all_excess_cap), 0),
+    round(as.numeric(quantile(all_excess_cap, 0.9, na.rm = TRUE)), 0),
+    round(max(all_excess_cap), 0),
+    sprintf("%.1f%%", 100 * mean(all_excess_cap <= 100)),
+    sprintf("%.1f%%", 100 * mean(all_excess_cap <= 250)),
+    sprintf("%.1f%%", 100 * mean(all_total_cap >= 1.25 * min_cap)),
+    sprintf("%.1f%%", 100 * mean(all_total_cap >= 1.5 * min_cap))
+  )
+)
+kable(capacity_slack_dt)
+```
+
+### Excess Capacity by Secondary Count (k)
+
+*Links secondary count to how far sampled plans sit above the minimum requirement.*
+
+```{r}
+#| label: excess-capacity-by-k
+capacity_by_k <- data.table(
+  k = all_k,
+  total_cap = all_total_cap,
+  excess_cap = all_excess_cap
+)[,
+  .(
+    n_samples = .N,
+    mean_total = round(mean(total_cap), 0),
+    mean_excess = round(mean(excess_cap), 0),
+    median_excess = round(median(excess_cap), 0),
+    `Pct <= +100` = sprintf("%.1f%%", 100 * mean(excess_cap <= 100))
+  ),
+  by = k
+][order(k)]
+
+kable(
+  capacity_by_k,
+  col.names = c("k", "N Samples", "Mean Total Cap", "Mean Excess", "Median Excess", "Pct <= +100")
+)
+```
+
+### Purge / Standalone-LCC Diagnostic
+
+*Assesses whether low-secondary states are absent because the LCC rarely meets the minimum requirement on its own.*
+
+```{r}
+#| label: purge-or-standalone
+if (nrow(purge_results) > 0) {
+  purge_summary <- purge_results[, .(
+    n = .N,
+    pct = sprintf("%.1f%%", 100 * .N / nrow(purge_results))
+  ), by = .(feasible, constraint_failed)][order(-n)]
+
+  cat("**Full purge diagnostic available:**\n\n")
+  kable(
+    purge_summary,
+    col.names = c("Feasible After Dropping Secondaries", "Constraint Failed", "Count", "Pct")
+  )
+} else {
+  standalone_proxy <- data.table(
+    lcc_meets_min = all_lcc_cap >= min_cap,
+    k = all_k,
+    total_cap = all_total_cap,
+    excess_cap = all_excess_cap
+  )[, .(
+    n_steps = .N,
+    mean_k = round(mean(k), 2),
+    mean_total = round(mean(total_cap), 0),
+    mean_excess = round(mean(excess_cap), 0)
+  ), by = lcc_meets_min]
+
+  standalone_proxy[, pct := sprintf("%.2f%%", 100 * n_steps / sum(n_steps))]
+  standalone_proxy[, lcc_meets_min := ifelse(lcc_meets_min, "Yes", "No")]
+  setorder(standalone_proxy, -lcc_meets_min)
+
+  cat("Full purge diagnostic results are not present in these chain outputs.\n\n")
+  cat("Capacity-only proxy below: `LCC >= min_capacity` means the main component alone clears the legal capacity threshold.\n\n")
+  kable(
+    standalone_proxy[, .(
+      lcc_meets_min,
+      n_steps,
+      pct,
+      mean_k,
+      mean_total,
+      mean_excess
+    )],
+    col.names = c("LCC >= min_capacity", "N Steps", "Pct", "Mean k", "Mean Total Cap", "Mean Excess")
+  )
+}
+```
+
+## Mixing Diagnostics (Multi-Chain)
+
+### Effective Sample Size (ESS)
+
+*ESS via coda::effectiveSize() across all chains.*
+
+```{r}
+ess_df <- data.table(
+  Metric = c(
+    "Capacity",
+    "N Components",
+    "N Secondaries",
+    "LCC Capacity",
+    "Centroid X",
+    "Centroid Y"
+  ),
+  ESS = c(
+    round(parcel_metrics$ess_capacity, 1),
+    round(parcel_metrics$ess_n_components, 1),
+    round(parcel_metrics$ess_n_secondaries, 1),
+    round(parcel_metrics$ess_lcc_capacity, 1),
+    round(parcel_metrics$ess_centroid_x, 1),
+    round(parcel_metrics$ess_centroid_y, 1)
+  )
+)
+kable(ess_df)
+```
+
+### Autocorrelation (Capacity)
+
+- Lag 1: `r round(parcel_metrics$acf_cap_lag1, 3)`
+- Lag 10: `r round(parcel_metrics$acf_cap_lag10, 3)`
+- Lag 50: `r round(parcel_metrics$acf_cap_lag50, 3)`
+
+### Secondary Dynamics
+
+- Secondary births: `r parcel_metrics$secondary_births`
+- Secondary deaths: `r parcel_metrics$secondary_deaths`
+
+### Secondary Count Distribution
+
+```{r}
+#| label: n-secondaries-all
+# Per-chain summary
+k_summary <- lapply(names(parcel_chain_results), function(cid) {
+  ch <- parcel_chain_results[[cid]]
+  n_sec <- ch$diagnostics$n_secondaries_trajectory
+  data.table(
+    Chain = cid,
+    Mean = round(mean(n_sec), 2),
+    SD = round(sd(n_sec), 2),
+    Min = min(n_sec),
+    Max = max(n_sec),
+    `k=0 %` = sprintf("%.1f%%", 100 * mean(n_sec == 0))
+  )
+})
+k_summary_dt <- rbindlist(k_summary)
+```
+
+**Per-Chain Summary:**
+
+```{r}
+kable(k_summary_dt)
+```
+
+**Overall Distribution (All Chains):**
+
+- Mean k: `r round(mean(all_n_sec), 2)`
+- SD k: `r round(sd(all_n_sec), 2)`
+- Range: `r min(all_n_sec)` - `r max(all_n_sec)`
+- Time at k=0: `r sprintf("%.2f%%", 100 * mean(all_n_sec == 0))`
+
+```{r}
+#| label: k-distribution
+k_table <- as.data.table(table(all_n_sec))
+setnames(k_table, c("k", "Count"))
+k_table[, Pct := sprintf("%.1f%%", 100 * Count / sum(Count))]
+kable(k_table)
+```
+
+### LCC Capacity Distribution
+
+- Mean: `r round(mean(all_lcc_cap), 0)`
+- SD: `r round(sd(all_lcc_cap), 0)`
+- Range: `r min(all_lcc_cap)` - `r max(all_lcc_cap)`
+
+
+## Move Acceptance (Aggregated)
+
+```{r}
+stats <- copy(parcel_metrics$stats)
+stats <- stats[n_attempted > 0]
+stats[,
+  feasibility := ifelse(
+    n_attempted > 0,
+    round(100 * n_feasible / n_attempted, 1),
+    NA_real_
+  )
+]
+stats[,
+  mh_accept := ifelse(
+    n_feasible > 0,
+    round(100 * n_accepted / n_feasible, 1),
+    NA_real_
+  )
+]
+stats[, overall := round(100 * n_accepted / n_attempted, 1)]
+
+kable(
+  stats[, .(move_type, n_attempted, feasibility, mh_accept, overall)],
+  col.names = c("Type", "Attempted", "Feasible%", "MH Accept%", "Overall%")
+)
+```
+
+### Birth/Death Kernel Statistics
+
+```{r}
+#| label: birth-death-stats
+# Get stats based on which kernel mode was used
+if (use_lifted) {
+  bd_stats <- parcel_metrics$stats[move_type == "lifted_birth_death"]
+  kernel_name <- "Lifted Birth/Death"
+
+  # Aggregate lifted-specific counts from chains (may be NULL if old diagnostics format)
+  bd_births <- sum(sapply(valid_chains, function(ch) {
+    bd <- ch$diagnostics$lifted_bd_births
+    if (is.null(bd)) 0L else bd
+  }))
+  bd_deaths <- sum(sapply(valid_chains, function(ch) {
+    bd <- ch$diagnostics$lifted_bd_deaths
+    if (is.null(bd)) 0L else bd
+  }))
+
+  # Fallback: use overall secondary births/deaths from metrics if diagnostics missing
+  if (bd_births == 0 && bd_deaths == 0) {
+    bd_births <- parcel_metrics$secondary_births
+    bd_deaths <- parcel_metrics$secondary_deaths
+  }
+} else {
+  bd_stats <- parcel_metrics$stats[move_type == "symmetric_birth_death"]
+  kernel_name <- "Symmetric Birth/Death"
+
+  # Aggregate symmetric-specific counts from chains
+  bd_births <- sum(sapply(valid_chains, function(ch) {
+    bd <- ch$diagnostics$symmetric_bd_births
+    if (is.null(bd)) 0L else bd
+  }))
+  bd_deaths <- sum(sapply(valid_chains, function(ch) {
+    bd <- ch$diagnostics$symmetric_bd_deaths
+    if (is.null(bd)) 0L else bd
+  }))
+
+  # Fallback: use overall secondary births/deaths from metrics if diagnostics missing
+  if (bd_births == 0 && bd_deaths == 0) {
+    bd_births <- parcel_metrics$secondary_births
+    bd_deaths <- parcel_metrics$secondary_deaths
+  }
+}
+
+# Attempt-level birth/death diagnostics (preferred when available)
+bd_attempts <- if (nrow(birth_death_attempts) > 0) {
+  birth_death_attempts[kernel == bd_stats$move_type]
+} else {
+  data.table()
+}
+
+# Universe sizes fallback for older runs
+bd_universe <- if (nrow(bd_attempts) > 0 && "n_universe" %in% names(bd_attempts)) {
+  bd_attempts[is.finite(n_universe), n_universe]
+} else if (!use_lifted) {
+  unlist(lapply(valid_chains, function(ch) {
+    value <- ch$diagnostics$symmetric_bd_universe_sizes
+    if (is.null(value)) numeric(0) else value
+  }), use.names = FALSE)
+} else {
+  numeric(0)
+}
+```
+
+**Kernel Mode: `r kernel_name`**
+
+`r if (use_lifted) "*Lifted MCMC maintains a momentum variable (birth/death direction). On acceptance, the direction persists; on rejection, it flips. This creates correlated sequences that can traverse k (secondary count) faster than reversible proposals.*"`
+
+`r if (!use_lifted) "*The symmetric_birth_death kernel proposes either adding or removing a secondary block with equal probability, then applies MH correction.*"`
+
+- Total attempted: `r scales::comma(bd_stats$n_attempted)`
+- Feasible: `r scales::comma(bd_stats$n_feasible)` (`r round(100 * bd_stats$n_feasible / max(1, bd_stats$n_attempted), 1)`%)
+- Accepted: `r scales::comma(bd_stats$n_accepted)` (`r round(100 * bd_stats$n_accepted / max(1, bd_stats$n_feasible), 1)`% of feasible)
+
+**Direction breakdown (accepted moves):**
+
+- Births: `r scales::comma(bd_births)`
+- Deaths: `r scales::comma(bd_deaths)`
+- Birth/Death ratio: `r round(bd_births / max(1, bd_deaths), 2)`
+
+**Universe sizes (|U| = |addable| + |removable|):**
+
+```{r}
+#| label: birth-death-universe
+if (length(bd_universe) > 0) {
+  cat(sprintf("- Mean |U|: %.1f\n", mean(bd_universe)))
+  cat(sprintf("- Range: %d - %d\n", min(bd_universe), max(bd_universe)))
+} else {
+  cat("Universe sizes were not stored in these chain outputs.")
+}
+```
+
+### Birth/Death Candidate Pools by k
+
+*Forward proposal pool sizes for the active birth/death kernel. These are the diagnostics that matter for add/remove imbalance; `|U|` alone can hide a large `n_add / n_rem` skew.*
+
+```{r}
+#| label: birth-death-pools-by-k
+if (nrow(bd_attempts) > 0) {
+  pool_by_k <- bd_attempts[,
+    .(
+      n_attempts = .N,
+      mean_add = round(mean(n_add, na.rm = TRUE), 1),
+      mean_rem = round(mean(n_rem, na.rm = TRUE), 1),
+      mean_add_rem_ratio = round(mean(n_add / pmax(n_rem, 1), na.rm = TRUE), 2),
+      `Pct no addable` = sprintf("%.1f%%", 100 * mean(n_add == 0, na.rm = TRUE)),
+      `Pct no removable` = sprintf("%.1f%%", 100 * mean(n_rem == 0, na.rm = TRUE)),
+      `Accept %` = sprintf("%.1f%%", 100 * mean(accepted, na.rm = TRUE))
+    ),
+    by = k_before
+  ][order(k_before)]
+
+  kable(
+    pool_by_k,
+    col.names = c("k", "Attempts", "Mean n_add", "Mean n_rem", "Mean n_add/n_rem", "Pct No Addable", "Pct No Removable", "Accept %")
+  )
+} else {
+  cat("Per-attempt birth/death pool diagnostics are not available in these chain outputs.")
+}
+```
+
+## Kernel Profiling
+
+*Per-kernel timing breakdown for MCMC execution.*
+
+```{r}
+#| label: kernel-timing
+timing_dt <- parcel_metrics$timing_summary
+
+if (!is.null(timing_dt) && nrow(timing_dt) > 0) {
+  per_chain <- timing_dt[chain_id != "TOTAL"]
+  totals <- timing_dt[chain_id == "TOTAL"]
+
+  cat("**Per-Chain Timing (seconds):**\n\n")
+  print(kable(per_chain[, .(
+    Chain = chain_id,
+    `LCC Local` = round(lcc_local, 2),
+    `Birth/Death` = round(birth_death, 2),
+    Swap = round(swap, 2),
+    `Replace LCC` = round(replace_lcc, 2),
+    Overhead = round(overhead, 2),
+    Total = round(total, 2)
+  )]))
+
+  if (nrow(totals) > 0) {
+    total_time <- totals$total
+    cat("\n**Aggregate Time Distribution:**\n\n")
+    cat(sprintf("- LCC Local: %.1f%% (%.1fs)\n",
+                100 * totals$lcc_local / total_time, totals$lcc_local))
+    cat(sprintf("- Birth/Death: %.1f%% (%.1fs)\n",
+                100 * totals$birth_death / total_time, totals$birth_death))
+    cat(sprintf("- Swap: %.1f%% (%.1fs)\n",
+                100 * totals$swap / total_time, totals$swap))
+    cat(sprintf("- Replace LCC: %.1f%% (%.1fs)\n",
+                100 * totals$replace_lcc / total_time, totals$replace_lcc))
+    cat(sprintf("- Overhead: %.1f%% (%.1fs)\n",
+                100 * totals$overhead / total_time, totals$overhead))
+    cat(sprintf("- **Total: %.1fs** across %d chains\n",
+                total_time, nrow(per_chain)))
+  }
+} else {
+  cat("No timing data available.\n")
+}
+```
+
+## Convergence (Multi-Chain)
+
+### R-hat
+
+```{r}
+kable(parcel_rhat_table, digits = 3)
+```
+
+### Chain Separation (Jaccard Overlap)
+
+- Min pairwise overlap: `r round(parcel_separation$min_overlap, 3)`
+- Separated: `r parcel_separation$separated`
+- Evidence: `r parcel_separation$separation_evidence`
+
+**Overlap Matrix:**
+
+```{r}
+if (!is.null(parcel_separation$overlap_matrix)){
+  kable(round(parcel_separation$overlap_matrix, 3))
+}
+```
+
+### Chain-Specific Statistics
+
+**LCC Capacity by Chain:**
+
+```{r}
+lcc_rows <- lapply(names(parcel_chain_results), function(cid) {
+  chain <- parcel_chain_results[[cid]]
+  lcc_cap <- chain$diagnostics$lcc_capacity_trajectory
+  data.table(
+    Chain = cid,
+    Region = chain$region_id,
+    Mean = round(mean(lcc_cap), 0),
+    SD = round(sd(lcc_cap), 0),
+    Min = min(lcc_cap),
+    Max = max(lcc_cap)
+  )
+})
+lcc_dt <- rbindlist(lcc_rows)
+kable(lcc_dt)
+```
+
+**N Components by Chain:**
+
+```{r}
+ncomp_rows <- lapply(names(parcel_chain_results), function(cid) {
+  chain <- parcel_chain_results[[cid]]
+  n_comp <- chain$diagnostics$n_components_trajectory
+  data.table(
+    Chain = cid,
+    Mean = round(mean(n_comp), 2),
+    SD = round(sd(n_comp), 2),
+    Min = min(n_comp),
+    Max = max(n_comp)
+  )
+})
+ncomp_dt <- rbindlist(ncomp_rows)
+kable(ncomp_dt)
+```
+
+**Capacity by Chain:**
+
+```{r}
+cap_rows <- lapply(names(parcel_chain_results), function(cid) {
+  chain <- parcel_chain_results[[cid]]
+  cap <- chain$diagnostics$capacity_trajectory
+  data.table(
+    Chain = cid,
+    Mean = round(mean(cap), 0),
+    SD = round(sd(cap), 0),
+    Min = min(cap),
+    Max = max(cap)
+  )
+})
+cap_dt <- rbindlist(cap_rows)
+kable(cap_dt)
+```
+
+**LCC Transition Rates by Chain:**
+
+
+```{r}
+#| label: lcc-transitions
+lcc_trans_rows <- lapply(names(parcel_chain_results), function(cid) {
+  chain <- parcel_chain_results[[cid]]
+
+  # Skip chains that failed initialization
+  if (isTRUE(chain$initialization_failed)) {
+    return(data.table(
+      Chain = cid,
+      Region = chain$region_id,
+      Transitions = NA_integer_,
+      Rate = "N/A (init failed)"
+    ))
+  }
+
+  lcc_cap <- chain$diagnostics$lcc_capacity_trajectory
+  n_steps <- length(lcc_cap)
+
+  if (n_steps == 0) {
+    return(data.table(
+      Chain = cid,
+      Region = chain$region_id,
+      Transitions = 0L,
+      Rate = "0.0%"
+    ))
+  }
+
+  # Count significant transitions (>50 capacity change)
+  transitions <- sum(abs(diff(lcc_cap)) > 50)
+
+  data.table(
+    Chain = cid,
+    Region = chain$region_id,
+    Transitions = transitions,
+    Rate = sprintf("%.1f%%", 100 * transitions / n_steps)
+  )
+})
+lcc_trans_dt <- rbindlist(lcc_trans_rows)
+kable(lcc_trans_dt)
+```
+
+### Geographic Coverage by Region
+
+
+```{r}
+#| label: region-coverage
+region_summary <- parcel_geographic_coverage[,
+  .(
+    n_parcels = first(n_parcels),
+    total_capacity = first(total_capacity),
+    mean_visited_pct = round(mean(pct_visited), 1),
+    mean_capacity_pct = round(mean(capacity_pct), 1),
+    min_visited_pct = round(min(pct_visited), 1),
+    max_visited_pct = round(max(pct_visited), 1)
+  ),
+  by = region_id
+]
+
+kable(
+  region_summary,
+  col.names = c(
+    "Region",
+    "Parcels",
+    "Capacity",
+    "Mean Visit%",
+    "Mean Cap%",
+    "Min Visit%",
+    "Max Visit%"
+  )
+)
+```
+
+## State Space Exploration
+
+### Unique LCCs Visited
+
+```{r}
+#| label: unique-lccs
+# Count unique LCCs across all chains
+unique_lccs_per_chain <- sapply(valid_chains, function(chain) {
+  lcc_cap <- chain$diagnostics$lcc_capacity_trajectory
+  # Use run-length encoding to count transitions
+  rle_result <- rle(lcc_cap)
+  length(rle_result$values) # Number of distinct runs (LCC changes)
+})
+
+# LCC transition rate (how often LCC changes)
+lcc_transitions_per_chain <- sapply(valid_chains, function(chain) {
+  lcc_cap <- chain$diagnostics$lcc_capacity_trajectory
+  sum(diff(lcc_cap) != 0)
+})
+```
+
+- Mean unique LCC capacity values per chain: `r round(mean(unique_lccs_per_chain), 1)`
+- Mean LCC transitions per chain: `r round(mean(lcc_transitions_per_chain), 0)`
+- LCC transition rate: `r round(100 * mean(lcc_transitions_per_chain) / parcel_metrics$n_steps_per_chain[1], 2)`%
+
+### Parcel-Unit Stickiness
+
+```{r}
+#| label: stickiness
+stickiness_dt <- compute_multichain_stickiness(parcel_chain_results)
+sticky_summary <- get_sticky_parcels(stickiness_dt)
+```
+
+| Category | Count | % of Total |
+|----------|-------|------------|
+| Always in (>95%) | `r sticky_summary$n_always_in` | `r round(100 * sticky_summary$n_always_in / nrow(stickiness_dt), 1)`% |
+| Rarely in (<5%) | `r sticky_summary$n_rarely_in` | `r round(100 * sticky_summary$n_rarely_in / nrow(stickiness_dt), 1)`% |
+| Variable | `r sticky_summary$n_variable` | `r round(100 * sticky_summary$n_variable / nrow(stickiness_dt), 1)`% |
+
+```{r}
+#| label: stickiness-dist
+# Histogram of inclusion fractions
+inclusion_breaks <- c(0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0)
+stickiness_dt[,
+  inclusion_bin := cut(
+    inclusion_fraction,
+    breaks = inclusion_breaks,
+    include.lowest = TRUE
+  )
+]
+inclusion_hist <- stickiness_dt[, .N, by = inclusion_bin]
+kable(inclusion_hist, col.names = c("Inclusion Range", "Count"))
+```
+
+### Parcel Feasibility Analysis
+
+
+**Classification Summary:**
+
+```{r}
+#| label: feasibility-class
+kable(
+  parcel_feasibility_summary$class_summary,
+  col.names = c("Classification", "Count", "% of Total")
+)
+```
+
+- **lcc_and_secondary**: Parcels in both LCC and secondary library blocks (most flexible)
+- **lcc_only**: Parcels only in LCC blocks (can only be part of main component)
+- **secondary_only**: Parcels only in secondary blocks (can only be detached secondaries)
+- **unreachable**: Parcels not in any library block (cannot be part of any sampled configuration)
+
+**Unreachable Parcel Breakdown:**
+
+```{r}
+#| label: unreachable-reasons
+if (nrow(parcel_feasibility_summary$unreachable_reasons) > 0) {
+  kable(
+    parcel_feasibility_summary$unreachable_reasons,
+    col.names = c("Reason", "Count", "% of Unreachable")
+  )
+} else {
+  cat("No unreachable parcels.")
+}
+```
+
+- **low_density**: Parcel density below threshold (`r constraints$min_density` units/acre)
+- **small_area**: Area below 5-acre secondary threshold and not part of any LCC
+- **not_in_discovered_blocks**: Parcel geometrically excluded from all discovered blocks
+
+**Capacity by Classification:**
+
+```{r}
+#| label: capacity-by-class
+kable(
+  parcel_feasibility_summary$capacity_by_class,
+  col.names = c("Classification", "Total Capacity", "% of Capacity")
+)
+```
+
+**Feasibility vs Stickiness:**
+
+
+```{r}
+#| label: feasibility-stickiness
+# Cross-reference feasibility with stickiness
+stickiness_with_feasibility <- merge(
+  stickiness_dt,
+  parcel_feasibility[, .(parcel_id, classification)],
+  by = "parcel_id",
+  all.x = TRUE
+)
+
+# Summary: what fraction of "rarely visited" are unreachable?
+rarely_visited <- stickiness_with_feasibility[inclusion_fraction < 0.05]
+rarely_unreachable <- rarely_visited[classification == "unreachable"]
+
+cat(sprintf(
+  "Rarely visited (<5%%) parcels: %s\n",
+  scales::comma(nrow(rarely_visited))
+))
+cat(sprintf(
+  "  - Unreachable: %s (%.1f%%)\n",
+  scales::comma(nrow(rarely_unreachable)),
+  100 * nrow(rarely_unreachable) / max(1, nrow(rarely_visited))
+))
+cat(sprintf(
+  "  - Feasible but rarely visited: %s (%.1f%%)\n",
+  scales::comma(nrow(rarely_visited) - nrow(rarely_unreachable)),
+  100 *
+    (nrow(rarely_visited) - nrow(rarely_unreachable)) /
+    max(1, nrow(rarely_visited))
+))
+```
+
+**Stickiness by Feasibility Class:**
+
+```{r}
+#| label: stickiness-by-class
+# Detailed breakdown by classification
+class_stickiness <- stickiness_with_feasibility[,
+  .(
+    n_parcels = .N,
+    n_never = sum(inclusion_fraction == 0),
+    pct_never = round(100 * sum(inclusion_fraction == 0) / .N, 1),
+    mean_inclusion = round(100 * mean(inclusion_fraction), 2),
+    max_inclusion = round(100 * max(inclusion_fraction), 1)
+  ),
+  by = classification
+][order(-mean_inclusion)]
+
+kable(
+  class_stickiness,
+  col.names = c(
+    "Classification",
+    "Parcels",
+    "Never Visited",
+    "% Never",
+    "Mean Incl%",
+    "Max Incl%"
+  )
+)
+```
+
+- Feasible but rarely visited: `r sprintf("%.1f%%", 100 * (nrow(rarely_visited) - nrow(rarely_unreachable)) / max(1, nrow(stickiness_with_feasibility)))` of all parcels
+
+### Unique States Visited
+
+```{r}
+#| label: unique-states
+n_unique_states <- sum(sapply(valid_chains, function(chain) {
+  count_unique_parcel_states(chain$parcel_samples)
+}))
+total_samples <- sum(sapply(valid_chains, function(chain) {
+  length(chain$parcel_samples)
+}))
+```
+
+- Unique parcel states (across all chains): `r scales::comma(n_unique_states)`
+- Total thinned samples: `r scales::comma(total_samples)`
+- Uniqueness ratio: `r round(100 * n_unique_states / total_samples, 1)`%
+
+## Kernel-Specific Diagnostics
+
+### Replace-LCC Rejection Breakdown
+
+```{r}
+#| label: replace-lcc-reasons
+# Aggregate replace-LCC rejection reasons across chains
+all_replace_reasons <- diag_dt_fallback(valid_chains, "replace_lcc_reasons")
+
+if (length(all_replace_reasons) > 0) {
+  combined_reasons <- rbindlist(all_replace_reasons)
+  reason_summary <- combined_reasons[, .(count = sum(count)), by = reason]
+  setorder(reason_summary, -count)
+  total_attempted <- reason_summary[reason == "attempted", count]
+  reason_summary[, pct := round(100 * count / total_attempted, 1)]
+  kable(reason_summary, col.names = c("Reason", "Count", "% of Attempted"))
+} else {
+  cat(
+    "No replace-LCC rejection data available (replace_lcc kernel may have 0% probability).\n"
+  )
+}
+```
+
+```{r}
+#| label: replace-lcc-constraints
+# Aggregate replace-LCC constraint failures
+all_replace_constraints <- diag_dt_fallback(valid_chains, "replace_lcc_constraints")
+
+if (length(all_replace_constraints) > 0) {
+  combined_constraints <- rbindlist(all_replace_constraints)
+  constraint_summary <- combined_constraints[,
+    .(count = sum(count)),
+    by = constraint
+  ]
+  constraint_summary <- constraint_summary[count > 0]
+  if (nrow(constraint_summary) > 0) {
+    setorder(constraint_summary, -count)
+    total <- sum(constraint_summary$count)
+    constraint_summary[, pct := round(100 * count / total, 1)]
+    kable(
+      constraint_summary,
+      col.names = c("Constraint", "Failures", "% of Failures")
+    )
+  } else {
+    cat(
+      "No replace-LCC constraint failures recorded.\n"
+    )
+  }
+} else {
+  cat(
+    "No replace-LCC constraint tracking data (replace_lcc kernel may have 0% probability).\n"
+  )
+}
+```
+
+**Replace-LCC MH Acceptance Analysis:**
+
+```{r}
+#| label: replace-lcc-mh
+# MH acceptance probability distribution
+all_accept_probs <- diag_vec(valid_chains, "replace_lcc_accept_prob")
+all_log_q_ratios <- diag_vec(valid_chains, "replace_lcc_log_q_ratio")
+all_k_retained <- diag_vec(valid_chains, "replace_lcc_k_retained")
+all_candidate_lccs <- diag_vec(valid_chains, "replace_lcc_n_similar_forward")
+
+if (length(all_accept_probs) > 0) {
+  cat(sprintf(
+    "- MH proposals evaluated: %s\n",
+    scales::comma(length(all_accept_probs))
+  ))
+  cat(sprintf("- Mean accept prob: %.3f\n", mean(all_accept_probs)))
+  cat(sprintf("- Median accept prob: %.3f\n", median(all_accept_probs)))
+  cat(sprintf(
+    "- Accept prob < 0.1: %d (%.1f%%)\n",
+    sum(all_accept_probs < 0.1),
+    100 * mean(all_accept_probs < 0.1)
+  ))
+  cat(sprintf(
+    "- Accept prob > 0.9: %d (%.1f%%)\n",
+    sum(all_accept_probs > 0.9),
+    100 * mean(all_accept_probs > 0.9)
+  ))
+}
+
+if (length(all_log_q_ratios) > 0) {
+  cat(sprintf("\n**Log proposal ratio (log q(x'→x) / q(x→x')):**\n\n"))
+  cat(sprintf("- Mean: %.2f\n", mean(all_log_q_ratios)))
+  cat(sprintf("- SD: %.2f\n", sd(all_log_q_ratios)))
+  cat(sprintf(
+    "- Range: %.2f to %.2f\n",
+    min(all_log_q_ratios),
+    max(all_log_q_ratios)
+  ))
+}
+
+shape_metric_dt <- rbindlist(Filter(Negate(is.null), list(
+  if (length(all_k_retained) > 0) {
+    data.table(
+      Metric = "Retained k (secondaries)",
+      Mean = round(mean(all_k_retained), 2),
+      Median = round(median(all_k_retained), 2),
+      P90 = round(as.numeric(stats::quantile(all_k_retained, 0.9)), 2),
+      Max = round(max(all_k_retained), 2)
+    )
+  },
+  if (length(all_candidate_lccs) > 0) {
+    data.table(
+      Metric = "Forward candidate LCC count",
+      Mean = round(mean(all_candidate_lccs), 2),
+      Median = round(median(all_candidate_lccs), 2),
+      P90 = round(as.numeric(stats::quantile(all_candidate_lccs, 0.9)), 2),
+      Max = round(max(all_candidate_lccs), 2)
+    )
+  }
+)), fill = TRUE)
+
+if (nrow(shape_metric_dt) > 0) {
+  cat("\n**Replace-LCC proposal diagnostics:**\n\n")
+  kable(shape_metric_dt)
+}
+```
+
+**Replace-LCC Proposal Geometry:**
+
+```{r}
+#| label: replace-lcc-geometry
+all_similar_fwd <- diag_vec(valid_chains, "replace_lcc_n_similar_forward")
+all_similar_rev <- diag_vec(valid_chains, "replace_lcc_n_similar_reverse")
+
+if (length(all_similar_fwd) > 0 && length(all_similar_rev) > 0) {
+  cat(sprintf(
+    "- Forward candidate LCCs: mean=%.1f, sd=%.1f\n",
+    mean(all_similar_fwd),
+    sd(all_similar_fwd)
+  ))
+  cat(sprintf(
+    "- Reverse candidate LCCs: mean=%.1f, sd=%.1f\n",
+    mean(all_similar_rev),
+    sd(all_similar_rev)
+  ))
+  cat(sprintf(
+    "- Asymmetry ratio (fwd/rev): mean=%.2f\n",
+    mean(all_similar_fwd / pmax(all_similar_rev, 1))
+  ))
+}
+```
+
+
+### Birth/Death Direction Analysis
+
+```{r}
+#| label: bd-directions
+# Show birth vs death breakdown (uses bd_births/bd_deaths defined earlier)
+if (nrow(bd_stats) > 0 && bd_stats$n_accepted > 0) {
+  cat("**Direction of Accepted Moves:**\n\n")
+
+  direction_dt <- data.table(
+    Direction = c("Birth (add block)", "Death (remove block)"),
+    Count = c(bd_births, bd_deaths),
+    `% of Accepted` = c(
+      round(100 * bd_births / max(1, bd_births + bd_deaths), 1),
+      round(100 * bd_deaths / max(1, bd_births + bd_deaths), 1)
+    )
+  )
+  kable(direction_dt)
+
+  # Show ratio interpretation
+  ratio <- bd_births / max(1, bd_deaths)
+  if (ratio > 1.2) {
+    cat(sprintf(
+      "\n⚠️ Birth bias: %.2f births per death (sampler trending toward more secondaries)\n",
+      ratio
+    ))
+  } else if (ratio < 0.8) {
+    cat(sprintf(
+      "\n⚠️ Death bias: %.2f births per death (sampler trending toward fewer secondaries)\n",
+      ratio
+    ))
+  } else {
+    cat(sprintf("\n✓ Balanced: %.2f births per death\n", ratio))
+  }
+} else {
+  cat(sprintf("No %s moves accepted.\n", kernel_name))
+}
+```
+
+### Legacy Multi-Move Birth/Death (r-value)
+
+*Note: These diagnostics are for legacy multi-move birth/death kernels. Current architecture uses symmetric_birth_death which proposes single blocks.*
+
+```{r}
+#| label: multi-move
+# Aggregate multi-birth r-value counts (legacy - usually empty)
+all_birth_r <- lapply(valid_chains, function(chain) {
+  r_counts <- chain$diagnostics$multi_birth_r_counts
+  r_accepted <- chain$diagnostics$multi_birth_r_accepted
+  if (is.null(r_counts) || length(r_counts) == 0 || sum(r_counts) == 0) {
+    return(NULL)
+  }
+  # Handle both named and unnamed vectors
+  r_vals <- if (!is.null(names(r_counts))) {
+    as.integer(names(r_counts))
+  } else {
+    seq_along(r_counts)
+  }
+  data.table(
+    r = r_vals,
+    attempted = as.integer(r_counts),
+    accepted = as.integer(r_accepted)
+  )
+})
+all_birth_r <- Filter(Negate(is.null), all_birth_r)
+
+if (length(all_birth_r) > 0) {
+  birth_r_summary <- rbindlist(all_birth_r)[,
+    .(
+      attempted = sum(attempted, na.rm = TRUE),
+      accepted = sum(accepted, na.rm = TRUE)
+    ),
+    by = r
+  ]
+  birth_r_summary <- birth_r_summary[attempted > 0]
+  birth_r_summary[, accept_rate := round(100 * accepted / attempted, 1)]
+  setorder(birth_r_summary, r)
+  cat("**Multi-Birth (r blocks proposed):**\n\n")
+  kable(
+    birth_r_summary,
+    col.names = c("r", "Attempted", "Accepted", "Accept %")
+  )
+} else {
+  cat(
+    "Legacy multi-birth kernel not active (using symmetric_birth_death instead).\n"
+  )
+}
+```
+
+```{r}
+#| label: multi-death
+# Aggregate multi-death r-value counts (legacy - usually empty)
+all_death_r <- lapply(valid_chains, function(chain) {
+  r_counts <- chain$diagnostics$multi_death_r_counts
+  r_accepted <- chain$diagnostics$multi_death_r_accepted
+  if (is.null(r_counts) || length(r_counts) == 0 || sum(r_counts) == 0) {
+    return(NULL)
+  }
+  # Handle both named and unnamed vectors
+  r_vals <- if (!is.null(names(r_counts))) {
+    as.integer(names(r_counts))
+  } else {
+    seq_along(r_counts)
+  }
+  data.table(
+    r = r_vals,
+    attempted = as.integer(r_counts),
+    accepted = as.integer(r_accepted)
+  )
+})
+all_death_r <- Filter(Negate(is.null), all_death_r)
+
+if (length(all_death_r) > 0) {
+  death_r_summary <- rbindlist(all_death_r)[,
+    .(
+      attempted = sum(attempted, na.rm = TRUE),
+      accepted = sum(accepted, na.rm = TRUE)
+    ),
+    by = r
+  ]
+  death_r_summary <- death_r_summary[attempted > 0]
+  death_r_summary[, accept_rate := round(100 * accepted / attempted, 1)]
+  setorder(death_r_summary, r)
+  cat("**Multi-Death (r blocks proposed):**\n\n")
+  kable(
+    death_r_summary,
+    col.names = c("r", "Attempted", "Accepted", "Accept %")
+  )
+} else {
+  cat(
+    "Legacy multi-death kernel not active (using symmetric_birth_death instead).\n"
+  )
+}
+```
+
+### Swap Kernel Diagnostics
+
+```{r}
+#| label: swap-diagnostics
+# Aggregate swap capacity deltas
+all_swap_deltas <- unlist(lapply(valid_chains, function(chain) {
+  chain$diagnostics$swap_delta_caps
+}))
+
+if (length(all_swap_deltas) > 0) {
+  cat(sprintf("**Capacity Change for Accepted Swaps:**\n\n"))
+  cat(sprintf(
+    "- Total accepted swaps: %s\n",
+    scales::comma(length(all_swap_deltas))
+  ))
+  cat(sprintf("- Mean capacity delta: %s\n", round(mean(all_swap_deltas), 1)))
+  cat(sprintf("- SD capacity delta: %s\n", round(sd(all_swap_deltas), 1)))
+  cat(sprintf(
+    "- Range: %s to %s\n",
+    min(all_swap_deltas),
+    max(all_swap_deltas)
+  ))
+} else {
+  cat(
+    "No swap moves accepted (chains may have k=0 throughout, or swap kernel has 0% probability).\n"
+  )
+}
+```
+
+```{r}
+#| label: swap-similarity
+# Aggregate swap similarity counts (for proposal correction analysis)
+all_swap_fwd <- unlist(lapply(valid_chains, function(chain) {
+  chain$diagnostics$swap_n_similar_fwd
+}))
+all_swap_rev <- unlist(lapply(valid_chains, function(chain) {
+  chain$diagnostics$swap_n_similar_rev
+}))
+
+if (length(all_swap_fwd) > 0 && length(all_swap_rev) > 0) {
+  cat(sprintf("\n**Proposal Asymmetry (similar block counts):**\n\n"))
+  cat(sprintf(
+    "- Forward similar blocks: mean=%.1f, sd=%.1f\n",
+    mean(all_swap_fwd),
+    sd(all_swap_fwd)
+  ))
+  cat(sprintf(
+    "- Reverse similar blocks: mean=%.1f, sd=%.1f\n",
+    mean(all_swap_rev),
+    sd(all_swap_rev)
+  ))
+  cat(sprintf(
+    "- Ratio (fwd/rev): mean=%.2f\n",
+    mean(all_swap_fwd / pmax(all_swap_rev, 1))
+  ))
+}
+```
+
+```{r}
+#| label: swap-rejection-breakdown
+# Aggregate swap rejection reasons across chains
+all_swap_reasons <- lapply(valid_chains, function(chain) {
+  chain$diagnostics$swap_reasons
+})
+all_swap_reasons <- Filter(Negate(is.null), all_swap_reasons)
+
+if (length(all_swap_reasons) > 0) {
+  combined_reasons <- rbindlist(all_swap_reasons)
+  reason_summary <- combined_reasons[, .(count = sum(count)), by = reason]
+  setorder(reason_summary, -count)
+  total_attempted <- reason_summary[reason == "attempted", count]
+  if (total_attempted > 0) {
+    reason_summary[, pct := round(100 * count / total_attempted, 1)]
+    cat("**Swap Rejection Breakdown:**\n\n")
+    kable(
+      reason_summary[count > 0],
+      col.names = c("Reason", "Count", "% of Attempted")
+    )
+  }
+} else {
+  cat(
+    "No swap rejection breakdown available (requires pipeline re-run with updated runner).\n"
+  )
+}
+```
+
+```{r}
+#| label: swap-constraint-breakdown
+# Aggregate swap constraint failures
+all_swap_constraints <- lapply(valid_chains, function(chain) {
+  chain$diagnostics$swap_constraints
+})
+all_swap_constraints <- Filter(Negate(is.null), all_swap_constraints)
+
+if (length(all_swap_constraints) > 0) {
+  combined <- rbindlist(all_swap_constraints)
+  constraint_summary <- combined[, .(count = sum(count)), by = constraint]
+  constraint_summary <- constraint_summary[count > 0]
+  if (nrow(constraint_summary) > 0) {
+    setorder(constraint_summary, -count)
+    cat("\n**Swap Constraint Failures:**\n\n")
+    kable(constraint_summary, col.names = c("Constraint", "Failures"))
+  }
+}
+```
+
+## Capacity Prior Diagnostics
+
+The capacity prior penalizes capacity above min_capacity with a linear penalty:
+`penalty = λ × (capacity - min_capacity)` where λ = `r CAPACITY_PRIOR_LAMBDA`.
+
+```{r}
+#| label: capacity-prior
+# Penalty trajectory stats (penalty is > 0 whenever capacity exceeds min_capacity)
+stored_penalties <- unlist(lapply(valid_chains, function(chain) {
+  pt <- chain$diagnostics$penalty_trajectory
+  if (is.null(pt)) numeric(0) else pt
+}), use.names = FALSE)
+
+if (length(stored_penalties) > 0) {
+  all_penalties <- stored_penalties
+  penalty_source <- "runner diagnostics"
+} else {
+  all_penalties <- pmax(all_excess_cap, 0) * CAPACITY_PRIOR_LAMBDA
+  penalty_source <- "recomputed from capacity trajectory"
+}
+
+# Count steps with non-zero penalty (above min_capacity)
+steps_above_min <- sum(all_penalties > 0, na.rm = TRUE)
+total_steps <- length(all_penalties)
+```
+
+- Penalty source: `r penalty_source`
+- Steps above min_capacity: `r scales::comma(steps_above_min)` / `r scales::comma(total_steps)` (`r round(100 * steps_above_min / max(total_steps, 1), 1)`%)
+
+```{r}
+#| label: penalty-stats
+if (length(all_penalties) > 0 && any(all_penalties > 0, na.rm = TRUE)) {
+  nonzero_penalties <- all_penalties[all_penalties > 0]
+  cat(sprintf("**Penalty Statistics (when above min_capacity):**\n\n"))
+  cat(sprintf("- Mean penalty: %.4f\n", mean(nonzero_penalties)))
+  cat(sprintf("- Max penalty: %.4f\n", max(nonzero_penalties)))
+  cat(sprintf(
+    "- Mean excess capacity: %.0f\n",
+    mean(nonzero_penalties) / CAPACITY_PRIOR_LAMBDA
+  ))
+}
+```
+
+## Library Utilization
+
+### LCC Library
+
+```{r}
+#| label: lcc-library-util
+# Check online enrichment adds
+total_online_adds <- sum(
+  vapply(
+    valid_chains,
+    function(chain) {
+      oa <- chain$diagnostics$online_adds
+      if (is.null(oa)) 0L else as.integer(oa)
+    },
+    integer(1)
+  ),
+  na.rm = TRUE
+)
+
+final_library_sizes <- vapply(
+  valid_chains,
+  function(chain) {
+    fls <- chain$diagnostics$final_library_size
+    if (is.null(fls)) NA_integer_ else as.integer(fls)
+  },
+  integer(1)
+)
+```
+
+- Initial LCC library size: `r discovered_lcc_library$n_blocks`
+- Final library sizes: `r paste(final_library_sizes, collapse = ", ")`
+- Online enrichment adds: `r total_online_adds`
+
+### Secondary Library
+
+```{r}
+#| label: secondary-util
+# Birth/death kernel stats (uses bd_stats computed earlier)
+bd_acceptance <- if (nrow(bd_stats) > 0 && bd_stats$n_attempted > 0) {
+  bd_stats$n_accepted / bd_stats$n_attempted * 100
+} else {
+  NA
+}
+bd_feasibility <- if (nrow(bd_stats) > 0 && bd_stats$n_attempted > 0) {
+  bd_stats$n_feasible / bd_stats$n_attempted * 100
+} else {
+  NA
+}
+```
+
+- Secondary library size: `r discovered_secondary_library$n_blocks`
+- `r kernel_name` acceptance: `r if (!is.na(bd_acceptance)) sprintf("%.1f%%", bd_acceptance) else "N/A"`
+- `r kernel_name` feasibility: `r if (!is.na(bd_feasibility)) sprintf("%.1f%%", bd_feasibility) else "N/A"`
+
+## Library Coverage Statistics
+
+*How well does the LCC library cover the parcel space?*
+
+```{r}
+#| label: library-coverage-stats
+n_parcels <- length(discovered_lcc_library$parcel_names)
+n_lccs <- discovered_lcc_library$n_blocks
+
+# Count how many LCCs contain each parcel
+parcel_coverage <- integer(n_parcels)
+for (i in seq_len(n_lccs)) {
+  parcel_coverage[discovered_lcc_library$blocks[[i]]] <-
+    parcel_coverage[discovered_lcc_library$blocks[[i]]] + 1L
+}
+
+# Coverage statistics
+n_covered <- sum(parcel_coverage > 0)
+n_uncovered <- sum(parcel_coverage == 0)
+pct_covered <- round(100 * n_covered / n_parcels, 1)
+
+coverage_stats <- data.table(
+  Metric = c(
+    "Total LCCs in library",
+    "Total parcels",
+    "Parcels covered (≥1 LCC)",
+    "Parcels uncovered (0 LCCs)",
+    "Coverage rate",
+    "Min coverage (excl. zero)",
+    "Median coverage",
+    "Mean coverage",
+    "Max coverage",
+    "Std dev coverage"
+  ),
+  Value = c(
+    n_lccs,
+    n_parcels,
+    n_covered,
+    n_uncovered,
+    sprintf("%.1f%%", pct_covered),
+    if (n_covered > 0) min(parcel_coverage[parcel_coverage > 0]) else 0,
+    median(parcel_coverage),
+    round(mean(parcel_coverage), 1),
+    max(parcel_coverage),
+    round(sd(parcel_coverage), 1)
+  )
+)
+
+kable(coverage_stats)
+```
+
+### Coverage Distribution
+
+```{r}
+#| label: coverage-distribution
+# Show coverage distribution
+coverage_bins <- cut(
+  parcel_coverage,
+  breaks = c(-1, 0, 1, 5, 10, 50, 100, Inf),
+  labels = c("0", "1", "2-5", "6-10", "11-50", "51-100", ">100")
+)
+coverage_dist <- data.table(Coverage = coverage_bins)[, .N, by = Coverage]
+coverage_dist[, Pct := sprintf("%.1f%%", 100 * N / sum(N))]
+
+kable(
+  coverage_dist,
+  col.names = c("LCCs containing parcel", "N Parcels", "Percent")
+)
+```
+
+## Diagnostic Health Summary
+
+
+```{r}
+#| label: health-summary
+# 1. Convergence (R-hat)
+max_rhat <- max(parcel_rhat_table$rhat, na.rm = TRUE)
+
+# 2. ESS adequacy
+min_ess <- min(
+  c(
+    parcel_metrics$ess_capacity,
+    parcel_metrics$ess_lcc_capacity,
+    parcel_metrics$ess_n_components
+  ),
+  na.rm = TRUE
+)
+
+# 4. LCC exploration
+lcc_trans_rate <- mean(lcc_transitions_per_chain) /
+  parcel_metrics$n_steps_per_chain[1]
+
+# 5. Birth/death acceptance (uses bd_stats computed earlier)
+bd_acc_rate <- if (nrow(bd_stats) > 0 && bd_stats$n_attempted > 0) {
+  bd_stats$n_accepted / bd_stats$n_attempted
+} else {
+  0
+}
+
+# 6. Joint core-refresh effectiveness
+replace_stats <- parcel_metrics$stats[move_type == "replace_lcc"]
+if (nrow(replace_stats) > 0 && replace_stats$n_attempted > 0) {
+  replace_feasibility <- replace_stats$n_feasible / replace_stats$n_attempted
+} else {
+  replace_feasibility <- NA_real_
+}
+
+# 7. Stickiness
+sticky_frac <- (sticky_summary$n_always_in + sticky_summary$n_rarely_in) /
+  nrow(stickiness_dt)
+
+# Build summary table
+# Use kernel_name for the birth/death row label
+bd_label <- paste0(kernel_name, " Acceptance")
+
+health_dt <- data.table(
+  Check = c(
+    "Convergence (R-hat)",
+    "ESS",
+    "Chain Mixing",
+    "LCC Exploration",
+    bd_label,
+    "Replace-LCC Feasibility",
+    "Parcel Variability (stickiness)"
+  ),
+  Value = c(
+    sprintf("%.3f", max_rhat),
+    sprintf("%.0f", min_ess),
+    sprintf("%.3f min overlap", parcel_separation$min_overlap),
+    sprintf("%.2f%%", 100 * lcc_trans_rate),
+    sprintf("%.1f%% acceptance", 100 * bd_acc_rate),
+    if (!is.na(replace_feasibility)) {
+      sprintf("%.1f%%", 100 * replace_feasibility)
+    } else {
+      "N/A"
+    },
+    sprintf("%.1f%% sticky", 100 * sticky_frac)
+  )
+)
+kable(health_dt)
+```

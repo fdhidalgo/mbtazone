@@ -1,5 +1,8 @@
 .Rproj.user
 .Rhistory
+
+# Local env (e.g. MBTAZONE_* paths); see inst/targets/.Renviron.example
+.Renviron
 .Rdata
 .httr-oauth
 .DS_Store
@@ -28,3 +31,18 @@ inst/extdata/statewide/Density_Denominator_Deductions.zip
 # Validation results (large binary data)
 dev/validation/validation_results.rds
 dev/archive/*.rds
+
+# Targets
+_targets
+worker_logs
+ext/
+
+# Extra files from generating reports
+inst/reports/_targets.yaml
+_targets.yaml
+CLAUDE.md
+AGENTS.md
+
+# Test outputs
+dev/mcmc_testing/compactness/outputs/
+dev/mcmc_testing/plots/
