@@ -1,5 +1,5 @@
 # A helper script to run a single district and store the targets output in the correponding folder.
-# Requires MBTAZONE_DATA_ROOT and MBTAZONE_RIGHT_OF_WAY (see inst/targets/.Renviron.example).
+# Requires MBTAZONE_PIPELINE_DATA and MBTAZONE_RIGHT_OF_WAY (see inst/targets/.Renviron.example).
 # I.e. Norwood will be stored in _targets_Norwood. This is for consistancy with run_all_districts.R
 
 library(targets)

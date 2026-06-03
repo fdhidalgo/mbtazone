@@ -100,10 +100,9 @@ list(
     {
       p <- mbtazone_pipeline_paths()
       get_district_paths(
-        district_name = district_name,
-        district_type = district_type,
-        data_root = p$data_root,
-        parcels_subdir = p$parcels_subdir
+        district_name     = district_name,
+        district_type     = district_type,
+        pipeline_data_dir = p$pipeline_data_dir
       )
     }
   ),
@@ -115,10 +114,8 @@ list(
       load_district_data(
         district_name = district_name,
         district_type = district_type,
-        parcels = district_paths$parcels,
-        district = district_paths$district,
-        excel_model = district_paths$excel_model,
-        right_of_way = p$right_of_way
+        gpkg          = district_paths$gpkg,
+        right_of_way  = p$right_of_way
       )
     }
   ),

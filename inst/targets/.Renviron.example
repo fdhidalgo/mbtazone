@@ -1,12 +1,11 @@
 # Copy to the package root as `.Renviron` (gitignored) or to ~/.Renviron, then set absolute paths.
 # Required for inst/targets/_targets.R (parcel MCMC pipeline).
 
-MBTAZONE_DATA_ROOT=/path/to/mbta_communities/data
-MBTAZONE_RIGHT_OF_WAY=/path/to/Excluded_Land_Right_of_Way.shp
+# Directory containing per-municipality .gpkg files from the mbta-data-pipeline
+MBTAZONE_PIPELINE_DATA=/path/to/mbta_pipeline_data
 
-# Optional — parcel ZIPs live under $MBTAZONE_DATA_ROOT/<subdir>
-# Default if unset: land_record_shapefiles/basic (use Municipality_Parcel_Data on older layouts)
-# MBTAZONE_PARCELS_SUBDIR=land_record_shapefiles/basic
+# Absolute path to the statewide right-of-way shapefile (still required for adjacency graph)
+MBTAZONE_RIGHT_OF_WAY=/path/to/Excluded_Land_Right_of_Way.shp
 
 # Optional — inst/targets/run_all_districts.R when not run from package root
 # MBTAZONE_PACKAGE_ROOT=/path/to/mbtazone
