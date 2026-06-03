@@ -69,6 +69,14 @@ load_district_data <- function(
     parcels_sf <- sf::st_transform(parcels_sf, 26986)
   }
 
+  # Drop rows with no loc_id — incomplete records that carry no usable
+  # geometry or attributes and would cause NA vertex names in igraph.
+  n_na_loc <- sum(is.na(parcels_sf$loc_id))
+  if (n_na_loc > 0) {
+    cli::cli_warn("Dropping {n_na_loc} parcel{?s} with missing loc_id in {district_name}.")
+    parcels_sf <- parcels_sf[!is.na(parcels_sf$loc_id), ]
+  }
+
   districts_sf <- sf::st_read(gpkg, layer = "districts", quiet = TRUE)
   if (is.na(sf::st_crs(districts_sf)$epsg) || sf::st_crs(districts_sf)$epsg != 26986) {
     districts_sf <- sf::st_transform(districts_sf, 26986)
