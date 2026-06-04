@@ -7,12 +7,12 @@
 mbtazone_pipeline_paths()
 }
 \value{
-Named list with \code{data_root}, \code{right_of_way}, and \code{parcels_subdir}.
+Named list with \code{pipeline_data_dir} and \code{right_of_way}.
 }
 \description{
-Reads \env{MBTAZONE_DATA_ROOT} and \env{MBTAZONE_RIGHT_OF_WAY} (required).
-Reads \env{MBTAZONE_PARCELS_SUBDIR} for the parcel-ZIP subfolder under
-\code{data_root}; defaults to \code{"land_record_shapefiles/basic"} when unset.
+Reads \env{MBTAZONE_PIPELINE_DATA} (path to the \verb{mbta_pipeline_data/}
+directory of per-municipality GeoPackages) and \env{MBTAZONE_RIGHT_OF_WAY}
+(path to the statewide right-of-way shapefile). Both are required.
 Set variables in the package root \code{.Renviron} or \verb{~/.Renviron}
 (see \code{inst/targets/.Renviron.example}).
 }

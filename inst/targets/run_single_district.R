@@ -20,7 +20,7 @@ store <- paste0("ext/_targets_", gsub(" ", "_", district_name))
 
 Sys.setenv(DISTRICT_NAME = district_name, DISTRICT_TYPE = district_type)
 
-tar_delete("parcel_chain_results")
+#tar_delete("parcel_chain_results")
 
 tar_make(
   script = "inst/targets/_targets.R",
