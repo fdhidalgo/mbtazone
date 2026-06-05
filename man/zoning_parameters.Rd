@@ -5,9 +5,9 @@
 \alias{zoning_parameters}
 \title{MBTA Communities Zoning Parameters Dataset}
 \format{
-A data.table with 138 rows (district parameter sets) and 16 columns:
+A data.table with 335 rows (district parameter sets) and 16 columns:
 \describe{
-\item{municipality}{Character. Municipality name (60 unique municipalities)}
+\item{municipality}{Character. Municipality name (128 unique municipalities)}
 \item{district}{Integer. Zoning district number (1-5) within municipality}
 \item{excel_file}{Character. Source Excel compliance model filename}
 \item{extraction_date}{Character. Date parameters were extracted (ISO 8601 format)}
@@ -34,7 +34,7 @@ zoning_parameters
 }
 \description{
 A comprehensive dataset of zoning parameters extracted from Excel compliance
-models for 60 Massachusetts municipalities subject to the MBTA Communities Act.
+models for 128 Massachusetts municipalities subject to the MBTA Communities Act.
 Contains district-specific zoning regulations needed for housing unit capacity
 calculations.
 
@@ -54,8 +54,8 @@ zoning districts for MBTA Communities Act compliance.
 \itemize{
 \item Extracted using \code{\link{extract_zoning_parameters}} function
 \item Read from "Checklist Parameters" sheet in Excel models
-\item Extracted on: October 9, 2025
-\item Source directory: MBTA district models collection (60 municipalities, 77 Excel files)
+\item Extracted on: December 16, 2025
+\item Source directory: MBTA district models collection (163 Excel files; 128 municipalities represented)
 }
 }
 
@@ -72,7 +72,7 @@ zoning districts for MBTA Communities Act compliance.
 \itemize{
 \item Municipalities may define 1-5 zoning districts for MBTA compliance
 \item Each row represents one district's complete parameter set
-\item Average: 2.3 districts per municipality
+\item Average: 2.6 districts per municipality
 \item Range: 1-5 districts per municipality
 }
 }

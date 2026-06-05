@@ -46,3 +46,9 @@ AGENTS.md
 # Test outputs
 dev/mcmc_testing/compactness/outputs/
 dev/mcmc_testing/plots/
+
+##Development Potential
+dev/dev_potential/
+/.quarto/
+**/*.quarto_ipynb
+.positai/settings.json

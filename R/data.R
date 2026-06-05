@@ -1,13 +1,13 @@
 #' MBTA Communities Zoning Parameters Dataset
 #'
 #' A comprehensive dataset of zoning parameters extracted from Excel compliance
-#' models for 60 Massachusetts municipalities subject to the MBTA Communities Act.
+#' models for 128 Massachusetts municipalities subject to the MBTA Communities Act.
 #' Contains district-specific zoning regulations needed for housing unit capacity
 #' calculations.
 #'
-#' @format A data.table with 138 rows (district parameter sets) and 16 columns:
+#' @format A data.table with 335 rows (district parameter sets) and 16 columns:
 #' \describe{
-#'   \item{municipality}{Character. Municipality name (60 unique municipalities)}
+#'   \item{municipality}{Character. Municipality name (128 unique municipalities)}
 #'   \item{district}{Integer. Zoning district number (1-5) within municipality}
 #'   \item{excel_file}{Character. Source Excel compliance model filename}
 #'   \item{extraction_date}{Character. Date parameters were extracted (ISO 8601 format)}
@@ -35,8 +35,8 @@
 #' ## Extraction Process
 #' - Extracted using \code{\link{extract_zoning_parameters}} function
 #' - Read from "Checklist Parameters" sheet in Excel models
-#' - Extracted on: October 9, 2025
-#' - Source directory: MBTA district models collection (60 municipalities, 77 Excel files)
+#' - Extracted on: December 16, 2025
+#' - Source directory: MBTA district models collection (163 Excel files; 128 municipalities represented)
 #'
 #' ## Missing Values (NA)
 #' - \code{NA} values indicate the parameter is not applicable or not specified
@@ -47,7 +47,7 @@
 #' ## Multiple Districts per Municipality
 #' - Municipalities may define 1-5 zoning districts for MBTA compliance
 #' - Each row represents one district's complete parameter set
-#' - Average: 2.3 districts per municipality
+#' - Average: 2.6 districts per municipality
 #' - Range: 1-5 districts per municipality
 #'
 #' ## File Selection

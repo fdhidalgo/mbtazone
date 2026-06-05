@@ -6,16 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The `mbtazone` package implements Massachusetts' MBTA Communities Act compliance model in R, providing automated zoning compliance assessment tools. The package replaces manual Excel-based workflows with robust R code featuring comprehensive calculation functions, GIS operations, and validation against Excel model outputs.
 
-**Current Status (March 2026):**
+**Current Status (May 2026):**
 
 - Core compliance calculation engine: ✅ Complete
-- Excel regression testing: ✅ Complete (7 communities validated)
+- Excel regression testing: ✅ Complete (27 communities validated across all 4 community types)
 - GIS operations: ✅ Complete
-- MCMC parcel-level zoning optimizer: 🔧 Active development (Killian Conyngham) — 14 modules, ~11K lines
+- MCMC parcel-level zoning optimizer: 🔧 Active development (Killian Conyngham, merged to master via PR #4 `mcmc-packaging`) — 17 modules, ~11.5K lines
 - `targets` pipeline for multi-district batch runs: 🔧 Active development
 - Quarto diagnostics reports: 🔧 Active development
-- Documentation: ✅ Complete for compliance engine (~70 exported functions total)
-- Shiny interactive app: ⏸️ Not yet implemented (see PRD in `dev/PRD.md`)
+- Documentation: ✅ Complete for compliance engine (~75 exported functions total)
 
 ## Package Architecture
 
@@ -30,9 +29,9 @@ The `mbtazone` package implements Massachusetts' MBTA Communities Act compliance
 5. **`compliance_pipeline.R`** (4 exports) — `assign_parcels_to_districts()`, `calculate_district_capacity()`, `evaluate_compliance()`, `summarize_compliance_results()`
 6. **`mbtazone-package.R`** — Package-level documentation
 
-### MCMC Parcel Optimizer (R/mcmc_*.R — 14 files, ~11K lines, ~37 exports)
+### MCMC Parcel Optimizer (R/mcmc_*.R — 17 files, ~11.5K lines, ~41 exports)
 
-A parcel-level MCMC sampler that searches for zoning district configurations meeting compliance constraints. Developed by Killian Conyngham on the `mcmc-regions-fix` branch.
+A parcel-level MCMC sampler that searches for zoning district configurations meeting compliance constraints. Developed by Killian Conyngham; merged to master via PR #4 (`mcmc-packaging`).
 
 **Key concepts:**
 - **LCC (Locally Connected Component)**: A contiguous set of parcels forming a candidate compliance district
@@ -40,7 +39,7 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 - **Spanning tree**: Used for contiguity checks and valid-cut enumeration during MCMC proposals
 - **Station constraints**: LCCs must include a minimum share of station-area capacity and land area
 - **Reference measure correction**: Birth/death kernels include a `lchoose(n_pool, k_old) - lchoose(n_pool, k_new)` term in the MH ratio to cancel the combinatorial volume C(n_pool, k). Without this, the uniform proposal over the k-subset of secondaries implicitly favors mid-range k values where C(n,k) is largest, overwhelming the geometric prior. With the correction, the marginal on k matches the intended `K_PRIOR_LAMBDA` geometric prior, enabling proper exploration of k=0 states.
-- **Replace-LCC**: Simple global relocation kernel that swaps the LCC while keeping all secondaries fixed (k unchanged). Birth/death + reference measure correction handles k exploration, so replace-LCC only needs to handle LCC exploration. Uses capacity-similar sampling with cached compatible LCC sets for efficiency.
+- **Replace-LCC**: Simple global relocation kernel that swaps the LCC while keeping all secondaries fixed (k unchanged). Birth/death + reference measure correction handles k exploration, so replace-LCC only needs to handle LCC exploration. Samples uniformly over active LCCs compatible with the current secondaries, after pre-filtering by `min_lcc_fraction` and (when configured) station-area / station-capacity constraints. No capacity window — the capacity prior shapes the marginal on $c_\ell$ through the MH ratio. The compatible-LCC set is cached on the state and invalidated only when secondaries change.
 
 **Module overview:**
 
@@ -61,6 +60,8 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 | `mcmc_parcel_metrics.R` | Trace plots, geographic spread, chain timing summaries |
 | `mcmc_soft_constraints.R` | Soft constraint penalties for the objective function |
 | `mcmc_bfs_utils.R` | BFS helper utilities |
+| `mcmc_pipeline_paths.R` | `mbtazone_pipeline_paths()` — resolves machine-specific data roots from env vars |
+| `mcmc_export.R` | Exports thinned MCMC samples as a wide parcel-plan indicator table |
 
 ## Development Commands
 
@@ -127,7 +128,7 @@ Reports are Quarto `.qmd` files in `inst/reports/` and render automatically as t
 
 ```
 mbtazone/
-├── R/                           # Source code (22 files, ~70 exports)
+├── R/                           # Source code (24 files, ~75 exports)
 │   ├── compliance_pipeline.R    # Main compliance workflow
 │   ├── unit_capacity_calculations.R  # 18 Excel-column calculation functions
 │   ├── gis_operations.R         # Spatial analysis functions
@@ -135,7 +136,7 @@ mbtazone/
 │   ├── zoning_parameters.R      # Parameter extraction from Excel
 │   ├── data.R                   # Dataset documentation
 │   ├── mbtazone-package.R       # Package documentation
-│   └── mcmc_*.R (14 files)      # MCMC parcel optimizer (see Architecture section)
+│   └── mcmc_*.R (17 files)      # MCMC parcel optimizer (see Architecture section)
 │
 ├── inst/
 │   ├── extdata/                 # Example/input data
@@ -144,8 +145,13 @@ mbtazone/
 │   │   └── statewide/           # Statewide GIS layers
 │   ├── targets/                 # targets pipeline definition
 │   │   ├── _targets.R           # Main pipeline (5 tiers)
+│   │   ├── .Renviron.example    # Template for machine-specific env vars
 │   │   ├── run_all_districts.R  # Batch run all districts
 │   │   ├── run_single_district.R # Run one district
+│   │   ├── run_benchmark.R      # Benchmark harness for kernel configurations
+│   │   ├── destroy_all_district.R # Wipe all per-district target stores
+│   │   ├── invalidate_all.R     # Invalidate (but keep) all target stores
+│   │   ├── path_resolution.R    # Sourced by _targets.R for path setup
 │   │   └── temp_targets_*.R     # Config files sourced by _targets.R
 │   └── reports/                 # Quarto diagnostics reports
 │       ├── mcmc_diagnostics.qmd
@@ -158,18 +164,19 @@ mbtazone/
 │
 ├── tests/testthat/              # Test suite
 │   ├── test-*.R                 # Unit, regression, and integration tests
-│   ├── fixtures/                # Excel reference data (7 communities)
+│   ├── fixtures/                # Excel reference data (27 communities)
 │   └── helper-excel-extraction.R
 │
 ├── data/                        # Package datasets (lazy-loaded)
 │   └── zoning_parameters.rda
 │
 ├── dev/                         # Development resources
-│   ├── PRD.md                   # Product Requirements Document
+│   ├── README.md                # Dev directory overview
 │   ├── build_zoning_data.R      # Rebuild zoning_parameters dataset
-│   ├── test_joint_refresh.R     # Kernel benchmark harness (grid sweep)
-│   ├── test_k_exploration.R     # Single-chain k-trace test
 │   ├── compliance_model_docs/   # Excel model documentation
+│   ├── investigations/          # Ad-hoc analyses and explorations
+│   ├── mcmc_testing/            # MCMC test scripts and benchmark harnesses
+│   ├── validation/              # Validation studies
 │   └── proof_of_concept/        # Student prototype (reference only)
 │
 ├── man/                         # Generated roxygen2 documentation
@@ -184,7 +191,7 @@ The package includes pre-extracted zoning parameters from real MBTA Communities 
 
 ### `zoning_parameters` Dataset
 
-- **138 district parameter sets** from **60 Massachusetts municipalities** (data.table, 138 × 16)
+- **335 district parameter sets** from **128 Massachusetts municipalities** (data.table, 335 × 16)
 - Lazy-loaded with the package. See `?zoning_parameters` and `R/data.R`.
 - Rebuild from Excel models: `source("dev/build_zoning_data.R"); devtools::document()`
 
@@ -275,7 +282,7 @@ Use when parcels and spatial layers are fixed across iterations. Don't use for s
 
 ### Test Organization (tests/testthat/)
 
-~5,200 lines of test code across 8 files:
+~5,000 lines of test code across 9 files:
 
 - **`test-gis-operations.R`** (~1,250 lines): Spatial operation tests
 - **`test-compliance-pipeline.R`** (~1,190 lines): Integration tests for complete workflow
@@ -284,15 +291,17 @@ Use when parcels and spatial layers are fixed across iterations. Don't use for s
 - **`test-integration.R`** (~600 lines): End-to-end pipeline tests with synthetic data
 - **`test-data-loaders.R`** (~330 lines): Data loading and validation tests
 - **`test-zoning-parameters.R`** (~170 lines): Parameter extraction tests
-- **`test-mcmc-joint-refresh.R`** (~290 lines): Joint core refresh kernel tests (core remove, categorical add, integration)
+- **`test-mcmc-data-loading.R`** (~45 lines): MCMC data-loading smoke tests
+- **`test-mcmc-pipeline-paths.R`** (~40 lines): Env-var-driven path resolution tests
 
 ### Test Fixtures
 
 Located in `tests/testthat/fixtures/`:
 
-- Excel calculation data from 7 communities: Chelsea, Somerville, Cambridge, Wellesley, Newton, Lincoln, Maynard
+- Excel calculation data from 27 communities spanning all 4 types. Originals: Chelsea, Somerville, Cambridge, Wellesley, Newton, Lincoln, Maynard
 - Each fixture is an RDS file containing zoning parameters and reference calculations
-- Format: `{community}_district{N}.rds`
+- Format: `{community}_district{N}.rds` (currently all district 1)
+- Communities are enumerated in `TEST_COMMUNITIES` at the top of `test-excel-regression.R`; add to that list and generate a fixture to extend coverage
 
 ### Excel Regression Testing Approach
 
@@ -300,17 +309,16 @@ The package implements comprehensive regression testing against Excel model outp
 
 1. **Fixture Generation**: `generate-fixtures.R` extracts reference data from Excel models
 2. **Helper Functions**: `helper-excel-extraction.R` provides utilities for reading Excel models
-3. **Validation Strategy**: Test each calculation function against Excel outputs for all 7 communities
+3. **Validation Strategy**: Test each calculation function against Excel outputs for all 27 communities
 4. **NA Handling**: R preserves NA values for missing data; Excel converts to 0. Tests filter to complete data for comparison.
 
 ### Example Data
 
 Located in `inst/extdata/`:
 
-- **`parcels/`**: 7 municipality parcel shapefiles (ZIP format)
-  - Chelsea, Somerville, Cambridge, Wellesley, Newton, Lincoln, Maynard
+- **`parcels/`**: 27 municipality parcel shapefiles (ZIP), named `{muni_id}_{NAME}_basic.zip` (e.g. `57_CHELSEA_basic.zip`)
 - **`community_info.csv`**: Community metadata and compliance requirements
-- **`statewide/`**: Statewide GIS layers (if applicable)
+- **`statewide/`**: `Density_Denominator_Deductions.zip` and `Transit_Station_Areas_Half_Mile_Radius.zip`
 
 ## Package Dependencies
 
@@ -408,22 +416,6 @@ See `dev/compliance_model_docs/Compliance_Model_User_Guide_Summary.md` for detai
 
 ## Project Management
 
-### Linear Integration
-
-This project uses Linear for issue tracking and progress management. Key information:
-
-- **Team:** Hidalgo Research (ID: `5f1d6e78-3907-430b-a5c4-d98b592374e7`)
-- **Project:** MBTA Communities Compliance Model R Package (ID: `42a933c7-5ade-4c7d-8b06-14a60c0fea17`)
-- **Assignee:** fdhidalgo / Daniel Hidalgo (ID: `93d9c10a-bad2-4baf-9fbd-47d65cfc4871`)
-
-**Linear Usage Guidelines:**
-
-- **ALWAYS** update Linear issues with progress comments as work proceeds
-- Use Linear as the primary source of truth for development notes and decisions
-- Create new issues for any significant features or bug fixes discovered
-- Update issue status and add detailed comments when completing tasks
-- Reference specific code locations in comments using `file_path:line_number` format
-
 ### Testing Guidelines
 
 When developing new features:
@@ -475,22 +467,6 @@ The `dev/compliance_model_docs/` directory contains critical reference materials
   - Unit capacity calculation methods
   - Compliance evaluation criteria
   - Integration guidance for R package development
-
-### Using Proof of Concept as Reference
-
-The `dev/proof_of_concept/` directory contains student-written prototype code. Use this as a reference for:
-
-- Understanding the Excel model calculations
-- Identifying required GIS operations
-- Learning the compliance logic flow
-
-**Do not directly copy** proof of concept code. Instead:
-
-1. Understand the underlying algorithms
-2. Rewrite using proper R package conventions
-3. Add comprehensive input validation
-4. Implement robust error handling
-5. Create thorough unit tests
 
 ## Spatial Data Standards
 
