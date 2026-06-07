@@ -2,29 +2,22 @@
 % Please edit documentation in R/mcmc_data_loading.R
 \name{get_district_paths}
 \alias{get_district_paths}
-\title{Helper function to get paths given a district name}
+\title{Find the GeoPackage path for a given district name}
 \usage{
-get_district_paths(
-  district_name,
-  district_type,
-  data_root = "data",
-  parcels_subdir = NULL
-)
+get_district_paths(district_name, district_type, pipeline_data_dir)
 }
 \arguments{
-\item{district_name}{Name of district (e.g., "Norwood")}
+\item{district_name}{Community name matching the .gpkg filename (e.g., "Norwood")}
 
-\item{district_type}{Community type, must be one of "rapid_transit", "commuter_rail", "adjacent" or "adjacent_small_town"}
+\item{district_type}{Community type: one of "rapid_transit", "commuter_rail",
+"adjacent", or "adjacent_small_town"}
 
-\item{data_root}{Path to data directory (default: "data")}
-
-\item{parcels_subdir}{Subdirectory of \code{data_root} containing parcel ZIP files.
-If \code{NULL}, uses \code{Sys.getenv("MBTAZONE_PARCELS_SUBDIR")} when set and
-non-empty, otherwise \code{"land_record_shapefiles/basic"}.}
+\item{pipeline_data_dir}{Path to the mbta_pipeline_data directory containing
+per-municipality .gpkg files}
 }
 \value{
-Named list with paths
+Named list with \code{district_name}, \code{district_type}, and \code{gpkg} (path)
 }
 \description{
-Helper function to get paths given a district name
+Find the GeoPackage path for a given district name
 }

@@ -2,41 +2,38 @@
 % Please edit documentation in R/mcmc_data_loading.R
 \name{load_district_data}
 \alias{load_district_data}
-\title{Load data for a single district}
+\title{Load data for a single community from its GeoPackage}
 \usage{
 load_district_data(
   district_name,
   district_type,
-  parcels,
-  district,
-  excel_model,
+  gpkg,
   right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
 )
 }
 \arguments{
-\item{district_name}{Name of district (e.g., "Norwood")}
+\item{district_name}{Community name (e.g., "Norwood")}
 
-\item{district_type}{Community type, must be one of "rapid_transit", "commuter_rail", "adjacent" or "adjacent_small_town"}
+\item{district_type}{Community type: one of "rapid_transit", "commuter_rail",
+"adjacent", or "adjacent_small_town"}
 
-\item{parcels}{Path to parcel shapefile or zip file}
+\item{gpkg}{Path to the community's .gpkg file}
 
-\item{district}{Path to district shapefile}
-
-\item{excel_model}{Path to district model}
-
-\item{right_of_way}{Path to right-of-way shapefile (default: "data/Right_of_Way/...")}
+\item{right_of_way}{Path to the statewide right-of-way shapefile}
 }
 \value{
 Named list with:
 \itemize{
 \item district_parcels: data.table with LOC_ID, capacity, area_acres, etc.
-\item district_geometry: sf object with LOC_ID, geometry, capacity, area
-\item district_right_of_way: sf object with ROW polygons
-\item zoning_params: list of zoning parameters from Excel model
+\item district_geometry: sf object with LOC_ID, geometry, capacity, area, etc.
+\item district_right_of_way: sf object with ROW polygons clipped to bbox
+\item zoning_params: data.frame of per-district zoning parameters from gpkg
 \item district_requirements: MBTA Communities Act requirements
-\item transit_stations: sf object with 0.5-mile station buffers
+\item transit_stations: sf object with 0.5-mile station buffers, clipped
+\item district_boundary: sf geometry — union of all district polygons
 }
 }
 \description{
-Load data for a single district
+Reads the \code{parcels} and \code{districts} layers from the pre-built GeoPackage
+produced by the mbta-data-pipeline.
 }
