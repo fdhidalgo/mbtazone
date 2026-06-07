@@ -43,6 +43,12 @@ get_district_paths <- function(
 #' Reads the `parcels` and `districts` layers from the pre-built GeoPackage
 #' produced by the mbta-data-pipeline.
 #'
+#' For in-district parcels, capacity comes directly from the pipeline's
+#' pre-computed `final_lot_multi_family_unit_capacity`. For out-of-district
+#' parcels (where that field is NA), capacity is estimated by running
+#' `calculate_district_capacity()` under the most permissive district's zoning
+#' parameters (the district with the highest `final_unit_capacity_per_district`).
+#'
 #' @param district_name Community name (e.g., "Norwood")
 #' @param district_type Community type: one of "rapid_transit", "commuter_rail",
 #'   "adjacent", or "adjacent_small_town"
@@ -69,12 +75,12 @@ load_district_data <- function(
     parcels_sf <- sf::st_transform(parcels_sf, 26986)
   }
 
-  # Drop rows with no loc_id — incomplete records that carry no usable
+  # Drop rows with no LOC_ID — incomplete records that carry no usable
   # geometry or attributes and would cause NA vertex names in igraph.
-  n_na_loc <- sum(is.na(parcels_sf$loc_id))
+  n_na_loc <- sum(is.na(parcels_sf$LOC_ID))
   if (n_na_loc > 0) {
-    cli::cli_warn("Dropping {n_na_loc} parcel{?s} with missing loc_id in {district_name}.")
-    parcels_sf <- parcels_sf[!is.na(parcels_sf$loc_id), ]
+    cli::cli_warn("Dropping {n_na_loc} parcel{?s} with missing LOC_ID in {district_name}.")
+    parcels_sf <- parcels_sf[!is.na(parcels_sf$LOC_ID), ]
   }
 
   districts_sf <- sf::st_read(gpkg, layer = "districts", quiet = TRUE)
@@ -88,31 +94,51 @@ load_district_data <- function(
     community_type = district_type
   )
 
-  # Step 3: Build capacity vector (NA -> 0)
+  # Step 3: Estimate capacity for out-of-district parcels using the most
+  # permissive district's zoning parameters. In-district parcels keep their
+  # pipeline-computed capacity; out-of-district parcels are NA in the gpkg.
+  # "Most permissive" = highest DU/AC (density)
+  district_area_acres <- as.numeric(sf::st_area(districts_sf)) / 43560
+  du_ac <- districts_sf$final_unit_capacity_per_district / district_area_acres
+  best_idx <- which.max(du_ac)
+  best_zoning_params <- sf::st_drop_geometry(districts_sf[best_idx, ])
+
+  # TRANSIT column is "Y"/"N"; calculate_district_capacity() needs in_station_area
+  parcels_sf$in_station_area <- parcels_sf$TRANSIT == "Y"
+
   capacity <- parcels_sf$final_lot_multi_family_unit_capacity
+  out_mask  <- !parcels_sf$in_district
+
+  if (any(out_mask)) {
+    capacity_result <- calculate_district_capacity(
+      parcels       = parcels_sf,
+      zoning_params = best_zoning_params,
+      precomputed   = TRUE
+    )
+    capacity[out_mask] <- capacity_result$final_unit_capacity[out_mask]
+  }
   capacity[is.na(capacity)] <- 0
 
-  in_station <- !is.na(parcels_sf$transit_station) & parcels_sf$transit_station
+  in_station <- parcels_sf$in_station_area
 
   # Step 4: MCMC-ready data.table (all parcels; in_district flag preserved)
   district_parcels <- data.table::data.table(
-    LOC_ID           = parcels_sf$loc_id,
-    capacity         = capacity,
-    area_acres       = parcels_sf$parcel_acres,
-    in_district      = parcels_sf$in_district,
+    LOC_ID            = parcels_sf$LOC_ID,
+    capacity          = capacity,
+    area_acres        = parcels_sf$ACRES,
+    in_district       = parcels_sf$in_district,
     in_station_bounds = in_station,
-    lot_area_sqft    = parcels_sf$parcel_sf,
-    developable_area = parcels_sf$developable_sf_for_unit_calc,
-    excluded_area    = parcels_sf$total_excluded_land
+    lot_area_sqft     = parcels_sf$SQFT,
+    developable_area  = parcels_sf$SQFT - parcels_sf$Tot_Exclud,
+    excluded_area     = parcels_sf$Tot_Exclud
   )
 
   # Step 5: Geometry sf for adjacency graph (all parcels)
-  district_geometry <- parcels_sf["loc_id"]
-  names(district_geometry)[names(district_geometry) == "loc_id"] <- "LOC_ID"
-  district_geometry$capacity           <- capacity
-  district_geometry$area               <- parcels_sf$parcel_acres
-  district_geometry$in_station_bounds  <- in_station
-  district_geometry$area_in_station    <- ifelse(in_station, parcels_sf$parcel_acres, 0)
+  district_geometry <- parcels_sf["LOC_ID"]
+  district_geometry$capacity            <- capacity
+  district_geometry$area                <- parcels_sf$ACRES
+  district_geometry$in_station_bounds   <- in_station
+  district_geometry$area_in_station     <- ifelse(in_station, parcels_sf$ACRES, 0)
   district_geometry$capacity_in_station <- ifelse(in_station, capacity, 0)
 
   centroids <- sf::st_centroid(sf::st_geometry(district_geometry))
@@ -133,7 +159,7 @@ load_district_data <- function(
     sf::st_intersection(right_of_way_sf, bbox_poly)
   )
 
-  transit_stations     <- load_transit_stations()
+  transit_stations       <- load_transit_stations()
   district_station_areas <- sf::st_intersection(transit_stations, bbox_poly)
 
   # District boundary: union of all district polygons in the gpkg
