@@ -47,7 +47,7 @@ get_district_paths <- function(
 #' pre-computed `final_lot_multi_family_unit_capacity`. For out-of-district
 #' parcels (where that field is NA), capacity is estimated by running
 #' `calculate_district_capacity()` under the most permissive district's zoning
-#' parameters (the district with the highest `final_unit_capacity_per_district`).
+#' parameters (the district with the highest DU/AC — units per geometry acre).
 #'
 #' @param district_name Community name (e.g., "Norwood")
 #' @param district_type Community type: one of "rapid_transit", "commuter_rail",
