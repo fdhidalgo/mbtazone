@@ -27,7 +27,7 @@ cat("gpkg:", paths$gpkg, "\n")
 library(sf)
 layers <- st_layers(paths$gpkg)
 cat("\nLayers in gpkg:\n")
-print(layers[, c("name", "features", "fields")])
+#print(layers[, c("name", "features", "fields")])
 
 parcels_raw   <- st_read(paths$gpkg, layer = "parcels",   quiet = TRUE)
 districts_raw <- st_read(paths$gpkg, layer = "districts", quiet = TRUE)
@@ -95,3 +95,4 @@ cat("Geometry type:", as.character(st_geometry_type(district_data$district_bound
 cat("CRS epsg:     ", st_crs(district_data$district_boundary)$epsg, "\n")
 
 cat("\nAll checks complete.\n")
+
