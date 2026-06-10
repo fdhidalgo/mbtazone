@@ -134,12 +134,8 @@ These maps show each parcel's potential contribution to zoning capacity under th
 adopted <- district_data$district_boundary
 
 # Load raw parcel data to get institutional use info
-raw_parcels <- load_municipality(
-  shapefile = file.path(district_paths$parcels),
-  community_name = district_paths$district_name,
-  projection = 26986,
-  validate = TRUE
-)
+# The new pipeline stores parcels directly in the gpkg (PublicInst, UseDesc are present)
+raw_parcels <- sf::st_read(district_paths$gpkg, layer = "parcels", quiet = TRUE)
 
 # Prepare parcel data with capacity (simplify geometry to reduce file size)
 district_parcels <- district_data$district_geometry |>

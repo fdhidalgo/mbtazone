@@ -1,44 +1,33 @@
-test_that("get_district_paths uses parcels_subdir argument", {
-  root <- tempfile("mbta")
-  dir.create(file.path(root, "custom_parcels"), recursive = TRUE)
-  dir.create(file.path(root, "mbta_district_shapefiles", "TestTown"), recursive = TRUE)
-  dir.create(file.path(root, "mbta_district_models"), recursive = TRUE)
-  zip_path <- file.path(root, "custom_parcels", "99_TESTTOWN_basic.zip")
-  file.create(zip_path)
-  file.create(file.path(root, "mbta_district_shapefiles", "TestTown", "d.shp"))
-  file.create(file.path(root, "mbta_district_models", "TestTown - CM model.xlsx"))
-  paths <- get_district_paths(
-    "TestTown",
-    "commuter_rail",
-    data_root = root,
-    parcels_subdir = "custom_parcels"
-  )
-  expect_equal(paths$parcels, zip_path)
+test_that("get_district_paths returns the gpkg path for a district", {
+  root <- tempfile("mbta_pipeline_data")
+  dir.create(root, recursive = TRUE)
+  gpkg_path <- file.path(root, "TestTown.gpkg")
+  file.create(gpkg_path)
+
+  paths <- get_district_paths("TestTown", "commuter_rail", pipeline_data_dir = root)
+
+  expect_equal(paths$district_name, "TestTown")
+  expect_equal(paths$district_type, "commuter_rail")
+  expect_equal(paths$gpkg, gpkg_path)
 })
 
-test_that("get_district_paths uses MBTAZONE_PARCELS_SUBDIR when parcels_subdir is NULL", {
-  root <- tempfile("mbta")
-  dir.create(file.path(root, "env_parcels"), recursive = TRUE)
-  dir.create(file.path(root, "mbta_district_shapefiles", "TestTown"), recursive = TRUE)
-  dir.create(file.path(root, "mbta_district_models"), recursive = TRUE)
-  zip_path <- file.path(root, "env_parcels", "1_TESTTOWN_basic.zip")
-  file.create(zip_path)
-  file.create(file.path(root, "mbta_district_shapefiles", "TestTown", "d.shp"))
-  file.create(file.path(root, "mbta_district_models", "TestTown - CM foo.xlsx"))
+test_that("get_district_paths replaces spaces with underscores in the gpkg filename", {
+  root <- tempfile("mbta_pipeline_data")
+  dir.create(root, recursive = TRUE)
+  gpkg_path <- file.path(root, "Test_Town.gpkg")
+  file.create(gpkg_path)
 
-  old <- Sys.getenv("MBTAZONE_PARCELS_SUBDIR", unset = NA_character_)
-  Sys.setenv(MBTAZONE_PARCELS_SUBDIR = "env_parcels")
-  on.exit(
-    {
-      if (is.na(old)) {
-        Sys.unsetenv("MBTAZONE_PARCELS_SUBDIR")
-      } else {
-        Sys.setenv(MBTAZONE_PARCELS_SUBDIR = old)
-      }
-    },
-    add = TRUE
+  paths <- get_district_paths("Test Town", "adjacent", pipeline_data_dir = root)
+
+  expect_equal(paths$gpkg, gpkg_path)
+})
+
+test_that("get_district_paths errors when no GeoPackage exists for the district", {
+  root <- tempfile("mbta_pipeline_data")
+  dir.create(root, recursive = TRUE)
+
+  expect_error(
+    get_district_paths("MissingTown", "commuter_rail", pipeline_data_dir = root),
+    "No GeoPackage found"
   )
-
-  paths <- get_district_paths("TestTown", "commuter_rail", data_root = root)
-  expect_equal(paths$parcels, zip_path)
 })

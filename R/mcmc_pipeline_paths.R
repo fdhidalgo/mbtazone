@@ -3,26 +3,22 @@
 
 #' Paths for MCMC targets pipeline (from environment)
 #'
-#' Reads \env{MBTAZONE_DATA_ROOT} and \env{MBTAZONE_RIGHT_OF_WAY} (required).
-#' Reads \env{MBTAZONE_PARCELS_SUBDIR} for the parcel-ZIP subfolder under
-#' `data_root`; defaults to `"land_record_shapefiles/basic"` when unset.
+#' Reads \env{MBTAZONE_PIPELINE_DATA} (path to the `mbta_pipeline_data/`
+#' directory of per-municipality GeoPackages) and \env{MBTAZONE_RIGHT_OF_WAY}
+#' (path to the statewide right-of-way shapefile). Both are required.
 #' Set variables in the package root `.Renviron` or `~/.Renviron`
 #' (see `inst/targets/.Renviron.example`).
 #'
-#' @return Named list with `data_root`, `right_of_way`, and `parcels_subdir`.
+#' @return Named list with `pipeline_data_dir` and `right_of_way`.
 #' @export
 mbtazone_pipeline_paths <- function() {
-  data_root <- Sys.getenv("MBTAZONE_DATA_ROOT", unset = "")
-  right_of_way <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY", unset = "")
-  parcels_subdir <- Sys.getenv(
-    "MBTAZONE_PARCELS_SUBDIR",
-    unset = "land_record_shapefiles/basic"
-  )
+  pipeline_data_dir <- Sys.getenv("MBTAZONE_PIPELINE_DATA", unset = "")
+  right_of_way      <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY",  unset = "")
 
-  if (!nzchar(data_root)) {
+  if (!nzchar(pipeline_data_dir)) {
     cli::cli_abort(c(
-      "Missing {.envvar MBTAZONE_DATA_ROOT}.",
-      "i" = "Set it to an absolute path to your MBTA data tree (see {.file inst/targets/.Renviron.example} for a template)."
+      "Missing {.envvar MBTAZONE_PIPELINE_DATA}.",
+      "i" = "Set it to the absolute path of the mbta_pipeline_data directory (see {.file inst/targets/.Renviron.example})."
     ))
   }
   if (!nzchar(right_of_way)) {
@@ -33,8 +29,7 @@ mbtazone_pipeline_paths <- function() {
   }
 
   list(
-    data_root = data_root,
-    right_of_way = right_of_way,
-    parcels_subdir = parcels_subdir
+    pipeline_data_dir = pipeline_data_dir,
+    right_of_way      = right_of_way
   )
 }
