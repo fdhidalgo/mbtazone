@@ -46,8 +46,7 @@ get_district_paths <- function(
 #' For in-district parcels, capacity comes directly from the pipeline's
 #' pre-computed `final_lot_multi_family_unit_capacity`. For out-of-district
 #' parcels (where that field is NA), capacity is estimated by running
-#' `calculate_district_capacity()` under the most permissive district's zoning
-#' parameters (the district with the highest DU/AC — units per geometry acre).
+#' `calculate_district_capacity()` under the first district's zoning parameters.
 #'
 #' @param district_name Community name (e.g., "Norwood")
 #' @param district_type Community type: one of "rapid_transit", "commuter_rail",
@@ -94,14 +93,10 @@ load_district_data <- function(
     community_type = district_type
   )
 
-  # Step 3: Estimate capacity for out-of-district parcels using the most
-  # permissive district's zoning parameters. In-district parcels keep their
+  # Step 3: Estimate capacity for out-of-district parcels using the first
+  # district's zoning parameters. In-district parcels keep their
   # pipeline-computed capacity; out-of-district parcels are NA in the gpkg.
-  # "Most permissive" = highest DU/AC (density)
-  district_area_acres <- as.numeric(sf::st_area(districts_sf)) / 43560
-  du_ac <- districts_sf$final_unit_capacity_per_district / district_area_acres
-  best_idx <- which.max(du_ac)
-  best_zoning_params <- sf::st_drop_geometry(districts_sf[best_idx, ])
+  best_zoning_params <- sf::st_drop_geometry(districts_sf[1L, ])
 
   # TRANSIT column is "Y"/"N"; calculate_district_capacity() needs in_station_area
   parcels_sf$in_station_area <- parcels_sf$TRANSIT == "Y"
