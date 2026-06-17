@@ -239,6 +239,9 @@ compute_birth_tilt_weights <- function(block_ids, library,
   }
 
   caps <- library$metadata$capacity[block_ids]
+  # NA capacity (e.g. from rbindlist fill=TRUE in library construction) gets
+  # zero weight rather than propagating NA into the probability vector.
+  caps[is.na(caps)] <- 0
   log_w <- -tilt_lambda * caps
 
   # Log-sum-exp for numerical stability

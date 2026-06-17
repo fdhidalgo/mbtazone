@@ -2733,8 +2733,11 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
                               !is.na(constraints$station_capacity_pct)) {
     (constraints$station_capacity_pct / 100) * min_cap
   } else NULL
+  # Guard: min_area = NA means no minimum area constraint (e.g. adjacent_small_town)
+  # Multiplying NA by station_area_pct would propagate NA into the comparison below.
   required_station_area <- if (!is.null(constraints$station_area_pct) &&
-                               !is.na(constraints$station_area_pct)) {
+                               !is.na(constraints$station_area_pct) &&
+                               !is.na(min_area)) {
     (constraints$station_area_pct / 100) * min_area
   } else NULL
 
@@ -2754,8 +2757,10 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
     current_cap <- result$metric_total
     current_area <- sum(area_lookup[current_lcc], na.rm = TRUE)
 
-    # Check basic feasibility with both lower and upper bounds
-    if (!(current_cap >= min_cap && current_cap <= max_cap && current_area >= min_area)) {
+    # Check basic feasibility with both lower and upper bounds.
+    # Treat min_area = NA as "no area constraint" (e.g. adjacent_small_town).
+    area_ok <- is.na(min_area) || (current_area >= min_area)
+    if (!(current_cap >= min_cap && current_cap <= max_cap && area_ok)) {
       next
     }
 
