@@ -8,8 +8,11 @@
 #' @param parcel_graph_result Result from build_parcel_graph_target()
 #' @param secondary_library Hydrated secondary library
 #' @param district_name Character district name for ID construction
-#' @param n_samples Number of plans to sample across all chains (default 100)
-#' @param seed Random seed for reproducibility (default 42)
+#' @param burn_in Steps to treat as burn-in and exclude (default 0). Samples
+#'   whose step index is <= burn_in are dropped before selection.
+#' @param n_samples Number of post-burn-in plans to export. Use Inf (default)
+#'   to export all post-burn-in samples.
+#' @param seed Random seed, used only when n_samples < Inf (default 42)
 #' @return data.table with columns:
 #'   parcel_id, district, inclusion_frequency, plan_0001, plan_0002, ...
 #'   where plan columns are 1 if parcel is in that plan, 0 otherwise
@@ -18,9 +21,10 @@ export_mcmc_plans <- function(chain_results,
                               parcel_graph_result,
                               secondary_library,
                               district_name,
-                              n_samples = 100L,
+                              burn_in = 0L,
+                              n_samples = Inf,
                               seed = 42L) {
-  set.seed(seed)
+  if (!is.infinite(n_samples)) set.seed(seed)
 
   pa  <- parcel_graph_result$parcel_assignments
   sec <- hydrate_library(secondary_library)
@@ -39,26 +43,40 @@ export_mcmc_plans <- function(chain_results,
                                   district = district_name))
   }
 
-  # Build index of all available samples
+  # Build index of post-burn-in samples using thinned_steps to filter
   sample_index_dt <- data.table::rbindlist(lapply(names(valid_chains), function(cname) {
-    n <- length(valid_chains[[cname]]$parcel_samples)
-    if (n == 0) return(NULL)
-    data.table::data.table(chain = cname, sample_index = seq_len(n))
+    ch <- valid_chains[[cname]]
+    if (length(ch$parcel_samples) == 0) return(NULL)
+    post_burn_idx <- which(ch$thinned_steps > burn_in)
+    if (length(post_burn_idx) == 0) return(NULL)
+    data.table::data.table(chain = cname, sample_index = post_burn_idx)
   }))
 
-  n_available <- nrow(sample_index_dt)
-  n_draw      <- min(n_samples, n_available)
+  if (nrow(sample_index_dt) == 0) {
+    cli::cli_alert_warning("No post-burn-in samples for {district_name}")
+    return(data.table::data.table(parcel_id = all_parcel_ids,
+                                  district = district_name))
+  }
 
-  if (n_draw < n_samples) {
+  n_available <- nrow(sample_index_dt)
+  n_draw      <- if (is.infinite(n_samples)) n_available else min(as.integer(n_samples), n_available)
+
+  if (!is.infinite(n_samples) && n_draw < n_samples) {
     cli::cli_alert_warning(
-      "Only {n_available} samples available, requested {n_samples}"
+      "Only {n_available} post-burn-in samples available, requested {n_samples}"
     )
   }
 
-  selected <- sample_index_dt[sample(n_available, n_draw)]
+  # When exporting all, preserve chain order; otherwise random draw
+  selected <- if (n_draw == n_available) {
+    sample_index_dt
+  } else {
+    sample_index_dt[sample(n_available, n_draw)]
+  }
 
   cli::cli_alert_info(
-    "Exporting {n_draw} plans from {district_name} ({length(valid_chains)} chains)"
+    "Exporting {n_draw} post-burn-in plans from {district_name} \\
+    ({length(valid_chains)} chains, burn_in = {burn_in})"
   )
 
   # Build parcel index for fast lookup

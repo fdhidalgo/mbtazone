@@ -499,17 +499,17 @@ list(
     mcmc_plan_export,
     {
       dt <- export_mcmc_plans(
-        chain_results     = all_parcel_chain_results,
+        chain_results       = all_parcel_chain_results,
         parcel_graph_result = parcel_graph_result,
-        secondary_library = discovered_secondary_library,
-        district_name     = district_name,
-        n_samples         = 100L,
-        seed              = 42L
+        secondary_library   = discovered_secondary_library,
+        district_name       = district_name,
+        burn_in             = MCMC_BURN_IN,
+        n_samples           = Inf
       )
       out_path <- paste0("ext/exports/",
-                         gsub(" ", "_", district_name), "_plans.csv")
-      data.table::fwrite(dt, out_path)
-      dt  # also store in targets cache for downstream use
+                         gsub(" ", "_", district_name), "_plans.rds")
+      saveRDS(dt, out_path)
+      dt
     }
   ),
 
