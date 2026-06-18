@@ -503,7 +503,7 @@ list(
         parcel_graph_result = parcel_graph_result,
         secondary_library   = discovered_secondary_library,
         district_name       = district_name,
-        burn_in             = MCMC_BURN_IN,
+        burn_in             = 0L,
         n_samples           = Inf
       )
       out_path <- paste0("ext/exports/",
