@@ -461,8 +461,21 @@ lcc_local_move <- function(
 
   } else {
 
-    # Weight B_in by (LCC-neighbour count)^(-alpha) — prefer tendril tips
-    # Every parcel in B_in has >= 1 LCC neighbour, so log is safe
+    # Guard: a single-parcel LCC has no LCC-neighbours, so log(count) = log(0)
+    # which makes all weights +Inf and log-sum-exp undefined. Removing the only
+    # LCC parcel would also produce an empty (invalid) LCC, so skip the move.
+    if (length(lcc_set) <= 1) {
+      return(list(
+        new_state = state,
+        accepted = FALSE,
+        proposal_failed = TRUE,
+        move_type = "lcc_local"
+      ))
+    }
+
+    # Weight B_in by (LCC-neighbour count)^(-alpha) — prefer tendril tips.
+    # Safe: a connected LCC with >= 2 parcels guarantees every parcel has
+    # >= 1 in-LCC neighbour, so log(fwd_counts) is always finite here.
     fwd_counts  <- count_lcc_neighbours(B_in, lcc_set, neighbor_cache, parcel_graph)
     fwd_log_w   <- -boundary_weight_alpha * log(fwd_counts)
     fwd_log_sum <- log(sum(exp(fwd_log_w - max(fwd_log_w)))) + max(fwd_log_w)
