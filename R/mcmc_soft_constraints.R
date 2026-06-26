@@ -13,6 +13,28 @@
 #
 # This preserves detailed balance while favoring lower-capacity configurations.
 
+#' GIS-based density denominator for a set of MCMC units
+#'
+#' Unions the parcel geometries for the given unit IDs, then subtracts the
+#' pre-dissolved local density deductions to get the true district area in
+#' acres (including roads and gaps enclosed between parcels).
+#'
+#' @param unit_ids Character vector of unit IDs (from parcel graph vertices)
+#' @param constraints Constraints list from [define_constraints()]
+#' @return Numeric scalar: density denominator in acres
+#' @keywords internal
+compute_gis_density_denom <- function(unit_ids, constraints) {
+  loc_ids <- unique(unlist(constraints$unit_to_loc_ids[unit_ids], use.names = FALSE))
+  geom_sf <- constraints$district_geometry[
+    constraints$district_geometry$LOC_ID %in% loc_ids, ]
+  if (nrow(geom_sf) == 0) return(0)
+  union_sf <- sf::st_sf(geometry = sf::st_union(geom_sf))
+  if (nrow(constraints$local_deductions_dissolved) > 0) {
+    union_sf <- sf::st_difference(union_sf, constraints$local_deductions_dissolved)
+  }
+  as.numeric(sf::st_area(union_sf)) / 4047
+}
+
 # ============================================================================
 # PENALTY FUNCTIONS
 # ============================================================================
@@ -111,13 +133,19 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
     return(list(feasible = FALSE, constraint_failed = "min_capacity"))
   }
 
-  # Area
-  if (state$total_area < constraints$min_area) {
+  # Area and density use the GIS denominator: st_union of selected parcel
+  # geometries minus deductions, giving the true district area including
+  # roads and gaps enclosed between parcels.
+  gis_denom <- compute_gis_density_denom(state$X, constraints)
+
+  if (!is.finite(gis_denom) || gis_denom <= 0) {
+    return(list(feasible = FALSE, constraint_failed = "invalid_area"))
+  }
+  if (gis_denom < constraints$min_area) {
     return(list(feasible = FALSE, constraint_failed = "min_area"))
   }
 
-  # Density (safe division - total_area guaranteed > 0 above)
-  density <- state$total_capacity / state$total_area
+  density <- state$total_capacity / gis_denom
   if (!is.finite(density) || density < constraints$min_density) {
     return(list(feasible = FALSE, constraint_failed = "min_density"))
   }

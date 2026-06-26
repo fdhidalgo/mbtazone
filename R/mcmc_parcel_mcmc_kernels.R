@@ -36,9 +36,13 @@ check_parcel_feasibility <- function(
     return(list(feasible = FALSE, constraint_failed = "min_area"))
   }
 
-  # Density
-  density <- state$total_capacity / state$total_area
-  if (density < constraints$min_density) {
+  # Area and density via GIS union (includes roads and enclosed gaps)
+  gis_denom <- compute_gis_density_denom(state$X, constraints)
+  if (!is.finite(gis_denom) || gis_denom < constraints$min_area) {
+    return(list(feasible = FALSE, constraint_failed = "min_area"))
+  }
+  density <- state$total_capacity / gis_denom
+  if (!is.finite(density) || density < constraints$min_density) {
     return(list(feasible = FALSE, constraint_failed = "min_density"))
   }
 

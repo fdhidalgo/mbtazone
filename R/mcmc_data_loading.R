@@ -38,6 +38,42 @@ get_district_paths <- function(
   )
 }
 
+# Clip statewide deductions to a bounding box and dissolve overlapping source
+# layers into a single polygon. Returns a one-row sf (or zero-row if no
+# deductions overlap the bbox).
+clip_dissolve_deductions <- function(deductions, bbox_sf) {
+  local_ded <- sf::st_make_valid(sf::st_intersection(deductions, bbox_sf))
+  if (nrow(local_ded) == 0) {
+    return(sf::st_sf(geometry = sf::st_sfc(crs = sf::st_crs(deductions))))
+  }
+  sf::st_sf(geometry = sf::st_union(local_ded))
+}
+
+# Compute per-parcel GIS area (parcel polygon area minus deduction overlap),
+# returned in acres. Takes a pre-dissolved local deductions sf.
+compute_gis_area_acres <- function(parcels_sf, local_deductions_dissolved) {
+  parcel_sqm <- as.numeric(sf::st_area(parcels_sf))
+
+  if (nrow(local_deductions_dissolved) == 0) {
+    return(pmax(parcel_sqm, 0) / 4047)
+  }
+
+  ded_parts <- sf::st_intersection(parcels_sf["LOC_ID"], local_deductions_dissolved)
+
+  ded_sqm <- rep(0, nrow(parcels_sf))
+  if (nrow(ded_parts) > 0) {
+    ded_area_by_id <- tapply(
+      as.numeric(sf::st_area(ded_parts)),
+      sf::st_drop_geometry(ded_parts)$LOC_ID,
+      sum
+    )
+    matched <- ded_area_by_id[parcels_sf$LOC_ID]
+    ded_sqm[!is.na(matched)] <- matched[!is.na(matched)]
+  }
+
+  pmax(parcel_sqm - ded_sqm, 0) / 4047
+}
+
 #' Load data for a single community from its GeoPackage
 #'
 #' Reads the `parcels` and `districts` layers from the pre-built GeoPackage
@@ -53,6 +89,9 @@ get_district_paths <- function(
 #'   "adjacent", or "adjacent_small_town"
 #' @param gpkg Path to the community's .gpkg file
 #' @param right_of_way Path to the statewide right-of-way shapefile
+#' @param density_deductions sf object of the statewide Density Denominator
+#'   Deductions layer (already in EPSG:26986). Used to compute per-parcel GIS
+#'   area (polygon area minus deduction overlap) for the density denominator.
 #' @return Named list with:
 #'   - district_parcels: data.table with LOC_ID, capacity, area_acres, etc.
 #'   - district_geometry: sf object with LOC_ID, geometry, capacity, area, etc.
@@ -66,7 +105,8 @@ load_district_data <- function(
     district_name,
     district_type,
     gpkg,
-    right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
+    right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp",
+    density_deductions
 ) {
   # Step 1: Read both layers from GeoPackage
   parcels_sf <- sf::st_read(gpkg, layer = "parcels", quiet = TRUE)
@@ -116,11 +156,22 @@ load_district_data <- function(
 
   in_station <- parcels_sf$in_station_area
 
+  # Dissolve deductions once for this community's bbox, then use for both
+  # per-parcel area and per-step GIS density denominator computation.
+  bbox_poly_parcels <- sf::st_as_sfc(sf::st_bbox(parcels_sf))
+  sf::st_crs(bbox_poly_parcels) <- sf::st_crs(parcels_sf)
+  local_deductions_dissolved <- clip_dissolve_deductions(
+    density_deductions, bbox_poly_parcels
+  )
+
+  # GIS-based area: polygon area minus statewide deduction overlap, in acres.
+  area_acres <- compute_gis_area_acres(parcels_sf, local_deductions_dissolved)
+
   # Step 4: MCMC-ready data.table (all parcels; in_district flag preserved)
   district_parcels <- data.table::data.table(
     LOC_ID            = parcels_sf$LOC_ID,
     capacity          = capacity,
-    area_acres        = parcels_sf$ACRES,
+    area_acres        = area_acres,
     in_district       = parcels_sf$in_district,
     in_station_bounds = in_station,
     lot_area_sqft     = parcels_sf$SQFT,
@@ -131,9 +182,9 @@ load_district_data <- function(
   # Step 5: Geometry sf for adjacency graph (all parcels)
   district_geometry <- parcels_sf["LOC_ID"]
   district_geometry$capacity            <- capacity
-  district_geometry$area                <- parcels_sf$ACRES
+  district_geometry$area                <- area_acres
   district_geometry$in_station_bounds   <- in_station
-  district_geometry$area_in_station     <- ifelse(in_station, parcels_sf$ACRES, 0)
+  district_geometry$area_in_station     <- ifelse(in_station, area_acres, 0)
   district_geometry$capacity_in_station <- ifelse(in_station, capacity, 0)
 
   centroids <- sf::st_centroid(sf::st_geometry(district_geometry))
@@ -161,12 +212,13 @@ load_district_data <- function(
   district_boundary <- sf::st_union(districts_sf)
 
   list(
-    district_parcels      = district_parcels,
-    district_geometry     = district_geometry,
-    district_right_of_way = district_right_of_way,
-    zoning_params         = sf::st_drop_geometry(districts_sf),
-    district_requirements = district_requirements,
-    transit_stations      = district_station_areas,
-    district_boundary     = district_boundary
+    district_parcels           = district_parcels,
+    district_geometry          = district_geometry,
+    district_right_of_way      = district_right_of_way,
+    zoning_params              = sf::st_drop_geometry(districts_sf),
+    district_requirements      = district_requirements,
+    transit_stations           = district_station_areas,
+    district_boundary          = district_boundary,
+    local_deductions_dissolved = local_deductions_dissolved
   )
 }

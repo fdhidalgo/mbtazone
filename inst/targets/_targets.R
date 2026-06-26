@@ -108,14 +108,25 @@ list(
   ),
 
   tar_target(
+    density_deductions,
+    {
+      p   <- mbtazone_pipeline_paths()
+      ded <- sf::st_read(p$density_deductions, quiet = TRUE)
+      ded <- sf::st_transform(ded, 26986)
+      sf::st_make_valid(ded)
+    }
+  ),
+
+  tar_target(
     district_data,
     {
       p <- mbtazone_pipeline_paths()
       load_district_data(
-        district_name = district_name,
-        district_type = district_type,
-        gpkg          = district_paths$gpkg,
-        right_of_way  = p$right_of_way
+        district_name      = district_name,
+        district_type      = district_type,
+        gpkg               = district_paths$gpkg,
+        right_of_way       = p$right_of_way,
+        density_deductions = density_deductions
       )
     }
   ),
@@ -132,7 +143,7 @@ list(
 
   tar_target(
     constraints,
-    define_constraints(district_data)
+    define_constraints(district_data, parcel_graph_result)
   ),
 
   # ============================================================================
