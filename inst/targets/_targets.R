@@ -442,7 +442,7 @@ list(
     ),
     pattern   = map(parcel_chain_grid, parcel_initial_state),
     iteration = "list",
-    packages  = c("data.table", "igraph", "purrr", "cli", "mbtazone")
+    packages  = c("data.table", "igraph", "purrr", "cli", "sf", "mbtazone")
   ),
 
   # Name chains consistently
