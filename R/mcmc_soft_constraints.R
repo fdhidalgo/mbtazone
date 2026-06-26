@@ -24,15 +24,20 @@
 #' @return Numeric scalar: density denominator in acres
 #' @keywords internal
 compute_gis_density_denom <- function(unit_ids, constraints) {
-  loc_ids <- unique(unlist(constraints$unit_to_loc_ids[unit_ids], use.names = FALSE))
-  geom_sf <- constraints$district_geometry[
-    constraints$district_geometry$LOC_ID %in% loc_ids, ]
-  if (nrow(geom_sf) == 0) return(0)
-  union_sf <- sf::st_sf(geometry = sf::st_union(geom_sf))
-  if (nrow(constraints$local_deductions_dissolved) > 0) {
-    union_sf <- sf::st_difference(union_sf, constraints$local_deductions_dissolved)
+  loc_ids     <- unique(unlist(constraints$unit_to_loc_ids[unit_ids], use.names = FALSE))
+  geom_subset <- constraints$geom_sfc[intersect(loc_ids, names(constraints$geom_sfc))]
+  if (length(geom_subset) == 0) {
+    cli::cli_abort("No geometries found for unit_ids: {paste(unit_ids, collapse = ', ')}")
   }
-  as.numeric(sf::st_area(union_sf)) / 4047
+  union_geom <- sf::st_union(geom_subset)
+  if (length(constraints$ded_sfc) > 0) {
+    remainder <- sf::st_difference(
+      sf::st_sf(geometry = union_geom),
+      sf::st_sf(geometry = constraints$ded_sfc)
+    )
+    return(as.numeric(sf::st_area(remainder)) / 4047)
+  }
+  as.numeric(sf::st_area(union_geom)) / 4047
 }
 
 # ============================================================================

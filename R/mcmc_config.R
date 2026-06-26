@@ -23,15 +23,23 @@ define_constraints <- function(district_data, parcel_graph_result) {
   pa <- parcel_graph_result$parcel_assignments
   unit_to_loc_ids <- split(pa$parcel_id, pa$unit_id)
 
+  # Store geometries as named sfc (not sf data frames) to avoid sf_column
+  # attribute loss during qs serialization in the targets pipeline.
+  dg      <- district_data$district_geometry
+  geom_sfc <- sf::st_geometry(dg)
+  names(geom_sfc) <- dg$LOC_ID
+
+  ded_sfc <- sf::st_geometry(district_data$local_deductions_dissolved)
+
   list(
-    min_capacity               = req$min_units,
-    min_area                   = if (is.na(req$min_acres)) 0 else req$min_acres,
-    min_density                = req$min_gross_density,
-    min_lcc_fraction           = 0.5,
-    station_capacity_pct       = req$station_area_unit_pct,
-    station_area_pct           = req$station_area_land_pct,
-    unit_to_loc_ids            = unit_to_loc_ids,
-    district_geometry          = district_data$district_geometry,
-    local_deductions_dissolved = district_data$local_deductions_dissolved
+    min_capacity     = req$min_units,
+    min_area         = if (is.na(req$min_acres)) 0 else req$min_acres,
+    min_density      = req$min_gross_density,
+    min_lcc_fraction = 0.5,
+    station_capacity_pct = req$station_area_unit_pct,
+    station_area_pct     = req$station_area_land_pct,
+    unit_to_loc_ids  = unit_to_loc_ids,
+    geom_sfc         = geom_sfc,
+    ded_sfc          = ded_sfc
   )
 }
