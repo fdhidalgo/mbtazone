@@ -4,10 +4,13 @@
 \alias{define_constraints}
 \title{Define constraints from district requirements}
 \usage{
-define_constraints(district_data)
+define_constraints(district_data, parcel_graph_result)
 }
 \arguments{
-\item{district_data}{List containing district_requirements from data loading}
+\item{district_data}{List from \code{\link[=load_district_data]{load_district_data()}}}
+
+\item{parcel_graph_result}{List from \code{\link[=build_parcel_graph_target]{build_parcel_graph_target()}} or
+\code{\link[=build_identity_parcel_graph]{build_identity_parcel_graph()}}}
 }
 \value{
 List of constraints for MCMC

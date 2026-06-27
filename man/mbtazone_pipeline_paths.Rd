@@ -7,12 +7,15 @@
 mbtazone_pipeline_paths()
 }
 \value{
-Named list with \code{pipeline_data_dir} and \code{right_of_way}.
+Named list with \code{pipeline_data_dir}, \code{right_of_way}, and
+\code{density_deductions}.
 }
 \description{
 Reads \env{MBTAZONE_PIPELINE_DATA} (path to the \verb{mbta_pipeline_data/}
-directory of per-municipality GeoPackages) and \env{MBTAZONE_RIGHT_OF_WAY}
-(path to the statewide right-of-way shapefile). Both are required.
+directory of per-municipality GeoPackages), \env{MBTAZONE_RIGHT_OF_WAY}
+(path to the statewide right-of-way shapefile), and
+\env{MBTAZONE_DENSITY_DEDUCTIONS} (path to the statewide
+\code{Density_Denominator_Deductions.shp}). All three are required.
 Set variables in the package root \code{.Renviron} or \verb{~/.Renviron}
 (see \code{inst/targets/.Renviron.example}).
 }

@@ -8,7 +8,8 @@ load_district_data(
   district_name,
   district_type,
   gpkg,
-  right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
+  right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp",
+  density_deductions
 )
 }
 \arguments{
@@ -20,6 +21,10 @@ load_district_data(
 \item{gpkg}{Path to the community's .gpkg file}
 
 \item{right_of_way}{Path to the statewide right-of-way shapefile}
+
+\item{density_deductions}{sf object of the statewide Density Denominator
+Deductions layer (already in EPSG:26986). Used to compute per-parcel GIS
+area (polygon area minus deduction overlap) for the density denominator.}
 }
 \value{
 Named list with:
@@ -41,6 +46,5 @@ produced by the mbta-data-pipeline.
 For in-district parcels, capacity comes directly from the pipeline's
 pre-computed \code{final_lot_multi_family_unit_capacity}. For out-of-district
 parcels (where that field is NA), capacity is estimated by running
-\code{calculate_district_capacity()} under the most permissive district's zoning
-parameters (the district with the highest DU/AC — units per geometry acre).
+\code{calculate_district_capacity()} under the first district's zoning parameters.
 }
