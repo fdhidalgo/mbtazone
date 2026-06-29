@@ -1,7 +1,7 @@
 # Speed benches
 
 Fixed-input, bit-identical benchmarks for **behavior-preserving** speedups, each
-built to drive a `/goal` loop (see "Using with `/goal`"). Two live here:
+built to drive a `/goal` loop (see "Using with `/goal`"). Three live here:
 
 - **`speed_bench.R`** — the parcel MCMC sampler (fixed seed; profile in
   `HOTSPOTS.md`; reference in `baseline.txt`).
@@ -9,6 +9,10 @@ built to drive a `/goal` loop (see "Using with `/goal`"). Two live here:
   `evaluate_compliance(precomputed = TRUE)` (RNG-free; profile in
   `COMPLIANCE_HOTSPOTS.md`; reference in `compliance_baseline.txt`). See
   "Compliance batch bench" below.
+- **`discovery_bench.R`** — the LCC discovery tier (Tier 3A of the targets
+  pipeline) that builds `discovered_lcc_library` from the parcel graph (fixed
+  seed; profile in `DISCOVERY_HOTSPOTS.md`; reference in
+  `discovery_baseline.txt`). See "LCC discovery bench" below.
 
 Both print the same fields and obey the same rule: a correct optimization
 **lowers ELAPSED while keeping OUTPUT_HASH equal to the baseline**.
@@ -141,3 +145,58 @@ municipality, or the parameter grid while a goal is active.
 
 See `COMPLIANCE_HOTSPOTS.md` for the profile: ~85% of the time is one line —
 subsetting the full sf (with geometry) when only numeric columns are needed.
+
+# LCC discovery bench
+
+A fixed-seed, bit-identical benchmark for **behavior-preserving** speedups of the
+**LCC discovery tier** — the pipeline stage (Tier 3A in
+`inst/targets/_targets.R`) that builds `discovered_lcc_library` from the parcel
+graph, **before** the MCMC sampler runs. It is the other large compute tier in the
+pipeline and, unlike the sampler, had no speed gate.
+
+## What it does
+
+`discovery_bench.R` loads the same warm store as the MCMC bench
+(`ext/_targets_Topsfield`) for the two fixed inputs the discovery consumes —
+`parcel_graph_result` and `constraints` — then runs the full discovery chain
+**twice with a fixed seed** (`set.seed(42)`): tree enumeration
+(`discover_lccs_from_trees`), BFS boundary supplement (`run_bfs_lcc_supplement`),
+five capacity bands (`discover_lccs_single_band`), then the deterministic
+`combine_*` and `build_lcc_library_from_tree_discovery`. It prints the same
+`ELAPSED / OUTPUT_HASH / DETERMINISTIC / HASH_MATCH / SPEEDUP` block as the other
+benches; `OUTPUT_HASH` is the `rlang::hash` of the discovered library.
+
+This tier **draws random numbers**, so the gate is the MCMC-sampler kind, not the
+compliance kind: under a fixed seed the run is reproducible, and a correct
+optimization must preserve the exact draw sequence. The pipeline runs the five
+bands as parallel crew workers; the bench runs them **serially in one process
+under one seed** — it defines its own baseline from current code, so it need not
+match the pipeline's stored library, only exercise the real code and be internally
+reproducible. `DETERMINISTIC: TRUE` (both runs hash equal) guards that.
+
+## Usage
+
+```bash
+Rscript dev/bench/discovery_bench.R            # measure, compare to discovery_baseline.txt
+Rscript dev/bench/discovery_bench.R --capture  # (re)write discovery_baseline.txt from current code
+```
+
+## The fence: which optimizations this gate allows
+
+Only **Class A** changes that preserve the random-draw sequence, so output stays
+bit-identical under the fixed seed. The target is the discovery implementation:
+
+- `R/mcmc_bfs_utils.R` (`bfs_grow_block` — where ~80% of the time is)
+- `R/mcmc_parcel_library.R` (`run_bfs_lcc_supplement`, `discover_lccs_single_band`,
+  `combine_*`, `build_lcc_library_from_tree_discovery`)
+- `R/mcmc_spanning_tree.R` (`discover_lccs_from_trees`) — but **not** the
+  `sample_spanning_tree` draw itself
+
+Do **not** edit `dev/bench/`, `discovery_baseline.txt`, the seed, the store, or the
+discovery size constants in `inst/targets/temp_targets_*.R` while a goal is active.
+
+See `DISCOVERY_HOTSPOTS.md` for the profile: one line — a per-BFS-step
+`igraph::neighbors()$name` lookup in `bfs_grow_block` — is 56.6% of the run; a
+precomputed name-keyed adjacency list (reused from the pattern already in
+`build_lcc_library_from_tree_discovery`) is the dominant lever, worth a ~2.5×
+ceiling on its own.
