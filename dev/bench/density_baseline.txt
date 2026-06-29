@@ -1,0 +1,7 @@
+baseline_n_affected=494
+baseline_total_sqft=2509558.300365
+baseline_elapsed=100.250
+tol_sqft=1.000000
+municipality=Maynard
+n_parcels=3467
+git_commit=b2e5764

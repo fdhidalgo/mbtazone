@@ -1,21 +1,37 @@
 # Speed benches
 
-Fixed-input, bit-identical benchmarks for **behavior-preserving** speedups, each
-built to drive a `/goal` loop (see "Using with `/goal`"). Three live here:
+Fixed-input benchmarks for **behavior-preserving** speedups, each built to drive a
+`/goal` loop (see "Using with `/goal`"). Six live here, one per heavy compute
+tier:
 
-- **`speed_bench.R`** — the parcel MCMC sampler (fixed seed; profile in
+- **`speed_bench.R`** — the parcel MCMC sampler, Tier 4 (fixed seed; profile in
   `HOTSPOTS.md`; reference in `baseline.txt`).
 - **`compliance_bench.R`** — the compliance-engine batch path
   `evaluate_compliance(precomputed = TRUE)` (RNG-free; profile in
   `COMPLIANCE_HOTSPOTS.md`; reference in `compliance_baseline.txt`). See
   "Compliance batch bench" below.
-- **`discovery_bench.R`** — the LCC discovery tier (Tier 3A of the targets
-  pipeline) that builds `discovered_lcc_library` from the parcel graph (fixed
-  seed; profile in `DISCOVERY_HOTSPOTS.md`; reference in
-  `discovery_baseline.txt`). See "LCC discovery bench" below.
+- **`discovery_bench.R`** — the LCC discovery tier (Tier 3A) that builds
+  `discovered_lcc_library` from the parcel graph (fixed seed; profile in
+  `DISCOVERY_HOTSPOTS.md`; reference in `discovery_baseline.txt`). See "LCC
+  discovery bench" below.
+- **`secondary_bench.R`** — the secondary discovery tier (Tier 3B) that builds
+  `discovered_secondary_library`; the sibling of the LCC tier, still on the slow
+  `bfs_grow_block` path (fixed seed; profile in `SECONDARY_HOTSPOTS.md`;
+  reference in `secondary_baseline.txt`). See "Secondary discovery bench" below.
+- **`graph_bench.R`** — the parcel graph construction tier (Tier 2) that builds
+  the adjacency graph from district geometry (RNG-free; profile in
+  `GRAPH_HOTSPOTS.md`; reference in `graph_baseline.txt`). See "Parcel graph
+  construction bench" below.
+- **`density_bench.R`** — the density-deduction precompute, the heaviest single
+  spatial step in the compliance workflow (RNG-free, **TOLERANCE gate** not hash;
+  profile in `DENSITY_HOTSPOTS.md`; reference in `density_baseline.{txt,rds}`).
+  See "Density precompute bench" below.
 
-Both print the same fields and obey the same rule: a correct optimization
-**lowers ELAPSED while keeping OUTPUT_HASH equal to the baseline**.
+Five print the same fields and obey the same rule: a correct optimization
+**lowers ELAPSED while keeping OUTPUT_HASH equal to the baseline**. The sixth
+(`density_bench.R`) swaps the hash for a per-parcel **tolerance** check — its
+spatial output drifts by sub-square-foot amounts under a legitimate speedup — but
+follows the same lower-ELAPSED-while-gate-holds rule.
 
 # MCMC speed bench
 
@@ -200,3 +216,140 @@ See `DISCOVERY_HOTSPOTS.md` for the profile: one line — a per-BFS-step
 precomputed name-keyed adjacency list (reused from the pattern already in
 `build_lcc_library_from_tree_discovery`) is the dominant lever, worth a ~2.5×
 ceiling on its own.
+
+# Secondary discovery bench
+
+A fixed-seed, bit-identical benchmark for **behavior-preserving** speedups of the
+**secondary discovery tier** — Tier 3B in `inst/targets/_targets.R`, which builds
+`discovered_secondary_library` from the parcel graph in parallel to the LCC tier.
+It is the sibling of the LCC discovery bench and uses the same machinery (Wilson
+tree enumeration + BFS growth via `bfs_grow_block`).
+
+## What it does
+
+`secondary_bench.R` loads the same warm store (`ext/_targets_Topsfield`) for the
+one fixed input the discovery consumes — `parcel_graph_result` — then runs the
+full secondary discovery chain **twice with a fixed seed** (`set.seed(42)`):
+`discover_secondaries_from_trees` → `run_bfs_secondary_supplement` →
+`combine_discovered_blocks` → `build_secondary_library_from_discovery`. It prints
+the same `ELAPSED / OUTPUT_HASH / DETERMINISTIC / HASH_MATCH / SPEEDUP` block;
+`OUTPUT_HASH` is the `rlang::hash` of the discovered secondary library.
+
+This tier **draws random numbers**, so the gate is the LCC-discovery / MCMC kind:
+preserve the exact draw sequence, keep the hash bit-identical.
+
+## Usage
+
+```bash
+Rscript dev/bench/secondary_bench.R            # measure, compare to secondary_baseline.txt
+Rscript dev/bench/secondary_bench.R --capture  # (re)write secondary_baseline.txt from current code
+```
+
+## The fence
+
+Only **Class A** changes that preserve the random-draw sequence. The target is the
+discovery implementation in `R/mcmc_bfs_utils.R` (`bfs_grow_block` + the `ctx` fast
+path), `R/mcmc_parcel_library.R` (`run_bfs_secondary_supplement`, `combine_*`,
+`build_secondary_library_from_discovery`), and `R/mcmc_spanning_tree.R`
+(`discover_secondaries_from_trees`) — but **not** the `sample_spanning_tree` draw.
+Do **not** edit `dev/bench/`, `secondary_baseline.txt`, the seed, the store, or the
+secondary size constants in `inst/targets/temp_targets_*.R`.
+
+See `SECONDARY_HOTSPOTS.md`: `run_bfs_secondary_supplement` calls `bfs_grow_block`
+on the **slow character path** (no `bfs_build_context`), so a per-BFS-step
+`igraph::neighbors()$name` lookup is 47% of the run. The fix — wiring in the
+integer `ctx` fast path already built and tested for the LCC tier — is the
+dominant lever; a realistic target is ~3–4×.
+
+# Parcel graph construction bench
+
+A fixed-input, bit-identical benchmark for **behavior-preserving** speedups of the
+**parcel graph construction tier** — Tier 2 in `inst/targets/_targets.R`, which
+turns the loaded district geometry into the adjacency graph every later tier
+consumes.
+
+## What it does
+
+`graph_bench.R` loads the warm store for the one fixed input the tier consumes —
+`district_data` (its `$district_geometry` and `$district_right_of_way`) — then
+rebuilds the graph **twice** (`build_adjacency_graph` →
+`build_identity_parcel_graph`, the `MACRO_SCALE == 0` branch) and prints the same
+`ELAPSED / OUTPUT_HASH / DETERMINISTIC / HASH_MATCH / SPEEDUP` block. The graph is
+hashed via its canonical vertex + edge data frames (`as_data_frame(pg, "both")`)
+so the gate is over graph content, not igraph-internal representation.
+
+This tier is **RNG-free**, so the gate is the compliance kind: preserve the
+computed graph content, keep the hash bit-identical.
+
+## Usage
+
+```bash
+Rscript dev/bench/graph_bench.R            # measure, compare to graph_baseline.txt
+Rscript dev/bench/graph_bench.R --capture  # (re)write graph_baseline.txt from current code
+```
+
+## The fence
+
+Only changes that keep the graph bit-identical. The target is
+`R/mcmc_graph_building.R` (`build_adjacency_graph` and its nearest-point / ROW
+helpers) and `R/mcmc_parcel_construction.R` (`build_identity_parcel_graph`). Do
+**not** edit `dev/bench/`, `graph_baseline.txt`, the store, or the Tier-2 constants
+(`MAX_DIST_FEET`, `MIN_COVERAGE_RATIO`, `MACRO_SCALE`).
+
+See `GRAPH_HOTSPOTS.md`: two helpers call vectorizable `sf` functions one element
+at a time in an R loop — `build_nearest_point_lines` (`st_nearest_points` +
+`st_length` per pair, 53%) and `validate_row_crossing_lines` (`st_length` per
+feature, 26%). Batching each into a single vectorized `sf` call is the dominant
+lever (~79% of the build), well above a 3× ceiling.
+
+# Density precompute bench
+
+A fixed-input benchmark for **behavior-preserving** speedups of the
+density-deduction precompute — the single most expensive spatial step in the
+compliance workflow. Unlike the other five, this one uses a **tolerance gate**,
+not a hash: the legitimate speedup changes floating-point geometry math by
+sub-square-foot amounts.
+
+## What it does
+
+`density_bench.R` loads one municipality (Maynard, 3,467 parcels) and the
+statewide deduction layer once (untimed), then times
+`precompute_spatial_attributes(..., density_deductions = )` **twice** and compares
+the per-parcel `density_deduction_area` vector against the captured baseline (in
+`density_baseline.rds`) **element-wise within 1 sqft**. It prints:
+
+```
+ELAPSED       min wall-clock of one density precompute (s)
+N_AFFECTED    parcels with non-zero deduction (must match baseline exactly)
+TOTAL_SQFT    sum of per-parcel deduction area
+MAX_ABS_DIFF  max per-parcel |area - baseline|  (the tolerance signal)
+WITHIN_TOL    MAX_ABS_DIFF <= 1 sqft AND N_AFFECTED matches  (the gate)
+SPEEDUP       baseline_elapsed / ELAPSED
+```
+
+`DETERMINISTIC` (the two runs agree exactly) still guards against nondeterminism.
+
+## Usage
+
+```bash
+Rscript dev/bench/density_bench.R            # measure, compare to density_baseline.{txt,rds}
+Rscript dev/bench/density_bench.R --capture  # (re)write density_baseline.{txt,rds} from current code
+```
+
+## The fence
+
+Edit only the density compute path: the density branch of
+`precompute_spatial_attributes()` and (if a helper is shared)
+`calculate_density_denominator()` in `R/gis_operations.R`. Keep `WITHIN_TOL: TRUE`
+and `DETERMINISTIC: TRUE`. Do **not** edit `dev/bench/`,
+`density_baseline.{txt,rds}`, `TOL_SQFT`, the municipality, or the deduction layer.
+(The compliance bench treats `precompute_spatial_attributes` as fixed input; here
+it is the thing under test — the two scopes, station vs. density overlap, are
+disjoint.)
+
+See `DENSITY_HOTSPOTS.md`: 95% of the time is one line —
+`st_intersection(parcels, st_union(deductions))` intersects every parcel against
+one unioned statewide multipolygon, defeating the spatial index. A bounding-box
+prefilter (`st_intersects` / `st_filter`) before the heavy intersection is the
+dominant lever; the per-parcel areas come out identical up to the 1-sqft
+tolerance.
