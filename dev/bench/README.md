@@ -1,7 +1,22 @@
+# Speed benches
+
+Fixed-input, bit-identical benchmarks for **behavior-preserving** speedups, each
+built to drive a `/goal` loop (see "Using with `/goal`"). Two live here:
+
+- **`speed_bench.R`** — the parcel MCMC sampler (fixed seed; profile in
+  `HOTSPOTS.md`; reference in `baseline.txt`).
+- **`compliance_bench.R`** — the compliance-engine batch path
+  `evaluate_compliance(precomputed = TRUE)` (RNG-free; profile in
+  `COMPLIANCE_HOTSPOTS.md`; reference in `compliance_baseline.txt`). See
+  "Compliance batch bench" below.
+
+Both print the same fields and obey the same rule: a correct optimization
+**lowers ELAPSED while keeping OUTPUT_HASH equal to the baseline**.
+
 # MCMC speed bench
 
 A fixed-seed, bit-identical benchmark for **behavior-preserving** speedups of the
-parcel MCMC sampler. Built to drive a `/goal` loop (see "Using with `/goal`").
+parcel MCMC sampler.
 
 ## What it does
 
@@ -73,3 +88,56 @@ Set a goal whose condition embeds the baseline numbers and forbids the frozen
 knobs. The condition is the authoritative source for the target time and the
 baseline hash; the evaluator reads the bench output against it. Example lives in
 the project notes / paste it from the session that set this up.
+
+# Compliance batch bench
+
+A fixed-input, bit-identical benchmark for **behavior-preserving** speedups of the
+compliance-engine batch-evaluation path. This is the workflow the package
+documents for evaluating thousands of zoning-parameter combinations on one
+municipality: pre-compute spatial attributes once, then call
+`evaluate_compliance(..., precomputed = TRUE)` per parameter set.
+
+## What it does
+
+`compliance_bench.R` loads one municipality once (Cambridge, 12,867 parcels),
+pre-computes the cheap station-area overlap once, then times **60 evaluations**
+over a **fixed, deterministic grid** of zoning-parameter sets and runs the whole
+batch **twice**. It prints the same `ELAPSED / OUTPUT_HASH / DETERMINISTIC /
+HASH_MATCH / SPEEDUP` block as the MCMC bench.
+
+Unlike the MCMC sampler, this path draws **no random numbers** — so the gate is
+even simpler: there is no draw-sequence to preserve, only the requirement that the
+computed numbers don't change. `DETERMINISTIC: TRUE` (both runs hash equal) still
+guards against an optimization that accidentally introduces nondeterminism (e.g.
+parallelism, hash-map iteration order).
+
+Density deductions are deliberately **not** pre-computed: the gross-density
+denominator is a single `sum()` either way, so skipping the ~12-minute density
+`st_intersection` keeps the timed loop pure arithmetic (the optimization target)
+and the setup fast. The denominator falls back to total area, which does not change
+what the bench measures.
+
+## Usage
+
+```bash
+Rscript dev/bench/compliance_bench.R            # measure, compare to compliance_baseline.txt
+Rscript dev/bench/compliance_bench.R --capture  # (re)write compliance_baseline.txt from current code
+```
+
+## The fence: which optimizations this gate allows
+
+Only changes that keep the computed values bit-identical. The target is the
+per-iteration compute path:
+
+- `R/compliance_pipeline.R` (`evaluate_compliance`, `calculate_district_capacity`)
+- `R/unit_capacity_calculations.R` (the 18 `calculate_*` functions)
+- `precomputed = TRUE` branches of `R/gis_operations.R`, if needed
+
+Do **not** edit the one-time setup functions — `load_municipality()`,
+`precompute_spatial_attributes()`, `load_transit_stations()`,
+`create_zoning_parameters()` — they are the bench's fixed input, not the thing
+under test. Do not edit `dev/bench/`, `compliance_baseline.txt`, `N_ITERS`, the
+municipality, or the parameter grid while a goal is active.
+
+See `COMPLIANCE_HOTSPOTS.md` for the profile: ~85% of the time is one line —
+subsetting the full sf (with geometry) when only numeric columns are needed.

@@ -1,0 +1,5 @@
+baseline_hash=f1863cb592a4a710c694b5e3ad62d5ba
+baseline_elapsed=18.308
+municipality=Cambridge
+n_iters=60
+git_commit=34a8206
