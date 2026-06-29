@@ -937,6 +937,10 @@ run_bfs_lcc_supplement <- function(
 
   discovered_list <- list()
 
+  # Precompute integer-indexed BFS context once (graph/metric/eligible constant
+  # across the sampling loop; only seed_pool varies). Behavior-identical.
+  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_parcels)
+
   if (verbose) {
     cli::cli_progress_bar(
       "BFS LCC exploration",
@@ -987,10 +991,8 @@ run_bfs_lcc_supplement <- function(
       # BFS grow toward target capacity (using eligible parcels to exclude forbidden)
       result <- tryCatch(
         bfs_grow_block(
-          graph = parcel_graph,
-          metric_lookup = capacity_lookup,
+          ctx = bfs_ctx,
           seed_pool = start_parcel,
-          eligible_pool = eligible_parcels,
           target_min = min_lcc_capacity,
           target_exact = target_capacity
         ),
@@ -1183,6 +1185,10 @@ discover_lccs_single_band <- function(
     assign(key, TRUE, envir = lcc_hash)
   }
 
+  # Precompute integer-indexed BFS context once (seed_pool/eligible_pool constant
+  # across this band's sampling loop). Behavior-identical to per-call igraph use.
+  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_parcels)
+
   # Per-band BFS discovery
   band_attempts <- 0L
   band_found <- 0L
@@ -1208,10 +1214,8 @@ discover_lccs_single_band <- function(
 
     result <- tryCatch(
       bfs_grow_block(
-        graph = parcel_graph,
-        metric_lookup = capacity_lookup,
+        ctx = bfs_ctx,
         seed_pool = dense_seeds,
-        eligible_pool = eligible_parcels,
         target_min = cap_low,
         target_exact = target_capacity,
         target_max = cap_high,
@@ -1763,23 +1767,33 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     selected$source else rep("tree_discovered", n_blocks)
   spectral_regions <- rep(NA_character_, n_blocks)
 
+  # Map each block's parcel names to integer vertex ids ONCE (order-preserving
+  # match), then index id-keyed attribute vectors. This replaces four separate
+  # character V(graph)[pids]$attr subsets per block with one match per block;
+  # summation/averaging order is unchanged, so values are bit-identical.
+  blocks_idx <- lapply(blocks, parcel_ids_to_indices, parcel_names = all_parcels)
+  area_in_station_v     <- igraph::V(parcel_graph)$area_in_station
+  capacity_in_station_v <- igraph::V(parcel_graph)$capacity_in_station
+  centroid_x_v          <- igraph::V(parcel_graph)$centroid_x
+  centroid_y_v          <- igraph::V(parcel_graph)$centroid_y
+
   # Compute station metrics for station constraint pre-filtering in replace-LCC
-  area_in_station <- vapply(blocks, function(pids)
-    sum(igraph::V(parcel_graph)[pids]$area_in_station), numeric(1))
-  capacity_in_station <- vapply(blocks, function(pids)
-    sum(igraph::V(parcel_graph)[pids]$capacity_in_station), numeric(1))
+  area_in_station <- vapply(blocks_idx, function(ix)
+    sum(area_in_station_v[ix]), numeric(1))
+  capacity_in_station <- vapply(blocks_idx, function(ix)
+    sum(capacity_in_station_v[ix]), numeric(1))
 
   # Compute centroids for max-min seed selection in chain initialisation
-  centroid_x <- vapply(blocks, function(pids)
-    mean(igraph::V(parcel_graph)[pids]$centroid_x), numeric(1))
-  centroid_y <- vapply(blocks, function(pids)
-    mean(igraph::V(parcel_graph)[pids]$centroid_y), numeric(1))
+  centroid_x <- vapply(blocks_idx, function(ix)
+    mean(centroid_x_v[ix]), numeric(1))
+  centroid_y <- vapply(blocks_idx, function(ix)
+    mean(centroid_y_v[ix]), numeric(1))
 
   metadata <- data.table::data.table(
     block_id            = seq_len(n_blocks),
     area                = selected$area,
     capacity            = selected$capacity,
-    n_parcels           = vapply(blocks, length, integer(1)),
+    n_parcels           = vapply(blocks_idx, length, integer(1)),
     size_band           = "tree_discovered",
     density             = selected$capacity / selected$area,
     source              = block_sources,
@@ -1790,15 +1804,12 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     centroid_y          = centroid_y
   )
 
-  # Store blocks as integer indices into parcel_names
-  blocks <- lapply(blocks, parcel_ids_to_indices, parcel_names = all_parcels)
+  # Store blocks as integer indices into parcel_names (reuse the map built above)
+  blocks <- blocks_idx
 
   cli::cli_alert_info("Building neighbor indices ({n_blocks} blocks)...")
   cli::cli_alert_info("  Precomputing neighbor cache ({length(all_parcels)} parcels)...")
-  neighbor_cache <- setNames(
-    lapply(all_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-    all_parcels
-  )
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
 
   cli::cli_alert_info("  Building neighbor indices with cached neighbors...")
   neighbor_indices <- vector("list", n_blocks)
@@ -1989,10 +2000,7 @@ build_secondary_library_from_discovery <- function(
   # Build neighbor indices
   cli::cli_alert_info("Building neighbor indices ({n_blocks} blocks)...")
 
-  neighbor_cache <- setNames(
-    lapply(all_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-    all_parcels
-  )
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
 
   neighbor_indices <- vector("list", n_blocks)
   for (i in seq_len(n_blocks)) {

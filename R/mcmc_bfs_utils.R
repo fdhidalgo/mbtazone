@@ -3,11 +3,202 @@
 # Consolidated BFS functionality for growing connected blocks/components
 # Used by parcel library construction and parcel clustering
 
+#' Materialize a graph's adjacency as ascending-sorted integer node ids
+#'
+#' One \code{igraph::as_adj_list()} C call for the whole graph (~17x cheaper than
+#' \code{n} per-vertex \code{igraph::neighbors()} calls), with each vertex's
+#' neighbor ids sorted ascending. For a graph whose vertex ids are \code{1:n} in
+#' \code{igraph::V(graph)$name} order, element \code{i} equals
+#' \code{as.integer(igraph::neighbors(graph, i))} and, mapped through names,
+#' reproduces \code{igraph::neighbors(graph, name_i)$name} exactly (verified
+#' bit-for-bit). Callers depend on that order: it fixes the BFS frontier order
+#' (and thus every \code{sample.int()} draw) and the neighbor-index layout, so it
+#' must not change.
+#'
+#' @param graph igraph object with named vertices
+#' @return Unnamed list; element \code{i} is the ascending integer neighbor ids
+#'   of vertex \code{i}.
+#' @keywords internal
+sorted_adj_int <- function(graph) {
+  unname(lapply(igraph::as_adj_list(graph, mode = "all"),
+                function(x) sort(as.integer(x))))
+}
+
+#' Build a name-keyed cache of each vertex's neighbor names
+#'
+#' Equivalent to \code{setNames(lapply(V(graph)$name, function(m)
+#' igraph::neighbors(graph, m)$name), V(graph)$name)} but built from a single
+#' \code{\link{sorted_adj_int}} pass. Order within each entry matches
+#' \code{neighbors()$name} (ascending vertex id), which downstream
+#' neighbor-index construction relies on.
+#'
+#' @param graph igraph object with named vertices
+#' @return Named list keyed by vertex name; each element is the neighbor names.
+#' @keywords internal
+build_neighbor_cache <- function(graph) {
+  node_names <- igraph::V(graph)$name
+  setNames(lapply(sorted_adj_int(graph), function(ids) node_names[ids]),
+           node_names)
+}
+
+#' Build a reusable integer-indexed BFS context for a parcel graph
+#'
+#' Precomputes, once per graph, the integer adjacency list (\code{adj_int}, via
+#' \code{\link{sorted_adj_int}}) plus an id-ordered metric vector and an
+#' eligibility mask. \code{bfs_grow_block()} can then run entirely on integer set
+#' ops instead of repeating igraph C-calls and character \code{intersect}/
+#' \code{setdiff}/\code{unique} on every BFS step. Because \code{adj_int}
+#' reproduces \code{neighbors()} order exactly, the frontier order — and every
+#' \code{sample.int()} draw — is unchanged from the character path.
+#'
+#' @param graph igraph object with named vertices
+#' @param metric_lookup Named numeric vector (area or capacity per node name)
+#' @param eligible_pool Character vector of nodes eligible for expansion
+#'   (NULL = all vertices)
+#' @return List with \code{node_names}, \code{id_of} (named integer name->id),
+#'   \code{adj_int} (list of integer neighbor-id vectors), \code{n},
+#'   \code{metric_by_id} (numeric, id-ordered), \code{eligible_mask} (logical,
+#'   id-ordered).
+#' @keywords internal
+bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL) {
+  node_names <- igraph::V(graph)$name
+  n <- length(node_names)
+
+  id_of <- seq_len(n)
+  names(id_of) <- node_names
+
+  adj_int <- sorted_adj_int(graph)
+
+  # Metric aligned to node-id order (values identical to metric_lookup[name]).
+  metric_by_id <- as.numeric(metric_lookup[node_names])
+
+  if (is.null(eligible_pool)) {
+    eligible_mask <- rep(TRUE, n)
+  } else {
+    eligible_mask <- logical(n)
+    eids <- id_of[eligible_pool]
+    eids <- eids[!is.na(eids)]
+    eligible_mask[eids] <- TRUE
+  }
+
+  list(
+    node_names    = node_names,
+    id_of         = id_of,
+    adj_int       = adj_int,
+    n             = n,
+    metric_by_id  = metric_by_id,
+    eligible_mask = eligible_mask
+  )
+}
+
+#' Grow a connected block via randomized BFS (integer fast path)
+#'
+#' Integer-indexed reimplementation of the \code{bfs_grow_block()} inner loop
+#' that operates on a precomputed \code{\link{bfs_build_context}} object. It
+#' reproduces the character-vector implementation exactly — same frontier order,
+#' same \code{sample.int()} draw sequence, same returned block — but replaces the
+#' per-step \code{igraph::neighbors()} calls and character \code{setdiff}/
+#' \code{intersect}/\code{unique} with integer lookups and logical-mask filters.
+#'
+#' @param ctx A context from \code{\link{bfs_build_context}}
+#' @param seed_pool Character vector of eligible seed nodes (NULL = all vertices)
+#' @param target_min Minimum metric threshold to reach
+#' @param target_max Maximum metric threshold (optional, for pre-add rejection)
+#' @param target_exact Optional exact target to grow toward
+#' @param check_max_before_add Logical: if TRUE, reject additions exceeding target_max
+#' @return Same list shape as \code{\link{bfs_grow_block}}
+#' @keywords internal
+bfs_grow_block_ctx <- function(ctx,
+                               seed_pool = NULL,
+                               target_min,
+                               target_max = Inf,
+                               target_exact = NULL,
+                               check_max_before_add = FALSE) {
+  node_names    <- ctx$node_names
+  id_of         <- ctx$id_of
+  adj_int       <- ctx$adj_int
+  n             <- ctx$n
+  metric_by_id  <- ctx$metric_by_id
+  eligible_mask <- ctx$eligible_mask
+
+  # valid_seeds <- intersect(seed_pool, eligible_pool): keep seed_pool order,
+  # filter to eligible, then dedup (intersect applies unique last).
+  if (is.null(seed_pool)) {
+    seed_ids <- seq_len(n)
+  } else {
+    seed_ids <- unname(id_of[seed_pool])
+    seed_ids <- seed_ids[!is.na(seed_ids)]
+  }
+  seed_ids <- seed_ids[eligible_mask[seed_ids]]
+  seed_ids <- seed_ids[!duplicated(seed_ids)]
+  if (length(seed_ids) == 0) {
+    stop("bfs_grow_block: No valid seeds (seed_pool and eligible_pool are disjoint or empty)")
+  }
+
+  effective_target <- if (!is.null(target_exact)) target_exact else target_min
+
+  # Select random seed (sample.int + index to avoid sample(n,1) gotcha).
+  seed_id <- seed_ids[sample.int(length(seed_ids), 1)]
+  in_block <- logical(n)
+  in_block[seed_id] <- TRUE
+  block_ids <- seed_id
+  current_metric <- metric_by_id[seed_id]
+
+  # Initial frontier: setdiff(neighbors(seed), seed) then intersect(., eligible).
+  fr <- adj_int[[seed_id]]
+  fr <- fr[!duplicated(fr)]
+  fr <- fr[fr != seed_id]
+  fr <- fr[eligible_mask[fr]]
+
+  while (length(fr) > 0 && current_metric < effective_target) {
+    next_id <- fr[sample.int(length(fr), 1)]
+    next_metric <- metric_by_id[next_id]
+
+    # Pre-add max check (for cluster_parcels_to_units pattern)
+    if (check_max_before_add && (current_metric + next_metric > target_max)) {
+      fr <- fr[fr != next_id]
+      next
+    }
+
+    # Add node to block
+    block_ids <- c(block_ids, next_id)
+    in_block[next_id] <- TRUE
+    current_metric <- current_metric + next_metric
+
+    # Remove just next_id from frontier
+    fr <- fr[fr != next_id]
+
+    # New neighbors: setdiff(., current_block) then intersect(., eligible)
+    nb <- adj_int[[next_id]]
+    nb <- nb[!duplicated(nb)]
+    nb <- nb[!in_block[nb]]
+    nb <- nb[eligible_mask[nb]]
+    if (length(nb)) {
+      fr <- c(fr, nb)
+      fr <- fr[!duplicated(fr)]
+    }
+  }
+
+  list(
+    block = node_names[block_ids],
+    metric_total = unname(current_metric),
+    success = (current_metric >= target_min),
+    seed = node_names[seed_id]
+  )
+}
+
 #' Grow a connected block via randomized BFS
 #'
 #' Generic BFS region-growing that supports various termination conditions
 #' and frontier filters. Consolidates multiple BFS patterns used across
 #' the codebase for block/component generation.
+#'
+#' When a precomputed \code{ctx} (from \code{\link{bfs_build_context}}) is
+#' supplied, the work is delegated to the integer fast path
+#' \code{\link{bfs_grow_block_ctx}}, which is behavior-identical but avoids the
+#' per-step igraph neighbor lookups and character set ops. Callers in a tight
+#' sampling loop should build the context once and pass it on every call. When
+#' \code{ctx} is NULL the original character-vector implementation runs unchanged.
 #'
 #' @param graph igraph object with named vertices
 #' @param metric_lookup Named numeric vector (area or capacity per node)
@@ -17,6 +208,9 @@
 #' @param target_max Maximum metric threshold (optional, for pre-add rejection)
 #' @param target_exact Optional exact target to grow toward (overrides target_min for termination)
 #' @param check_max_before_add Logical: if TRUE, reject additions that would exceed target_max
+#' @param ctx Optional precomputed \code{\link{bfs_build_context}} object. When
+#'   supplied, \code{graph}, \code{metric_lookup} and \code{eligible_pool} are
+#'   ignored (they are baked into the context).
 #' @return List with:
 #'   - block: character vector of node IDs in grown block
 #'   - metric_total: final metric sum
@@ -30,7 +224,19 @@ bfs_grow_block <- function(graph,
                            target_min,
                            target_max = Inf,
                            target_exact = NULL,
-                           check_max_before_add = FALSE) {
+                           check_max_before_add = FALSE,
+                           ctx = NULL) {
+
+  if (!is.null(ctx)) {
+    return(bfs_grow_block_ctx(
+      ctx                  = ctx,
+      seed_pool            = seed_pool,
+      target_min           = target_min,
+      target_max           = target_max,
+      target_exact         = target_exact,
+      check_max_before_add = check_max_before_add
+    ))
+  }
 
   all_nodes <- igraph::V(graph)$name
 
