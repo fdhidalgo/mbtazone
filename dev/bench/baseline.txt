@@ -1,0 +1,6 @@
+baseline_hash=622d9c8b520b0bd0b37f4ac66276dd5a
+baseline_elapsed=16.516
+store=_targets_Topsfield
+seed=42
+steps=2000
+git_commit=b5d76d2
