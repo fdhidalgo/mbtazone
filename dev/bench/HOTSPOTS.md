@@ -32,3 +32,29 @@ overhead, not algorithm. The `vapply` alone (~39% self) plus the per-step `proc.
 (~9.6%) are the two fattest, safest targets. Fixing the `vapply` and the timing should
 reach ≈1.6×; adding the data.table ordering and the consequent GC reduction makes
 ≈1.8–2× plausible. The 25% milestone (1.33×) is conservative.
+
+## Going further: structural Class A wins (needed for >2×)
+
+The line-level fixes above are constant-factor. Capturing **everything** the current
+profile sees bottoms out around 3.5–4s (~4×). To go beyond that, attack the
+*recomputation itself*, not its constant — these are still bit-identical (same values,
+zero RNG), so `OUTPUT_HASH` must stay constant; verify with the bench after each.
+
+1. **Precompute & cache per-library-LCC neighbor structures (biggest lever).**
+   `replace_lcc_move` selects an LCC from the **fixed** LCC library. The per-parcel
+   neighbor-in-LCC counts `reset_to_lcc` rebuilds are a pure function of (library LCC,
+   graph) — independent of chain state. Compute them **once per library entry** (at
+   library build/hydrate) and have `reset_to_lcc` look them up for library LCCs instead
+   of recomputing. Near-eliminates the ~39%-self loop on the path that is 50% of runtime.
+   Check the callers of `reset_to_lcc`: the lookup applies to library LCCs (the replace
+   path); non-library LCCs still need the fast vectorized rebuild from item 1 above.
+
+2. **Cache the data.table ordering (18%) and the igraph subgraph (7.5%)** keyed by LCC
+   id in the same library cache — both are invariant per LCC across proposals.
+
+3. **Re-profile after 1–2 land.** The hotspot will shift to the core step logic
+   (MH-ratio, proposal draws, state updates). That is closer to the Class A floor — the
+   irreducible cost of executing the same N steps — so expect diminishing returns there.
+
+Rough ceiling: items 1–2 make ~3–4× plausible; 5×+ (≤3.3s) requires those *plus* wins
+in the core step logic and is a genuine stretch within the Class A fence.
