@@ -484,11 +484,19 @@ lcc_local_move <- function(
     idx      <- sample.int(n_in, 1, prob = fwd_probs)
     selected <- B_in[idx]
 
-    # Check LCC would remain connected
+    # Check LCC would remain connected after removing `selected`. Build the
+    # remaining membership mask by clearing one bit of the maintained
+    # lcc_logical (avoids re-deriving indices for the whole remaining set);
+    # lcc_is_connected() handles the BFS fast path and igraph fallback.
     remaining_lcc <- setdiff(state$lcc_parcels, selected)
     if (length(remaining_lcc) > 0) {
-      sub <- igraph::induced_subgraph(parcel_graph, remaining_lcc)
-      if (!igraph::is_connected(sub)) {
+      rem_logical <- NULL
+      if (!is.null(neighbor_idx) && !is.null(state$lcc_logical)) {
+        rem_logical <- state$lcc_logical
+        sel_idx <- match(selected, library$parcel_names)
+        if (!is.na(sel_idx)) rem_logical[sel_idx] <- FALSE
+      }
+      if (!lcc_is_connected(rem_logical, remaining_lcc, neighbor_idx, parcel_graph)) {
         return(list(
           new_state = state,
           accepted = FALSE,
@@ -1552,7 +1560,10 @@ replace_lcc_move <- function(
   parcel_graph,
   constraints,
   neighbor_idx = NULL,
-  parcel_names = NULL
+  parcel_names = NULL,
+  nbr_from = NULL,
+  nbr_to = NULL,
+  lcc_state_cache = NULL
 ) {
   n_candidates <- lcc_library$n_blocks
 
@@ -1758,13 +1769,19 @@ replace_lcc_move <- function(
   }
 
   # Step 4: Build new state (keep ALL secondaries)
-  # Note: Compatibility already verified by prefiltering similar_ids above
-  new_state <- reset_to_lcc(
+  # Note: Compatibility already verified by prefiltering similar_ids above.
+  # The secondary-free LCC-only state is invariant per library LCC id, so it is
+  # cached and reused across proposals (see get_or_build_lcc_state()).
+  new_state <- get_or_build_lcc_state(
+    new_lcc_id,
     new_lcc_parcels,
     secondary_library,
     parcel_graph,
     neighbor_idx,
-    parcel_names
+    parcel_names,
+    nbr_from,
+    nbr_to,
+    lcc_state_cache
   )
   for (bid in current_secondary_ids) {
     new_state <- add_secondary_block(

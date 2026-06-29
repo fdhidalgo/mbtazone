@@ -58,8 +58,19 @@ get_lcc_parcels <- function(state, library) {
 #' @param parcel_graph igraph object
 #' @return Integer capacity
 get_lcc_capacity <- function(state, library, parcel_graph) {
+  cap_vec <- library$cap_vec
+  # Fastest path: sum precomputed capacities over the maintained LCC membership
+  # mask (no setdiff over names, no per-name hash lookups). Same parcel set, so
+  # the same sum as get_lcc_parcels() + igraph lookup.
+  if (!is.null(cap_vec) && !is.null(state$lcc_logical)) {
+    if (!any(state$lcc_logical)) return(0L)
+    return(sum(cap_vec[state$lcc_logical]))
+  }
   lcc <- get_lcc_parcels(state, library)
   if (length(lcc) == 0) return(0L)
+  if (!is.null(cap_vec)) {
+    return(sum(cap_vec[parcel_ids_to_indices(lcc, library$parcel_names)]))
+  }
   sum(igraph::V(parcel_graph)[lcc]$capacity)
 }
 
@@ -129,6 +140,35 @@ add_secondary_union_fields <- function(state, library) {
 # STATE INITIALIZATION
 # ============================================================================
 
+#' Sum overlay parcel attributes (capacity, area, station capacity/area)
+#'
+#' Centralizes the precomputed-vector fast path (integer indexing into the
+#' library's attribute vectors) and the igraph fallback used when those vectors
+#' are absent. Both paths sum the same parcels, so the results are identical.
+#'
+#' @param indices Library-indexed integer indices of the parcels.
+#' @param parcels Character parcel ids (used only for the igraph fallback).
+#' @param library Secondary library (carries cap_vec/area_vec/... when present).
+#' @param parcel_graph igraph object (fallback attribute source).
+#' @return List with capacity, area, capacity_in_station, area_in_station.
+#' @keywords internal
+overlay_attr_sums <- function(indices, parcels, library, parcel_graph) {
+  if (!is.null(library$cap_vec)) {
+    return(list(
+      capacity = sum(library$cap_vec[indices]),
+      area = sum(library$area_vec[indices]),
+      capacity_in_station = sum(library$cap_station_vec[indices]),
+      area_in_station = sum(library$area_station_vec[indices])
+    ))
+  }
+  list(
+    capacity = sum(igraph::V(parcel_graph)[parcels]$capacity),
+    area = sum(igraph::V(parcel_graph)[parcels]$area),
+    capacity_in_station = sum(igraph::V(parcel_graph)[parcels]$capacity_in_station),
+    area_in_station = sum(igraph::V(parcel_graph)[parcels]$area_in_station)
+  )
+}
+
 #' Initialize parcel MCMC state
 #'
 #' Creates a state from a set of parcel IDs. Secondaries must be specified
@@ -177,11 +217,13 @@ initialize_parcel_state <- function(parcel_ids,
     ))
   }
 
-  # Compute aggregates from deduplicated parcel_ids
-  total_capacity <- sum(igraph::V(parcel_graph)[parcel_ids]$capacity)
-  total_area <- sum(igraph::V(parcel_graph)[parcel_ids]$area)
-  total_capacity_in_station <- sum(igraph::V(parcel_graph)[parcel_ids]$capacity_in_station)
-  total_area_in_station <- sum(igraph::V(parcel_graph)[parcel_ids]$area_in_station)
+  # Compute aggregates from deduplicated parcel_ids (X_indices are library-indexed,
+  # the same set as parcel_ids, so the sums are identical to an igraph lookup).
+  agg <- overlay_attr_sums(X_indices, parcel_ids, library, parcel_graph)
+  total_capacity <- agg$capacity
+  total_area <- agg$area
+  total_capacity_in_station <- agg$capacity_in_station
+  total_area_in_station <- agg$area_in_station
 
   # Derive LCC
   sec_parcels <- if (length(secondary_block_ids) > 0) {
@@ -561,14 +603,16 @@ add_secondary_block <- function(state, block_id_to_add, library, parcel_graph,
   new_X <- c(state$X, block_parcels)
   new_secondary_blocks <- c(state$secondary_blocks, block_id_to_add)
 
-  # All block parcels are added (no overlap)
-  added_capacity <- sum(igraph::V(parcel_graph)[block_parcels]$capacity)
-  added_area <- sum(igraph::V(parcel_graph)[block_parcels]$area)
-  added_capacity_in_station <- sum(igraph::V(parcel_graph)[block_parcels]$capacity_in_station)
-  added_area_in_station <- sum(igraph::V(parcel_graph)[block_parcels]$area_in_station)
-
   # Update X_indices
   block_indices <- library$blocks[[block_id_to_add]]
+
+  # All block parcels are added (no overlap), so block_indices and block_parcels
+  # describe the same set -> identical attribute sums.
+  added <- overlay_attr_sums(block_indices, block_parcels, library, parcel_graph)
+  added_capacity <- added$capacity
+  added_area <- added$area
+  added_capacity_in_station <- added$capacity_in_station
+  added_area_in_station <- added$area_in_station
   new_X_indices <- sort(union(state$X_indices, block_indices))
 
   new_state <- list(
@@ -613,8 +657,7 @@ add_secondary_block <- function(state, block_id_to_add, library, parcel_graph,
     new_X_logical <- state$X_logical
     new_X_counts <- state$X_neighbor_counts
 
-    # Mark all block parcels as in X
-    block_indices <- library$blocks[[block_id_to_add]]
+    # Mark all block parcels as in X (block_indices computed above)
     new_X_logical[block_indices] <- TRUE
 
     # Update X neighbor counts for all added parcels
@@ -668,14 +711,16 @@ remove_secondary_block <- function(state, block_id_to_remove, library, parcel_gr
   # non-adjacent to LCC) and not in other secondaries (mutual disjointness).
   new_X <- setdiff(state$X, block_parcels)
 
-  # Compute capacity/area delta from removed parcels
-  removed_capacity <- sum(igraph::V(parcel_graph)[block_parcels]$capacity)
-  removed_area <- sum(igraph::V(parcel_graph)[block_parcels]$area)
-  removed_capacity_in_station <- sum(igraph::V(parcel_graph)[block_parcels]$capacity_in_station)
-  removed_area_in_station <- sum(igraph::V(parcel_graph)[block_parcels]$area_in_station)
-
   # Update X_indices
   block_indices <- library$blocks[[block_id_to_remove]]
+
+  # Compute capacity/area delta from removed parcels (block_indices and
+  # block_parcels describe the same set -> identical attribute sums).
+  removed <- overlay_attr_sums(block_indices, block_parcels, library, parcel_graph)
+  removed_capacity <- removed$capacity
+  removed_area <- removed$area
+  removed_capacity_in_station <- removed$capacity_in_station
+  removed_area_in_station <- removed$area_in_station
   new_X_indices <- setdiff(state$X_indices, block_indices)
 
   new_state <- list(
@@ -775,9 +820,26 @@ remove_secondary_block <- function(state, block_id_to_remove, library, parcel_gr
 #' @return Updated state
 update_lcc <- function(state, unit_id, action, library, parcel_graph,
                         neighbor_idx = NULL) {
-  parcel_capacity <- igraph::V(parcel_graph)[unit_id]$capacity
-  parcel_area <- igraph::V(parcel_graph)[unit_id]$area
   parcel_names <- library$parcel_names
+
+  # Resolve the toggled parcel's library index once and reuse it for attribute
+  # lookups, X_indices maintenance, and the logical/count updates below (avoids
+  # repeated O(n) name scans and igraph hash lookups per lcc_local move).
+  unit_idx <- match(unit_id, parcel_names)
+
+  # Per-parcel attributes: prefer precomputed integer-indexed vectors (identical
+  # values to the igraph attribute lookups) and fall back to igraph otherwise.
+  if (!is.null(library$cap_vec) && !is.na(unit_idx)) {
+    parcel_capacity <- library$cap_vec[unit_idx]
+    parcel_area <- library$area_vec[unit_idx]
+    parcel_cap_station <- library$cap_station_vec[unit_idx]
+    parcel_area_station <- library$area_station_vec[unit_idx]
+  } else {
+    parcel_capacity <- igraph::V(parcel_graph)[unit_id]$capacity
+    parcel_area <- igraph::V(parcel_graph)[unit_id]$area
+    parcel_cap_station <- igraph::V(parcel_graph)[unit_id]$capacity_in_station
+    parcel_area_station <- igraph::V(parcel_graph)[unit_id]$area_in_station
+  }
 
   # INVARIANT checks
   if (action == "add") {
@@ -792,8 +854,9 @@ update_lcc <- function(state, unit_id, action, library, parcel_graph,
     new_lcc <- c(state$lcc_parcels, unit_id)
     new_capacity <- state$total_capacity + parcel_capacity
     new_area <- state$total_area + parcel_area
-    new_capacity_in_station <- state$total_capacity_in_station + igraph::V(parcel_graph)[unit_id]$capacity_in_station
-    new_area_in_station <- state$total_area_in_station + igraph::V(parcel_graph)[unit_id]$area_in_station
+    new_capacity_in_station <- state$total_capacity_in_station + parcel_cap_station
+    new_area_in_station <- state$total_area_in_station + parcel_area_station
+    new_X_indices <- sort(union(state$X_indices, unit_idx))
   } else {
     if (!unit_id %in% state$X) {
       stop(sprintf(
@@ -806,15 +869,8 @@ update_lcc <- function(state, unit_id, action, library, parcel_graph,
     new_lcc <- setdiff(state$lcc_parcels, unit_id)
     new_capacity <- state$total_capacity - parcel_capacity
     new_area <- state$total_area - parcel_area
-    new_capacity_in_station <- state$total_capacity_in_station - igraph::V(parcel_graph)[unit_id]$capacity_in_station
-    new_area_in_station <- state$total_area_in_station - igraph::V(parcel_graph)[unit_id]$area_in_station
-  }
-
-  # Update X_indices
-  unit_idx <- parcel_ids_to_indices(unit_id, parcel_names)
-  if (action == "add") {
-    new_X_indices <- sort(union(state$X_indices, unit_idx))
-  } else {
+    new_capacity_in_station <- state$total_capacity_in_station - parcel_cap_station
+    new_area_in_station <- state$total_area_in_station - parcel_area_station
     new_X_indices <- setdiff(state$X_indices, unit_idx)
   }
 
@@ -843,7 +899,7 @@ update_lcc <- function(state, unit_id, action, library, parcel_graph,
 
   # Incremental update of logical vectors and counts if available
   if (!is.null(state$lcc_logical) && !is.null(neighbor_idx)) {
-    idx <- which(parcel_names == unit_id)
+    idx <- unit_idx
     nbr_indices <- neighbor_idx[[unit_id]]
 
     # Copy and update logical vectors
@@ -887,9 +943,14 @@ update_lcc <- function(state, unit_id, action, library, parcel_graph,
 #' @param parcel_graph igraph object
 #' @param neighbor_idx List of integer neighbor indices (for incremental tracking)
 #' @param parcel_names Character vector of all parcel names (for incremental tracking)
+#' @param nbr_from,nbr_to Optional flat integer edge arrays (library-indexed) used
+#'   to compute neighbor-in-LCC counts in a single vectorized \code{tabulate} pass
+#'   instead of a per-parcel \code{vapply}. Both must be supplied together; they are
+#'   derived once from \code{neighbor_idx} (see \code{build_neighbor_edge_arrays()}).
 #' @return New state
 reset_to_lcc <- function(lcc_parcels, library, parcel_graph,
-                          neighbor_idx = NULL, parcel_names = NULL) {
+                          neighbor_idx = NULL, parcel_names = NULL,
+                          nbr_from = NULL, nbr_to = NULL) {
   new_state <- create_lcc_only_state(lcc_parcels, library, parcel_graph)
 
   # Initialize tracking fields if neighbor_idx provided
@@ -900,24 +961,31 @@ reset_to_lcc <- function(lcc_parcels, library, parcel_graph,
     n_parcels <- length(lib_parcel_names)
 
     # lcc_logical: TRUE if vertex is in LCC (indexed by library$parcel_names)
+    # Names are intentionally omitted: every downstream consumer indexes these
+    # vectors positionally/by integer, never by name (verified), and dropping
+    # names removes ~4 length-n allocations per reset.
     lcc_logical <- logical(n_parcels)
     lcc_logical[new_state$X_indices] <- TRUE  # Use X_indices for consistency
-    names(lcc_logical) <- lib_parcel_names
 
     # X_logical: same as lcc_logical (no secondaries yet)
     X_logical <- lcc_logical
 
-    # lcc_neighbor_counts: for each vertex, count neighbors in LCC
-    # Note: neighbor_idx is keyed by parcel names, not indices
-    lcc_neighbor_counts <- vapply(seq_along(lib_parcel_names), function(i) {
-      pname <- lib_parcel_names[i]
-      if (!is.null(neighbor_idx[[pname]])) {
-        sum(lcc_logical[neighbor_idx[[pname]]])
-      } else {
-        0L
-      }
-    }, integer(1))
-    names(lcc_neighbor_counts) <- lib_parcel_names
+    # lcc_neighbor_counts: for each vertex, count neighbors in LCC.
+    # Fast path: one vectorized tabulate over the precomputed edge list,
+    # numerically identical to the per-parcel vapply (exact integer counts).
+    if (!is.null(nbr_from) && !is.null(nbr_to)) {
+      lcc_neighbor_counts <- tabulate(nbr_from[lcc_logical[nbr_to]], nbins = n_parcels)
+    } else {
+      # Note: neighbor_idx is keyed by parcel names, not indices
+      lcc_neighbor_counts <- vapply(seq_along(lib_parcel_names), function(i) {
+        pname <- lib_parcel_names[i]
+        if (!is.null(neighbor_idx[[pname]])) {
+          sum(lcc_logical[neighbor_idx[[pname]]])
+        } else {
+          0L
+        }
+      }, integer(1))
+    }
 
     # X_neighbor_counts: same as lcc_neighbor_counts (no secondaries yet)
     X_neighbor_counts <- lcc_neighbor_counts
@@ -929,6 +997,62 @@ reset_to_lcc <- function(lcc_parcels, library, parcel_graph,
   }
 
   new_state
+}
+
+#' Build flat integer edge arrays from a name-keyed neighbor index list
+#'
+#' Converts the per-parcel neighbor index list into two parallel integer
+#' vectors (\code{from}, \code{to}) describing every directed adjacency edge in
+#' library indexing. These feed the vectorized \code{tabulate} neighbor-count
+#' path in \code{reset_to_lcc()}. Invariant for the whole run, so built once.
+#'
+#' @param neighbor_idx Named list (length n_parcels, library order) of integer
+#'   neighbor-index vectors.
+#' @param n_parcels Number of parcels (length of \code{neighbor_idx}).
+#' @return List with integer vectors \code{from} and \code{to}.
+#' @keywords internal
+build_neighbor_edge_arrays <- function(neighbor_idx, n_parcels) {
+  lens <- lengths(neighbor_idx)
+  list(
+    from = rep.int(seq_len(n_parcels), lens),
+    to   = unlist(neighbor_idx, use.names = FALSE)
+  )
+}
+
+#' Look up or build (and cache) the secondary-free LCC-only state for a library LCC
+#'
+#' The LCC-only state produced by \code{reset_to_lcc()} for a library LCC is a
+#' pure function of (LCC parcel set, secondary library, graph) and therefore
+#' invariant across MCMC proposals. Library block ids are monotonic and never
+#' reused (eviction only NULLs slots), so caching keyed by \code{lcc_id} is safe.
+#' This near-eliminates the dominant \code{reset_to_lcc} cost on the replace-LCC
+#' path for revisited LCCs.
+#'
+#' @param lcc_id Integer library block id of the LCC.
+#' @param lcc_parcels Character vector of the LCC's parcel ids.
+#' @param library Secondary library.
+#' @param parcel_graph igraph object.
+#' @param neighbor_idx,parcel_names,nbr_from,nbr_to Passed through to
+#'   \code{reset_to_lcc()} on a cache miss.
+#' @param cache An environment used as the id -> state store (or NULL to disable).
+#' @return The LCC-only state (cached object on a hit).
+#' @keywords internal
+get_or_build_lcc_state <- function(lcc_id, lcc_parcels, library, parcel_graph,
+                                   neighbor_idx = NULL, parcel_names = NULL,
+                                   nbr_from = NULL, nbr_to = NULL, cache = NULL) {
+  if (!is.null(cache)) {
+    key <- as.character(lcc_id)
+    cached <- cache[[key]]
+    if (!is.null(cached)) {
+      return(cached)
+    }
+    st <- reset_to_lcc(lcc_parcels, library, parcel_graph,
+                       neighbor_idx, parcel_names, nbr_from, nbr_to)
+    assign(key, st, envir = cache)
+    return(st)
+  }
+  reset_to_lcc(lcc_parcels, library, parcel_graph,
+               neighbor_idx, parcel_names, nbr_from, nbr_to)
 }
 
 # ============================================================================
@@ -1096,7 +1220,12 @@ validate_state_invariants <- function(
   }
 
   # --- Invariant 6: total_capacity equals sum over X ---
-  actual_capacity <- sum(igraph::V(parcel_graph)[state$X]$capacity)
+  use_vec <- !is.null(secondary_library$cap_vec)
+  actual_capacity <- if (use_vec) {
+    sum(secondary_library$cap_vec[state$X_indices])
+  } else {
+    sum(igraph::V(parcel_graph)[state$X]$capacity)
+  }
   if (abs(actual_capacity - state$total_capacity) > 1) {
     stop(sprintf(
       "Invariant violation%s: Capacity mismatch\n  Stored: %.0f, Actual: %.0f, Diff: %.0f",
@@ -1105,7 +1234,11 @@ validate_state_invariants <- function(
   }
 
   # --- Invariant 7: total_area equals sum over X ---
-  actual_area <- sum(igraph::V(parcel_graph)[state$X]$area)
+  actual_area <- if (use_vec) {
+    sum(secondary_library$area_vec[state$X_indices])
+  } else {
+    sum(igraph::V(parcel_graph)[state$X]$area)
+  }
   if (abs(actual_area - state$total_area) > 0.01) {
     stop(sprintf(
       "Invariant violation%s: Area mismatch\n  Stored: %.4f, Actual: %.4f, Diff: %.4f",

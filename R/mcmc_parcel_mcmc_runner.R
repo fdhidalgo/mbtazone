@@ -165,23 +165,33 @@ diagnose_lcc_feasibility <- function(lcc_library, parcel_graph, constraints) {
 #' Common stat-tracking pattern extracted to reduce code duplication.
 #' Updates n_attempted, n_proposed, n_feasible, n_accepted based on result.
 #'
-#' @param stats data.table with move statistics
+#' @param counts Environment of named integer counter vectors (n_attempted,
+#'   n_proposed, n_feasible, n_accepted), each keyed by move_type. Mutating an
+#'   environment field avoids data.table NSE overhead in the per-step hot loop;
+#'   the counts are materialized back into the \code{stats} data.table after the
+#'   loop. This is a pure diagnostic counter (does not affect RNG or samples).
 #' @param mt Character string identifying the move type
 #' @param result List returned by a move kernel
-#' @return Invisibly returns stats (modified by reference)
+#' @return Invisibly returns counts (modified by reference)
 #' @keywords internal
-update_move_stats <- function(stats, mt, result) {
-  stats[move_type == mt, n_attempted := n_attempted + 1L]
+update_move_stats <- function(counts, mt, result) {
+  # Mirror the original `stats[move_type == mt, ...]` semantics: an mt that is
+  # not a known move_type (e.g. lcc_local proposal-failures report "lcc_local",
+  # which has no stats row) is a silent no-op, not a new counter entry.
+  if (is.na(match(mt, names(counts$n_attempted)))) {
+    return(invisible(counts))
+  }
+  counts$n_attempted[mt] <- counts$n_attempted[mt] + 1L
   if (!isTRUE(result$proposal_failed)) {
-    stats[move_type == mt, n_proposed := n_proposed + 1L]
+    counts$n_proposed[mt] <- counts$n_proposed[mt] + 1L
   }
   if (!isTRUE(result$infeasible)) {
-    stats[move_type == mt, n_feasible := n_feasible + 1L]
+    counts$n_feasible[mt] <- counts$n_feasible[mt] + 1L
   }
   if (isTRUE(result$accepted)) {
-    stats[move_type == mt, n_accepted := n_accepted + 1L]
+    counts$n_accepted[mt] <- counts$n_accepted[mt] + 1L
   }
-  invisible(stats)
+  invisible(counts)
 }
 
 # ============================================================================
@@ -265,6 +275,37 @@ run_parcel_mcmc <- function(
     }
   })
   names(neighbor_idx) <- lib_parcel_names
+
+  # Flat integer edge arrays (library-indexed) for the vectorized neighbor-count
+  # path in reset_to_lcc(); invariant for the run, so built once here.
+  nbr_edges <- build_neighbor_edge_arrays(neighbor_idx, n_parcels)
+  nbr_from <- nbr_edges$from
+  nbr_to <- nbr_edges$to
+
+  # Expose the library-indexed parcel adjacency on the library so the LCC
+  # connectivity check (check_hard_constraints_only) can BFS over it instead of
+  # rebuilding an igraph induced subgraph each call.
+  secondary_library$neighbor_idx <- neighbor_idx
+
+  # Per-id cache of secondary-free LCC-only states for the replace-LCC kernel.
+  # Library block ids are monotonic and never reused, so caching is safe.
+  lcc_state_cache <- new.env(parent = emptyenv(), hash = TRUE, size = 1024L)
+
+  # Precompute per-parcel graph attributes as plain vectors indexed by library
+  # parcel order (== X_indices / blocks indexing). This replaces the many
+  # `igraph::V(parcel_graph)[names]$attr` hash-lookups scattered across the hot
+  # path (get_lcc_capacity, initialize_parcel_state, add/remove_secondary_block,
+  # validate_state_invariants, centroid tracking) with O(1) integer indexing.
+  # Values are bit-identical (same per-parcel attribute, same sums).
+  if (is.null(secondary_library$cap_vec)) {
+    sl_names <- secondary_library$parcel_names
+    secondary_library$cap_vec          <- igraph::V(parcel_graph)[sl_names]$capacity
+    secondary_library$area_vec         <- igraph::V(parcel_graph)[sl_names]$area
+    secondary_library$cap_station_vec  <- igraph::V(parcel_graph)[sl_names]$capacity_in_station
+    secondary_library$area_station_vec <- igraph::V(parcel_graph)[sl_names]$area_in_station
+    secondary_library$centroid_x_vec   <- igraph::V(parcel_graph)[sl_names]$centroid_x
+    secondary_library$centroid_y_vec   <- igraph::V(parcel_graph)[sl_names]$centroid_y
+  }
 
   # Augment initial_state with incremental boundary tracking fields
   # These enable O(d) boundary updates instead of O(N) full scans
@@ -503,6 +544,21 @@ run_parcel_mcmc <- function(
     count = 0L
   )
 
+  # Fast per-step diagnostic counters.
+  # The per-step hot loop updates these plain named-integer vectors / env fields
+  # instead of doing data.table NSE filter+`:=` updates (which dominated runtime).
+  # They are materialized back into the data.tables above after the loop. Pure
+  # diagnostics: never read inside the loop, never affect RNG or parcel_samples.
+  move_counts <- new.env(parent = emptyenv())
+  move_counts$n_attempted <- setNames(integer(length(move_types)), move_types)
+  move_counts$n_proposed  <- setNames(integer(length(move_types)), move_types)
+  move_counts$n_feasible  <- setNames(integer(length(move_types)), move_types)
+  move_counts$n_accepted  <- setNames(integer(length(move_types)), move_types)
+  acc_rl_reasons     <- setNames(integer(nrow(replace_lcc_reasons)), replace_lcc_reasons$reason)
+  acc_rl_constraints <- setNames(integer(nrow(replace_lcc_constraints)), replace_lcc_constraints$constraint)
+  acc_swap_reasons     <- setNames(integer(nrow(swap_reasons)), swap_reasons$reason)
+  acc_swap_constraints <- setNames(integer(nrow(swap_constraints)), swap_constraints$constraint)
+
   # Current state
   current_state <- initial_state
 
@@ -583,7 +639,7 @@ run_parcel_mcmc <- function(
           neighbor_idx
         )
         if (!is.null(r$move_type)) {
-          update_move_stats(stats, r$move_type, r)
+          update_move_stats(move_counts, r$move_type, r)
         }
         r
       },
@@ -595,7 +651,7 @@ run_parcel_mcmc <- function(
           constraints,
           neighbor_idx = neighbor_idx
         )
-        update_move_stats(stats, "symmetric_birth_death", r)
+        update_move_stats(move_counts, "symmetric_birth_death", r)
 
         # Track capacity of accepted birth moves for calibration
         if (isTRUE(r$accepted) && isTRUE(r$direction == "birth") && !is.null(r$block_id)) {
@@ -658,7 +714,7 @@ run_parcel_mcmc <- function(
           constraints,
           neighbor_idx = neighbor_idx
         )
-        update_move_stats(stats, "lifted_birth_death", r)
+        update_move_stats(move_counts, "lifted_birth_death", r)
 
         # Track direction flip
         if (!is.null(r$new_direction) && r$new_direction != current_direction) {
@@ -723,35 +779,35 @@ run_parcel_mcmc <- function(
           cap_tolerance = SWAP_CAP_TOLERANCE,
           neighbor_idx = neighbor_idx
         )
-        update_move_stats(stats, "secondary_swap", r)
+        update_move_stats(move_counts, "secondary_swap", r)
 
-        # Track swap rejection reasons
-        swap_reasons[reason == "attempted", count := count + 1L]
+        # Track swap rejection reasons (fast accumulators; materialized post-loop)
+        acc_swap_reasons[["attempted"]] <- acc_swap_reasons[["attempted"]] + 1L
 
         proposed <- !isTRUE(r$proposal_failed)
         feasible <- proposed && !isTRUE(r$infeasible)
 
         if (proposed) {
-          swap_reasons[reason == "proposed", count := count + 1L]
+          acc_swap_reasons[["proposed"]] <- acc_swap_reasons[["proposed"]] + 1L
         }
         if (feasible) {
-          swap_reasons[reason == "feasible", count := count + 1L]
+          acc_swap_reasons[["feasible"]] <- acc_swap_reasons[["feasible"]] + 1L
         }
         if (isTRUE(r$accepted)) {
-          swap_reasons[reason == "accepted", count := count + 1L]
+          acc_swap_reasons[["accepted"]] <- acc_swap_reasons[["accepted"]] + 1L
         }
 
         # Track proposal failure reasons
         if (isTRUE(r$proposal_failed)) {
-          swap_reasons[reason == "proposal_failed", count := count + 1L]
-          if (!is.null(r$reason) && r$reason %in% swap_reasons$reason) {
-            swap_reasons[reason == r$reason, count := count + 1L]
+          acc_swap_reasons[["proposal_failed"]] <- acc_swap_reasons[["proposal_failed"]] + 1L
+          if (!is.null(r$reason) && r$reason %in% names(acc_swap_reasons)) {
+            acc_swap_reasons[[r$reason]] <- acc_swap_reasons[[r$reason]] + 1L
           }
         }
 
         # Track infeasibility and constraint failures
         if (isTRUE(r$infeasible)) {
-          swap_reasons[reason == "infeasible", count := count + 1L]
+          acc_swap_reasons[["infeasible"]] <- acc_swap_reasons[["infeasible"]] + 1L
           constraint_label <- if (
             !is.null(r$constraint_failed) &&
               r$constraint_failed %in% swap_constraints$constraint
@@ -760,12 +816,12 @@ run_parcel_mcmc <- function(
           } else {
             "unknown"
           }
-          swap_constraints[constraint == constraint_label, count := count + 1L]
+          acc_swap_constraints[[constraint_label]] <- acc_swap_constraints[[constraint_label]] + 1L
         }
 
         # Track MH rejections
         if (feasible && !isTRUE(r$accepted)) {
-          swap_reasons[reason == "mh_rejected", count := count + 1L]
+          acc_swap_reasons[["mh_rejected"]] <- acc_swap_reasons[["mh_rejected"]] + 1L
         }
 
         # Track delta_cap for accepted swaps
@@ -804,28 +860,32 @@ run_parcel_mcmc <- function(
           parcel_graph,
           constraints,
           neighbor_idx = neighbor_idx,
-          parcel_names = parcel_names
+          parcel_names = parcel_names,
+          nbr_from = nbr_from,
+          nbr_to = nbr_to,
+          lcc_state_cache = lcc_state_cache
         )
 
         # Note: replace_lcc uses stricter feasibility semantics than other moves
         # (only counts as feasible if proposal succeeded AND passed feasibility)
-        stats[move_type == "replace_lcc", n_attempted := n_attempted + 1L]
-        replace_lcc_reasons[reason == "attempted", count := count + 1L]
+        # Fast accumulators (materialized into data.tables after the loop)
+        move_counts$n_attempted[["replace_lcc"]] <- move_counts$n_attempted[["replace_lcc"]] + 1L
+        acc_rl_reasons[["attempted"]] <- acc_rl_reasons[["attempted"]] + 1L
 
         proposed <- !isTRUE(r$proposal_failed)
         feasible <- proposed && !isTRUE(r$infeasible)
 
         if (proposed) {
-          stats[move_type == "replace_lcc", n_proposed := n_proposed + 1L]
-          replace_lcc_reasons[reason == "proposed", count := count + 1L]
+          move_counts$n_proposed[["replace_lcc"]] <- move_counts$n_proposed[["replace_lcc"]] + 1L
+          acc_rl_reasons[["proposed"]] <- acc_rl_reasons[["proposed"]] + 1L
         }
         if (feasible) {
-          stats[move_type == "replace_lcc", n_feasible := n_feasible + 1L]
-          replace_lcc_reasons[reason == "feasible", count := count + 1L]
+          move_counts$n_feasible[["replace_lcc"]] <- move_counts$n_feasible[["replace_lcc"]] + 1L
+          acc_rl_reasons[["feasible"]] <- acc_rl_reasons[["feasible"]] + 1L
         }
         if (isTRUE(r$accepted)) {
-          stats[move_type == "replace_lcc", n_accepted := n_accepted + 1L]
-          replace_lcc_reasons[reason == "accepted", count := count + 1L]
+          move_counts$n_accepted[["replace_lcc"]] <- move_counts$n_accepted[["replace_lcc"]] + 1L
+          acc_rl_reasons[["accepted"]] <- acc_rl_reasons[["accepted"]] + 1L
 
           # Track cross-region transitions (only for accepted moves)
           if (!is.null(r$is_cross_region) && !is.na(r$is_cross_region)) {
@@ -839,10 +899,10 @@ run_parcel_mcmc <- function(
 
         # Track failure reasons
         if (!proposed) {
-          replace_lcc_reasons[reason == "proposal_failed", count := count + 1L]
+          acc_rl_reasons[["proposal_failed"]] <- acc_rl_reasons[["proposal_failed"]] + 1L
         }
         if (isTRUE(r$infeasible)) {
-          replace_lcc_reasons[reason == "infeasible", count := count + 1L]
+          acc_rl_reasons[["infeasible"]] <- acc_rl_reasons[["infeasible"]] + 1L
           constraint_label <- if (
             !is.null(r$constraint_failed) &&
               r$constraint_failed %in% replace_lcc_constraints$constraint
@@ -851,16 +911,13 @@ run_parcel_mcmc <- function(
           } else {
             "unknown"
           }
-          replace_lcc_constraints[
-            constraint == constraint_label,
-            count := count + 1L
-          ]
+          acc_rl_constraints[[constraint_label]] <- acc_rl_constraints[[constraint_label]] + 1L
         }
-        if (!is.null(r$reason) && r$reason %in% replace_lcc_reasons$reason) {
-          replace_lcc_reasons[reason == r$reason, count := count + 1L]
+        if (!is.null(r$reason) && r$reason %in% names(acc_rl_reasons)) {
+          acc_rl_reasons[[r$reason]] <- acc_rl_reasons[[r$reason]] + 1L
         }
         if (feasible && !isTRUE(r$accepted)) {
-          replace_lcc_reasons[reason == "mh_rejected", count := count + 1L]
+          acc_rl_reasons[["mh_rejected"]] <- acc_rl_reasons[["mh_rejected"]] + 1L
         }
 
         # Track MH diagnostics
@@ -979,12 +1036,15 @@ run_parcel_mcmc <- function(
       constraints$min_capacity
     )
 
-    # Centroid tracking for multi-chain analysis
+    # Centroid tracking for multi-chain analysis. Use precomputed integer-indexed
+    # attribute vectors (X_indices) instead of igraph hash lookups; the centroid
+    # is an area-weighted mean and so order-independent (identical value).
     state_parcels <- current_state$X
     if (length(state_parcels) > 0) {
-      areas <- igraph::V(parcel_graph)[state_parcels]$area
-      cx <- igraph::V(parcel_graph)[state_parcels]$centroid_x
-      cy <- igraph::V(parcel_graph)[state_parcels]$centroid_y
+      xi <- current_state$X_indices
+      areas <- secondary_library$area_vec[xi]
+      cx <- secondary_library$centroid_x_vec[xi]
+      cy <- secondary_library$centroid_y_vec[xi]
       total_area <- sum(areas)
       centroid_x_trajectory[step] <- sum(cx * areas) / total_area
       centroid_y_trajectory[step] <- sum(cy * areas) / total_area
@@ -1025,6 +1085,18 @@ run_parcel_mcmc <- function(
       )
     }
   }
+
+  # Materialize fast per-step diagnostic counters back into their data.tables.
+  # (Counts accumulated in plain vectors/env during the loop to avoid data.table
+  # NSE overhead; the final data.table contents are identical to per-step `:=`.)
+  stats[, n_attempted := as.integer(move_counts$n_attempted[move_type])]
+  stats[, n_proposed  := as.integer(move_counts$n_proposed[move_type])]
+  stats[, n_feasible  := as.integer(move_counts$n_feasible[move_type])]
+  stats[, n_accepted  := as.integer(move_counts$n_accepted[move_type])]
+  replace_lcc_reasons[, count := as.integer(acc_rl_reasons[reason])]
+  replace_lcc_constraints[, count := as.integer(acc_rl_constraints[constraint])]
+  swap_reasons[, count := as.integer(acc_swap_reasons[reason])]
+  swap_constraints[, count := as.integer(acc_swap_constraints[constraint])]
 
   # Compute timing overhead (total time minus kernel time)
   total_loop_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
