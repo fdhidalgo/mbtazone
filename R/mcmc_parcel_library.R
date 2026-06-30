@@ -2512,6 +2512,30 @@ assess_seeding_feasibility <- function(parcel_graph, constraints) {
 }
 
 
+#' Which station sub-constraints are active for a town
+#'
+#' A station capacity/area sub-constraint is active only when its percentage is a
+#' positive number; the area sub-constraint additionally needs a finite min_area
+#' (NA min_area means no area requirement). Centralises the check shared by the
+#' seeder (generate_initial_states_from_lccs) and the secondary selector
+#' (select_initial_secondary_blocks).
+#'
+#' @param constraints MBTA constraints list.
+#' @return list(cap_pct, area_pct, cap_active, area_active).
+#' @keywords internal
+station_constraint_flags <- function(constraints) {
+  cap_pct  <- constraints$station_capacity_pct
+  area_pct <- constraints$station_area_pct
+  list(
+    cap_pct     = cap_pct,
+    area_pct    = area_pct,
+    cap_active  = !is.null(cap_pct)  && !is.na(cap_pct)  && cap_pct  > 0,
+    area_active = !is.null(area_pct) && !is.na(area_pct) && area_pct > 0 &&
+      !is.null(constraints$min_area) && !is.na(constraints$min_area)
+  )
+}
+
+
 #' Construct a feasible MCMC seed directly when the library cannot supply one
 #'
 #' Last-resort seeder (Layer 3 of the station-aware seeding fix) used by
@@ -2542,13 +2566,12 @@ assess_seeding_feasibility <- function(parcel_graph, constraints) {
 #' @keywords internal
 construct_feasible_seed <- function(parcel_graph, constraints, libraries,
                                     max_restarts = 90L) {
-  cap_lookup  <- igraph::V(parcel_graph)$capacity
-  names(cap_lookup)  <- igraph::V(parcel_graph)$name
-  area_lookup <- igraph::V(parcel_graph)$area
-  names(area_lookup) <- igraph::V(parcel_graph)$name
-  csv <- igraph::V(parcel_graph)$capacity_in_station; csv[is.na(csv)] <- 0
-  asv <- igraph::V(parcel_graph)$area_in_station;     asv[is.na(asv)] <- 0
-  all_parcels     <- igraph::V(parcel_graph)$name
+  vtx <- igraph::V(parcel_graph)
+  all_parcels <- vtx$name
+  cap_lookup  <- vtx$capacity; names(cap_lookup)  <- all_parcels
+  area_lookup <- vtx$area;     names(area_lookup) <- all_parcels
+  csv <- vtx$capacity_in_station; csv[is.na(csv)] <- 0
+  asv <- vtx$area_in_station;     asv[is.na(asv)] <- 0
   station_parcels <- all_parcels[csv > 0 | asv > 0]
 
   lcc_seed_pool <- NULL
@@ -2679,14 +2702,12 @@ generate_initial_states_from_lccs <- function(
   # spread tends to pick. Geographic diversity is retained by running max-min
   # within the strongest-coverage pool. Without a station constraint, keep the
   # original max-min-on-all-candidates behaviour.
-  station_cap_pct  <- constraints$station_capacity_pct
-  station_area_pct <- constraints$station_area_pct
-  cap_active  <- !is.null(station_cap_pct)  && !is.na(station_cap_pct)  &&
-    station_cap_pct  > 0
-  area_active <- !is.null(station_area_pct) && !is.na(station_area_pct) &&
-    station_area_pct > 0 &&
-    !is.null(constraints$min_area) && !is.na(constraints$min_area)
-  station_active <- cap_active || area_active
+  scf <- station_constraint_flags(constraints)
+  station_cap_pct  <- scf$cap_pct
+  station_area_pct <- scf$area_pct
+  cap_active       <- scf$cap_active
+  area_active      <- scf$area_active
+  station_active   <- cap_active || area_active
 
   if (station_active) {
     req_cap_station  <- if (cap_active)
@@ -3222,13 +3243,11 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
   lcc_logical[lcc_indices] <- TRUE
 
   # ---- Station shortfall of the LCC alone --------------------------------
-  station_cap_pct  <- constraints$station_capacity_pct
-  station_area_pct <- constraints$station_area_pct
-  cap_active  <- !is.null(station_cap_pct)  && !is.na(station_cap_pct)  &&
-    station_cap_pct  > 0
-  area_active <- !is.null(station_area_pct) && !is.na(station_area_pct) &&
-    station_area_pct > 0 &&
-    !is.null(constraints$min_area) && !is.na(constraints$min_area)
+  scf <- station_constraint_flags(constraints)
+  station_cap_pct  <- scf$cap_pct
+  station_area_pct <- scf$area_pct
+  cap_active       <- scf$cap_active
+  area_active      <- scf$area_active
 
   cap_gap <- 0
   area_gap <- 0
@@ -3273,11 +3292,7 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
   # Use the caller's precomputed neighbor names (the library loop passes
   # lcc_library$neighbor_indices) when available; otherwise scan the graph.
   if (is.null(lcc_neighbor_names)) {
-    lcc_neighbor_names <- unique(unlist(
-      lapply(lcc_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-      use.names = FALSE
-    ))
-    lcc_neighbor_names <- setdiff(lcc_neighbor_names, lcc_parcels)
+    lcc_neighbor_names <- get_parcel_set_neighbors(lcc_parcels, parcel_graph)
   }
   lcc_nbr_indices <- match(lcc_neighbor_names, parcel_names)
   lcc_nbr_indices <- lcc_nbr_indices[!is.na(lcc_nbr_indices)]
@@ -3331,14 +3346,10 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
     # high-station towns that add many secondaries.
     nbr_idx <- block_neighbors[[bid]]
     if (is.null(nbr_idx)) {
-      block_parcels   <- parcel_names[block_indices]
-      block_nbr_names <- unique(unlist(
-        lapply(block_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-        use.names = FALSE
-      ))
-      block_nbr_names <- setdiff(block_nbr_names, block_parcels)
-      nbr_idx <- match(block_nbr_names, parcel_names)
-      nbr_idx <- nbr_idx[!is.na(nbr_idx)]
+      nbr_idx <- parcel_ids_to_indices(
+        get_parcel_set_neighbors(parcel_names[block_indices], parcel_graph),
+        parcel_names
+      )
     }
     selected_nbrs[nbr_idx] <<- TRUE
     TRUE
