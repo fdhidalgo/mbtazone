@@ -93,6 +93,15 @@ BFS_LCC_N_SEEDS <- 10L
 # Library size cap
 LCC_LIBRARY_MAX_SIZE <- 5000L
 
+# Cap on the number of UNIQUE LCCs tree enumeration will discover before it stops
+# sampling more trees. The library is downsampled to LCC_LIBRARY_MAX_SIZE anyway, so
+# enumerating millions of configurations (the largest towns hit ~1.1M) only inflates
+# peak memory -- it does not improve the final 5000-block library. At 10x the library
+# cap this is high enough that ordinary towns (which find ~10^3-10^4 uniques) never
+# reach it and are byte-identical; it bounds only the few giant towns. Passed to
+# discover_lccs_from_trees(max_unique_lccs = ...); the engine default is Inf (no cap).
+LCC_DISCOVERY_MAX_UNIQUE <- 50000L
+
 # --- Secondary Discovery ---
 # Tree enumeration: Sample trees, enumerate cuts within area bands
 TREE_SEC_N_TREES <- 200L

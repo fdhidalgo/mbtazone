@@ -332,6 +332,7 @@ discover_lccs_from_trees <- function(
     n_trees = 500L,
     forbidden_parcels = NULL,
     max_discovery_capacity = NULL,
+    max_unique_lccs = Inf,
     verbose = TRUE
 ) {
   parcel_names <- igraph::V(parcel_graph)$name
@@ -442,6 +443,7 @@ discover_lccs_from_trees <- function(
   total_cuts_found <- 0L
   n_unique_lccs <- 0L  # Track count directly (avoids O(n) ls() calls)
   trees_processed <- 0L  # For progress bar
+  cap_reached <- FALSE   # set when n_unique_lccs reaches max_unique_lccs (see below)
 
   # Precompute forbidden mask (global)
   if (is.null(forbidden_parcels)) {
@@ -586,10 +588,28 @@ discover_lccs_from_trees <- function(
           assign(lcc_key, current_count + 1L, envir = lcc_tree_counts)
         }
       }
+
+      # Stop once the unique-LCC budget is reached. The current tree's cuts are
+      # fully processed above before we break, so the hash stays consistent. The
+      # library is downsampled to LCC_LIBRARY_MAX_SIZE regardless, so this only
+      # bounds peak memory on very large graphs; when n_unique_lccs stays below
+      # the cap the discovered set is unchanged. Default max_unique_lccs = Inf.
+      if (n_unique_lccs >= max_unique_lccs) {
+        cap_reached <- TRUE
+        break
+      }
     }
+
+    if (cap_reached) break
   }  # End component loop
 
   if (verbose) cli::cli_progress_done()
+
+  if (cap_reached && verbose) {
+    cli::cli_alert_warning(
+      "Unique-LCC cap reached ({n_unique_lccs} >= {max_unique_lccs}); stopped sampling further trees"
+    )
+  }
 
   # Convert hash to data.table
   lcc_keys <- ls(lcc_hash)
