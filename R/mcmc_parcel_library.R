@@ -1093,6 +1093,16 @@ run_bfs_lcc_supplement <- function(
 #' dramatically improve hit rate vs random seeding. BFS can still grow through
 #' any eligible parcel — only the seed selection is filtered.
 #'
+#' Runs in two passes. Pass 1 is the historical random, density-blind BFS. If it
+#' cannot fill the band within \code{max_attempts_per_band} (small towns where
+#' dense parcels are scarce and scattered, so random growth dilutes density below
+#' \code{min_density} before reaching the capacity target), Pass 2 retries with
+#' density-preserving frontier selection (\code{bfs_grow_block(density_aware =
+#' TRUE)}). Pass 2 is a no-op whenever Pass 1 fills the band, so towns whose
+#' libraries already saturate draw the identical random sequence and are
+#' byte-identical; \code{band_stats$da_attempts}/\code{da_found} record when it
+#' fires.
+#'
 #' @param parcel_graph igraph object with capacity/area attributes
 #' @param constraints MBTA constraints list (min_capacity, min_area, min_density,
 #'   min_lcc_fraction)
@@ -1110,7 +1120,8 @@ run_bfs_lcc_supplement <- function(
 #'   - discovered_lccs: data.table with lcc_key, parcel_ids, capacity, area,
 #'       capacity_band, tree_count = 0, source = "bfs_stratified"
 #'   - band_stats: single-row data.table with band, cap_low, cap_high, attempts,
-#'       valid, unique_found
+#'       valid, unique_found, da_attempts (density-aware fallback attempts),
+#'       da_found (LCCs the fallback added)
 #' @export
 discover_lccs_single_band <- function(
     parcel_graph,
@@ -1164,12 +1175,17 @@ discover_lccs_single_band <- function(
   parcel_density <- capacity_lookup[eligible_parcels] / area_lookup[eligible_parcels]
   # Handle NaN/Inf from zero-area parcels
   parcel_density[!is.finite(parcel_density)] <- 0
-  dense_seeds <- eligible_parcels[parcel_density >= min_density]
+  # Parcels dense enough to anchor a compliant block on their own. Pass 1 widens its
+  # seed pool to all eligible parcels when too few of these exist (random growth can
+  # still find valid blocks); the density-aware fallback (Pass 2) seeds strictly from
+  # this set, so reuse it in both places rather than recomputing the predicate.
+  strictly_dense_seeds <- eligible_parcels[parcel_density >= min_density]
+  dense_seeds <- strictly_dense_seeds
 
   if (length(dense_seeds) < 10) {
     dense_seeds <- eligible_parcels
     if (verbose) cli::cli_alert_warning(
-      "Band {band_idx}: Few dense parcels for seeding ({length(dense_seeds)}), using all eligible"
+      "Band {band_idx}: Few dense parcels for seeding ({length(strictly_dense_seeds)}), using all eligible"
     )
   }
 
@@ -1187,13 +1203,57 @@ discover_lccs_single_band <- function(
 
   # Precompute integer-indexed BFS context once (seed_pool/eligible_pool constant
   # across this band's sampling loop). Behavior-identical to per-call igraph use.
-  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_parcels)
+  # Carry area as a second metric so the density-aware fallback below can evaluate
+  # per-step density; the random pass ignores metric2 and is unaffected.
+  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_parcels,
+                               metric2_lookup = area_lookup)
 
-  # Per-band BFS discovery
-  band_attempts <- 0L
+  # Per-band BFS discovery. band_found / band_valid / discovered_list are mutated by
+  # record_candidate() (below) via <<-; band_attempts is returned by run_bfs_pass().
   band_found <- 0L
   band_valid <- 0L
   discovered_list <- list()
+
+  # Validate, dedup, and record one grown candidate block. Shared by the random
+  # pass and the density-aware fallback so the acceptance rule cannot drift.
+  # Mutates band_valid / band_found / discovered_list / lcc_hash in this frame and
+  # returns TRUE iff a new unique valid LCC was recorded. Contains no RNG, so it
+  # does not perturb the sampler's draw sequence.
+  record_candidate <- function(result) {
+    if (is.null(result) || !result$success) return(FALSE)
+
+    candidate_parcels <- result$block
+    candidate_capacity <- result$metric_total
+    candidate_area <- sum(area_lookup[candidate_parcels])
+    candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
+    candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
+
+    if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) return(FALSE)
+    if (candidate_capacity < cap_low || candidate_capacity > cap_high) return(FALSE)
+    if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) return(FALSE)
+    if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) return(FALSE)
+    if (st$check_station_area && candidate_area_in_station < st$station_area_min) return(FALSE)
+
+    band_valid <<- band_valid + 1L
+
+    # Deduplication
+    lcc_key <- digest::digest(sort(candidate_parcels), algo = "xxhash64")
+    if (exists(lcc_key, envir = lcc_hash, inherits = FALSE)) return(FALSE)
+
+    assign(lcc_key, TRUE, envir = lcc_hash)
+    band_found <<- band_found + 1L
+
+    discovered_list[[band_found]] <<- data.table::data.table(
+      lcc_key = lcc_key,
+      parcel_ids = list(candidate_parcels),
+      capacity = as.integer(candidate_capacity),
+      area = candidate_area,
+      capacity_band = band_idx,
+      tree_count = 0L,
+      source = "bfs_stratified"
+    )
+    TRUE
+  }
 
   if (verbose) {
     cli::cli_progress_bar(
@@ -1203,69 +1263,66 @@ discover_lccs_single_band <- function(
     )
   }
 
-  while (band_found < samples_per_band && band_attempts < max_attempts_per_band) {
-    band_attempts <- band_attempts + 1L
+  # One band-sampling pass: draw a random in-band capacity target, grow a block
+  # toward it, and offer the result to record_candidate(), until the band fills or
+  # the attempt budget is spent. Returns the number of attempts made. Pass 1 (random)
+  # and Pass 2 (density-aware fallback) differ only in the seed pool and frontier
+  # strategy, so they share this loop. record_candidate() carries no RNG, so Pass 1's
+  # runif()/bfs_grow_block() draw sequence is exactly the historical one.
+  run_bfs_pass <- function(seed_pool, density_aware, density_floor, track_progress) {
+    attempts <- 0L
+    while (band_found < samples_per_band && attempts < max_attempts_per_band) {
+      attempts <- attempts + 1L
 
-    if (verbose && band_attempts %% 100 == 0) {
-      cli::cli_progress_update(set = band_found)
+      if (track_progress && verbose && attempts %% 100 == 0) {
+        cli::cli_progress_update(set = band_found)
+      }
+
+      target_capacity <- runif(1, cap_low, cap_high)
+
+      result <- tryCatch(
+        bfs_grow_block(
+          ctx = bfs_ctx,
+          seed_pool = seed_pool,
+          target_min = cap_low,
+          target_exact = target_capacity,
+          target_max = cap_high,
+          check_max_before_add = TRUE,
+          density_aware = density_aware,
+          min_density = density_floor
+        ),
+        error = function(e) NULL
+      )
+
+      if (record_candidate(result) && verbose) {
+        cli::cli_progress_update(set = band_found)
+      }
     }
+    attempts
+  }
 
-    target_capacity <- runif(1, cap_low, cap_high)
+  # Pass 1: random, density-blind BFS (behavior unchanged from prior versions).
+  band_attempts <- run_bfs_pass(dense_seeds, density_aware = FALSE,
+                                density_floor = NULL, track_progress = TRUE)
 
-    result <- tryCatch(
-      bfs_grow_block(
-        ctx = bfs_ctx,
-        seed_pool = dense_seeds,
-        target_min = cap_low,
-        target_exact = target_capacity,
-        target_max = cap_high,
-        check_max_before_add = TRUE
-      ),
-      error = function(e) NULL
-    )
-
-    if (is.null(result) || !result$success) next
-
-    candidate_parcels <- result$block
-    candidate_capacity <- result$metric_total
-    candidate_area <- sum(area_lookup[candidate_parcels])
-    candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
-    candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
-
-    if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) next
-    if (candidate_capacity < cap_low || candidate_capacity > cap_high) next
-    if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
-    if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) next
-    if (st$check_station_area && candidate_area_in_station < st$station_area_min) next
-
-    band_valid <- band_valid + 1L
-
-    # Deduplication
-    lcc_key <- digest::digest(sort(candidate_parcels), algo = "xxhash64")
-    if (exists(lcc_key, envir = lcc_hash, inherits = FALSE)) next
-
-    assign(lcc_key, TRUE, envir = lcc_hash)
-    band_found <- band_found + 1L
-
-    discovered_list[[band_found]] <- data.table::data.table(
-      lcc_key = lcc_key,
-      parcel_ids = list(candidate_parcels),
-      capacity = as.integer(candidate_capacity),
-      area = candidate_area,
-      capacity_band = band_idx,
-      tree_count = 0L,
-      source = "bfs_stratified"
-    )
-
-    if (verbose) {
-      cli::cli_progress_update(set = band_found)
-    }
+  # Pass 2: adaptive density-aware fallback. Fires only when Pass 1 under-fills the
+  # band (a no-op otherwise — see this function's docstring for the why and the
+  # byte-identical guarantee). Seeds strictly from genuinely dense parcels, so a town
+  # with no dense land gets no fabricated LCCs.
+  da_attempts <- 0L
+  da_found <- 0L
+  if (band_found < samples_per_band && length(strictly_dense_seeds) > 0) {
+    da_found_start <- band_found
+    da_attempts <- run_bfs_pass(strictly_dense_seeds, density_aware = TRUE,
+                                density_floor = min_density, track_progress = FALSE)
+    da_found <- band_found - da_found_start
+    band_attempts <- band_attempts + da_attempts
   }
 
   if (verbose) {
     cli::cli_progress_done()
     cli::cli_alert_success(
-      "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid)"
+      "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid; density-aware fallback added {da_found} in {da_attempts} attempts)"
     )
   }
 
@@ -1290,7 +1347,9 @@ discover_lccs_single_band <- function(
     cap_high = cap_high,
     attempts = band_attempts,
     valid = band_valid,
-    unique_found = band_found
+    unique_found = band_found,
+    da_attempts = da_attempts,  # density-aware fallback attempts (0 if it never fired)
+    da_found = da_found         # unique LCCs the fallback added
   )
 
   list(

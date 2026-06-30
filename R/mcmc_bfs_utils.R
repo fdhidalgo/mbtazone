@@ -51,16 +51,26 @@ build_neighbor_cache <- function(graph) {
 #' reproduces \code{neighbors()} order exactly, the frontier order — and every
 #' \code{sample.int()} draw — is unchanged from the character path.
 #'
+#' \code{metric2_lookup} is optional and only used by the density-aware frontier
+#' strategy in \code{\link{bfs_grow_block_ctx}}: it lets one context carry both
+#' capacity (\code{metric_lookup}) and area (\code{metric2_lookup}) so the grower
+#' can evaluate per-step density. Leaving it NULL (the default) is the standard
+#' single-metric context and changes nothing for existing callers.
+#'
 #' @param graph igraph object with named vertices
 #' @param metric_lookup Named numeric vector (area or capacity per node name)
 #' @param eligible_pool Character vector of nodes eligible for expansion
 #'   (NULL = all vertices)
+#' @param metric2_lookup Optional named numeric vector of a second per-node metric
+#'   (e.g. area when \code{metric_lookup} is capacity). Required for density-aware
+#'   growth; NULL otherwise.
 #' @return List with \code{node_names}, \code{id_of} (named integer name->id),
 #'   \code{adj_int} (list of integer neighbor-id vectors), \code{n},
-#'   \code{metric_by_id} (numeric, id-ordered), \code{eligible_mask} (logical,
-#'   id-ordered).
+#'   \code{metric_by_id} (numeric, id-ordered), \code{metric2_by_id} (numeric,
+#'   id-ordered, or NULL), \code{eligible_mask} (logical, id-ordered).
 #' @keywords internal
-bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL) {
+bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL,
+                              metric2_lookup = NULL) {
   node_names <- igraph::V(graph)$name
   n <- length(node_names)
 
@@ -71,6 +81,14 @@ bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL) {
 
   # Metric aligned to node-id order (values identical to metric_lookup[name]).
   metric_by_id <- as.numeric(metric_lookup[node_names])
+
+  # Optional second metric (id-ordered), for density-aware growth. NULL keeps the
+  # context single-metric and behavior-identical for existing callers.
+  metric2_by_id <- if (is.null(metric2_lookup)) {
+    NULL
+  } else {
+    as.numeric(metric2_lookup[node_names])
+  }
 
   if (is.null(eligible_pool)) {
     eligible_mask <- rep(TRUE, n)
@@ -87,6 +105,7 @@ bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL) {
     adj_int       = adj_int,
     n             = n,
     metric_by_id  = metric_by_id,
+    metric2_by_id = metric2_by_id,
     eligible_mask = eligible_mask
   )
 }
@@ -94,11 +113,23 @@ bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL) {
 #' Grow a connected block via randomized BFS (integer fast path)
 #'
 #' Integer-indexed reimplementation of the \code{bfs_grow_block()} inner loop
-#' that operates on a precomputed \code{\link{bfs_build_context}} object. It
-#' reproduces the character-vector implementation exactly — same frontier order,
-#' same \code{sample.int()} draw sequence, same returned block — but replaces the
-#' per-step \code{igraph::neighbors()} calls and character \code{setdiff}/
-#' \code{intersect}/\code{unique} with integer lookups and logical-mask filters.
+#' that operates on a precomputed \code{\link{bfs_build_context}} object. With the
+#' default \code{density_aware = FALSE} it reproduces the character-vector
+#' implementation exactly — same frontier order, same \code{sample.int()} draw
+#' sequence, same returned block — but replaces the per-step
+#' \code{igraph::neighbors()} calls and character \code{setdiff}/\code{intersect}/
+#' \code{unique} with integer lookups and logical-mask filters.
+#'
+#' With \code{density_aware = TRUE} the only change is the frontier choice: instead
+#' of a uniform-random pick, the grower restricts the frontier to neighbors that
+#' keep the block's aggregate density (capacity / area) at or above
+#' \code{min_density}, then samples among them with a softmax weight that favors
+#' the densest additions. Every other step — seeding, the \code{target_max}
+#' pre-add check, neighbor bookkeeping, the success test — is identical. This
+#' makes connected blocks that stay dense as they grow, which random growth
+#' dilutes below \code{min_density} before reaching the capacity target in towns
+#' where dense parcels are scarce and scattered. It requires a context built with
+#' \code{metric2_lookup} (area) alongside the capacity \code{metric_lookup}.
 #'
 #' @param ctx A context from \code{\link{bfs_build_context}}
 #' @param seed_pool Character vector of eligible seed nodes (NULL = all vertices)
@@ -106,6 +137,13 @@ bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL) {
 #' @param target_max Maximum metric threshold (optional, for pre-add rejection)
 #' @param target_exact Optional exact target to grow toward
 #' @param check_max_before_add Logical: if TRUE, reject additions exceeding target_max
+#' @param density_aware Logical: if TRUE, use the density-preserving frontier
+#'   strategy described above. Requires \code{ctx$metric2_by_id} (area) and
+#'   \code{min_density}. Default FALSE (uniform-random frontier).
+#' @param min_density Minimum aggregate density to maintain at every step when
+#'   \code{density_aware = TRUE} (capacity per area, e.g. 15 du/acre).
+#' @param beta Softmax temperature on the per-candidate density surplus when
+#'   \code{density_aware = TRUE}; larger is greedier toward denser additions.
 #' @return Same list shape as \code{\link{bfs_grow_block}}
 #' @keywords internal
 bfs_grow_block_ctx <- function(ctx,
@@ -113,7 +151,10 @@ bfs_grow_block_ctx <- function(ctx,
                                target_min,
                                target_max = Inf,
                                target_exact = NULL,
-                               check_max_before_add = FALSE) {
+                               check_max_before_add = FALSE,
+                               density_aware = FALSE,
+                               min_density = NULL,
+                               beta = 8) {
   node_names    <- ctx$node_names
   id_of         <- ctx$id_of
   adj_int       <- ctx$adj_int
@@ -137,7 +178,8 @@ bfs_grow_block_ctx <- function(ctx,
 
   effective_target <- if (!is.null(target_exact)) target_exact else target_min
 
-  # Select random seed (sample.int + index to avoid sample(n,1) gotcha).
+  # Select random seed (sample.int + index to avoid sample(n,1) gotcha). Seeding
+  # is shared by both frontier strategies, so the first draw is identical.
   seed_id <- seed_ids[sample.int(length(seed_ids), 1)]
   in_block <- logical(n)
   in_block[seed_id] <- TRUE
@@ -150,32 +192,80 @@ bfs_grow_block_ctx <- function(ctx,
   fr <- fr[fr != seed_id]
   fr <- fr[eligible_mask[fr]]
 
-  while (length(fr) > 0 && current_metric < effective_target) {
-    next_id <- fr[sample.int(length(fr), 1)]
-    next_metric <- metric_by_id[next_id]
-
-    # Pre-add max check (for cluster_parcels_to_units pattern)
-    if (check_max_before_add && (current_metric + next_metric > target_max)) {
-      fr <- fr[fr != next_id]
-      next
+  if (density_aware) {
+    area_by_id <- ctx$metric2_by_id
+    if (is.null(area_by_id)) {
+      stop("bfs_grow_block: density_aware = TRUE requires a context built with metric2_lookup (area)")
     }
+    if (is.null(min_density)) {
+      stop("bfs_grow_block: density_aware = TRUE requires min_density")
+    }
+    current_area <- area_by_id[seed_id]
 
-    # Add node to block
-    block_ids <- c(block_ids, next_id)
-    in_block[next_id] <- TRUE
-    current_metric <- current_metric + next_metric
+    while (length(fr) > 0 && current_metric < effective_target) {
+      cand_cap  <- metric_by_id[fr]
+      cand_area <- area_by_id[fr]
+      # Capacity/area the block would have after adding each candidate.
+      new_cap <- current_metric + cand_cap
+      resulting_density <- new_cap / (current_area + cand_area)
+      keep <- is.finite(resulting_density) & resulting_density >= min_density
+      # Pre-add max check (mirrors the random path's target_max rejection).
+      if (check_max_before_add) {
+        keep <- keep & (new_cap <= target_max)
+      }
+      if (!any(keep)) break  # cannot grow further without dropping below min_density
 
-    # Remove just next_id from frontier
-    fr <- fr[fr != next_id]
+      fk  <- fr[keep]
+      # Softmax over the density surplus, stabilised by subtracting the max so a
+      # very dense candidate cannot overflow exp(); denser additions are favored
+      # but all density-feasible candidates keep positive probability (diversity).
+      z <- beta * (resulting_density[keep] - min_density)
+      w <- exp(z - max(z))
+      next_id <- fk[sample.int(length(fk), 1, prob = w)]
 
-    # New neighbors: setdiff(., current_block) then intersect(., eligible)
-    nb <- adj_int[[next_id]]
-    nb <- nb[!duplicated(nb)]
-    nb <- nb[!in_block[nb]]
-    nb <- nb[eligible_mask[nb]]
-    if (length(nb)) {
-      fr <- c(fr, nb)
-      fr <- fr[!duplicated(fr)]
+      block_ids <- c(block_ids, next_id)
+      in_block[next_id] <- TRUE
+      current_metric <- current_metric + metric_by_id[next_id]
+      current_area   <- current_area + area_by_id[next_id]
+
+      fr <- fr[fr != next_id]
+      nb <- adj_int[[next_id]]
+      nb <- nb[!duplicated(nb)]
+      nb <- nb[!in_block[nb]]
+      nb <- nb[eligible_mask[nb]]
+      if (length(nb)) {
+        fr <- c(fr, nb)
+        fr <- fr[!duplicated(fr)]
+      }
+    }
+  } else {
+    while (length(fr) > 0 && current_metric < effective_target) {
+      next_id <- fr[sample.int(length(fr), 1)]
+      next_metric <- metric_by_id[next_id]
+
+      # Pre-add max check (for cluster_parcels_to_units pattern)
+      if (check_max_before_add && (current_metric + next_metric > target_max)) {
+        fr <- fr[fr != next_id]
+        next
+      }
+
+      # Add node to block
+      block_ids <- c(block_ids, next_id)
+      in_block[next_id] <- TRUE
+      current_metric <- current_metric + next_metric
+
+      # Remove just next_id from frontier
+      fr <- fr[fr != next_id]
+
+      # New neighbors: setdiff(., current_block) then intersect(., eligible)
+      nb <- adj_int[[next_id]]
+      nb <- nb[!duplicated(nb)]
+      nb <- nb[!in_block[nb]]
+      nb <- nb[eligible_mask[nb]]
+      if (length(nb)) {
+        fr <- c(fr, nb)
+        fr <- fr[!duplicated(fr)]
+      }
     }
   }
 
@@ -211,6 +301,12 @@ bfs_grow_block_ctx <- function(ctx,
 #' @param ctx Optional precomputed \code{\link{bfs_build_context}} object. When
 #'   supplied, \code{graph}, \code{metric_lookup} and \code{eligible_pool} are
 #'   ignored (they are baked into the context).
+#' @param density_aware Logical: use the density-preserving frontier strategy of
+#'   \code{\link{bfs_grow_block_ctx}}. Requires \code{ctx} (built with
+#'   \code{metric2_lookup} = area) and \code{min_density}. Default FALSE.
+#' @param min_density Minimum aggregate density to maintain when
+#'   \code{density_aware = TRUE}.
+#' @param beta Softmax temperature for density-aware frontier selection.
 #' @return List with:
 #'   - block: character vector of node IDs in grown block
 #'   - metric_total: final metric sum
@@ -225,7 +321,10 @@ bfs_grow_block <- function(graph,
                            target_max = Inf,
                            target_exact = NULL,
                            check_max_before_add = FALSE,
-                           ctx = NULL) {
+                           ctx = NULL,
+                           density_aware = FALSE,
+                           min_density = NULL,
+                           beta = 8) {
 
   if (!is.null(ctx)) {
     return(bfs_grow_block_ctx(
@@ -234,8 +333,17 @@ bfs_grow_block <- function(graph,
       target_min           = target_min,
       target_max           = target_max,
       target_exact         = target_exact,
-      check_max_before_add = check_max_before_add
+      check_max_before_add = check_max_before_add,
+      density_aware        = density_aware,
+      min_density          = min_density,
+      beta                 = beta
     ))
+  }
+
+  # Density-aware growth needs the id-ordered area metric carried by a context;
+  # the character path does not maintain it, so require ctx for that mode.
+  if (density_aware) {
+    stop("bfs_grow_block: density_aware = TRUE requires a precomputed ctx (build with metric2_lookup = area)")
   }
 
   all_nodes <- igraph::V(graph)$name
