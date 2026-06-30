@@ -2433,14 +2433,98 @@ select_seed_lccs <- function(lcc_library, n_chains = 4L) {
 }
 
 
+#' Assess whether a feasible MCMC seed can exist for a town
+#'
+#' Sound, O(n) necessary-condition check run before seeding. For each hard
+#' constraint it computes the town-wide ceiling — the maximum value attainable,
+#' reached by selecting every parcel — and compares it against the requirement.
+#' If any ceiling falls short, no overlay (LCC + secondaries) can satisfy that
+#' constraint, so seeding would scan the entire library in vain (for an
+#' infeasible town that is thousands of LCCs x secondary attempts x chains,
+#' i.e. hours, ending in the same failure). Failing here turns that into an
+#' instant, explained abort.
+#'
+#' The ceilings are sums over ALL parcels, hence upper bounds: selecting fewer
+#' parcels can only lower each sum, so this never reports a seedable town as
+#' infeasible (no false negatives). Station coverage may be supplied by
+#' disconnected secondary blocks, so the correct sound ceiling is the town-wide
+#' sum — not a connected-component bound like find_viable_station_components().
+#' Thresholds match check_parcel_feasibility() exactly.
+#'
+#' @param parcel_graph igraph with capacity, area, capacity_in_station and
+#'   area_in_station vertex attributes.
+#' @param constraints MBTA constraints list (min_capacity, min_area,
+#'   station_capacity_pct, station_area_pct).
+#' @return list(feasible = logical, failures = character()): one human-readable
+#'   line per violated ceiling (empty when feasible).
+#' @export
+assess_seeding_feasibility <- function(parcel_graph, constraints) {
+  zero_na <- function(x) { x[is.na(x)] <- 0; x }
+  cap     <- zero_na(igraph::V(parcel_graph)$capacity)
+  area    <- zero_na(igraph::V(parcel_graph)$area)
+  cap_st  <- zero_na(igraph::V(parcel_graph)$capacity_in_station)
+  area_st <- zero_na(igraph::V(parcel_graph)$area_in_station)
+
+  failures <- character(0)
+
+  if (sum(cap) < constraints$min_capacity) {
+    failures <- c(failures, sprintf(
+      "min_capacity: town-wide capacity %s < required %s",
+      format(round(sum(cap)), big.mark = ","),
+      format(round(constraints$min_capacity), big.mark = ",")))
+  }
+
+  has_area_constraint <- !is.null(constraints$min_area) &&
+    !is.na(constraints$min_area) && constraints$min_area > 0
+  if (has_area_constraint && sum(area) < constraints$min_area) {
+    failures <- c(failures, sprintf(
+      "min_area: town-wide area %.1f < required %.1f acres",
+      sum(area), constraints$min_area))
+  }
+
+  n_station <- sum(cap_st > 0 | area_st > 0)
+
+  if (!is.null(constraints$station_capacity_pct) &&
+      !is.na(constraints$station_capacity_pct) &&
+      constraints$station_capacity_pct > 0) {
+    req <- constraints$station_capacity_pct / 100 * constraints$min_capacity
+    if (sum(cap_st) < req) {
+      failures <- c(failures, sprintf(
+        "station_capacity_pct: town-wide capacity-in-station %s < required %s (%g%% of min_capacity); %d parcel(s) in any station area",
+        format(round(sum(cap_st)), big.mark = ","),
+        format(round(req), big.mark = ","),
+        constraints$station_capacity_pct, n_station))
+    }
+  }
+
+  if (!is.null(constraints$station_area_pct) &&
+      !is.na(constraints$station_area_pct) &&
+      constraints$station_area_pct > 0 && has_area_constraint) {
+    req <- constraints$station_area_pct / 100 * constraints$min_area
+    if (sum(area_st) < req) {
+      failures <- c(failures, sprintf(
+        "station_area_pct: town-wide area-in-station %.1f < required %.1f acres (%g%% of min_area); %d parcel(s) in any station area",
+        sum(area_st), req, constraints$station_area_pct, n_station))
+    }
+  }
+
+  list(feasible = length(failures) == 0L, failures = failures)
+}
+
+
 #' Generate initial MCMC states from library LCCs
 #'
 #' Replaces generate_initial_parcel_state_in_region(). Selects n_chains
 #' maximally distant LCCs from the library and uses each directly as the
 #' initial LCC state, then adds compatible secondary blocks.
 #'
-#' All constraint satisfaction (capacity, area, density, station proximity)
-#' is guaranteed by library construction — no BFS expansion needed.
+#' Runs assess_seeding_feasibility() first: if a hard constraint is town-wide
+#' infeasible (e.g. a station requirement the parcels cannot meet) it aborts in
+#' O(n) instead of scanning the whole library. Note that capacity/area/density/
+#' station coverage are NOT fully guaranteed by library construction for towns
+#' whose station requirement is <= 50% (LCC discovery only filters on the
+#' "excess over 50%" station bound, expecting secondaries to supply the rest),
+#' so per-candidate feasibility is still re-checked below.
 #'
 #' @param lcc_library LCC library from build_lcc_library_from_tree_discovery()
 #' @param libraries Full libraries list (needs secondary_library)
@@ -2457,6 +2541,20 @@ generate_initial_states_from_lccs <- function(
     n_chains = 4L
 ) {
   cli::cli_h2("Generating Initial MCMC States from LCC Library")
+
+  # Structural feasibility gate. If a hard constraint's town-wide ceiling falls
+  # short, no seed exists; abort now rather than scanning the library for hours
+  # before failing anyway. See assess_seeding_feasibility().
+  feas <- assess_seeding_feasibility(parcel_graph, constraints)
+  if (!feas$feasible) {
+    bullets <- feas$failures
+    names(bullets) <- rep("x", length(bullets))
+    cli::cli_abort(c(
+      "No feasible MCMC seed can exist for this town (structural infeasibility):",
+      bullets,
+      i = "Aborted before scanning the library. A station shortfall with 0 parcels in any station area usually means a requirements-vs-data mismatch (e.g. no parcels flagged TRANSIT='Y' despite a station requirement)."
+    ))
+  }
 
   # Hydrate before use
   lcc_library                 <- hydrate_library(lcc_library)
