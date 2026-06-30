@@ -1450,6 +1450,13 @@ run_bfs_secondary_supplement <- function(
   names(area_lookup) <- all_parcels
   names(capacity_lookup) <- all_parcels
 
+  # Precompute integer-indexed BFS context once (graph/metric/eligible constant
+  # across every band and attempt; only target_area varies). Dispatches the
+  # bfs_grow_block calls below to the integer fast path bfs_grow_block_ctx(),
+  # which reproduces the character path's frontier order and sample.int() draw
+  # sequence exactly. Behavior-identical.
+  bfs_ctx <- bfs_build_context(parcel_graph, area_lookup, eligible_pool = NULL)
+
   if (verbose) {
     cli::cli_h2("BFS Secondary Supplement")
     cli::cli_alert_info("Tree discoveries: {nrow(tree_dt)}")
@@ -1491,10 +1498,8 @@ run_bfs_secondary_supplement <- function(
       # BFS grow
       result <- tryCatch(
         bfs_grow_block(
-          graph = parcel_graph,
-          metric_lookup = area_lookup,
+          ctx = bfs_ctx,
           seed_pool = NULL,  # Any parcel
-          eligible_pool = NULL,
           target_min = min_area,
           target_exact = target_area
         ),
@@ -2749,13 +2754,17 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
     (constraints$station_area_pct / 100) * min_area
   } else NULL
 
+  # Precompute integer-indexed BFS context once (graph/metric/eligible constant
+  # across every restart; only target_cap varies). Dispatches the bfs_grow_block
+  # call below to the integer fast path; behavior-identical.
+  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_pool = NULL)
+
   for (attempt in seq_len(max_restarts)) {
     # BFS expansion from region seed with capacity bound
     # Sample target within valid range to get varied initial states
     target_cap <- runif(1, min_cap, max_cap)
     result <- bfs_grow_block(
-      graph = parcel_graph,
-      metric_lookup = capacity_lookup,
+      ctx = bfs_ctx,
       seed_pool = region_parcels,
       target_min = min_cap,
       target_exact = target_cap

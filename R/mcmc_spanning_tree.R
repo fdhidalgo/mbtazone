@@ -646,6 +646,28 @@ discover_lccs_from_trees <- function(
 # SECONDARY BLOCK DISCOVERY VIA SPANNING TREE ENUMERATION
 # ============================================================================
 
+#' Structure-only copy of a graph (all vertex and edge attributes removed)
+#'
+#' Returns \code{graph} with every vertex and edge attribute deleted, preserving
+#' vertex/edge identity and ordering. Used to build a topology-only graph for
+#' traversal: \code{igraph::subgraph_from_edges()} on a bare graph skips copying
+#' per-vertex attributes, and \code{igraph::bfs()}/\code{dfs()} results no longer
+#' carry vertex names (avoiding per-call name pasting). Because only the topology
+#' is touched, the traversal order and parent vectors are bit-identical to those
+#' produced from the attributed graph, so callers that read node data from
+#' separate aligned vectors (not from the graph) are unaffected.
+#'
+#' @param graph igraph object
+#' @return The same graph with no vertex or edge attributes
+#' @keywords internal
+strip_graph_attributes <- function(graph) {
+  for (nm in igraph::vertex_attr_names(graph))
+    graph <- igraph::delete_vertex_attr(graph, nm)
+  for (nm in igraph::edge_attr_names(graph))
+    graph <- igraph::delete_edge_attr(graph, nm)
+  graph
+}
+
 #' Find all valid secondary block cuts of a spanning tree
 #'
 #' Each non-root vertex v defines a potential cut: removing edge (v, parent[v])
@@ -672,75 +694,81 @@ find_valid_secondary_cuts <- function(
     density_threshold
 ) {
   n <- igraph::vcount(tree)
-  valid_cuts <- list()
 
   # Total values from root
-
   total_capacity <- aggregates$total_capacity
   total_area <- aggregates$total_area
 
   # Compute global area bounds for early filtering
-  area_min_global <- min(vapply(size_bands, `[`, numeric(1), 1))
-  area_max_global <- max(vapply(size_bands, `[`, numeric(1), 2))
+  band_mins <- vapply(size_bands, `[`, numeric(1), 1)
+  band_maxs <- vapply(size_bands, `[`, numeric(1), 2)
+  area_min_global <- min(band_mins)
+  area_max_global <- max(band_maxs)
 
-  # For each non-root vertex, check both sides of the cut
-  for (v in seq_len(n)) {
-    if (v == root) next
+  # Vectorized over all non-root vertices. This reproduces the original
+  # per-vertex double loop exactly: same per-side range + density + size-band
+  # checks, same "first matching band" assignment, same as.integer() capacity,
+  # and the same emission order (vertices ascending, subtree side before
+  # complement side). Only the scalar R loop over every vertex is replaced by
+  # vectorized arithmetic; every emitted cut's values are bit-identical.
+  not_root <- seq_len(n) != root
 
-    # Subtree side
-    sub_cap <- aggregates$subtree_capacity[v]
-    sub_area <- aggregates$subtree_area[v]
+  # Subtree side
+  sub_cap  <- aggregates$subtree_capacity
+  sub_area <- aggregates$subtree_area
+  # Complement side
+  comp_cap  <- total_capacity - sub_cap
+  comp_area <- total_area - sub_area
 
-    # Complement side
-    comp_cap <- total_capacity - sub_cap
-    comp_area <- total_area - sub_area
-
-    # Early skip if neither side can satisfy any band
-    if (sub_area < area_min_global && comp_area < area_min_global) next
-    if (sub_area > area_max_global && comp_area > area_max_global) next
-
-    # Check subtree side against each size band
-    if (sub_area >= area_min_global && sub_area <= area_max_global) {
-      sub_density <- if (sub_area > 0) sub_cap / sub_area else 0
-      if (sub_density >= density_threshold) {
-        for (band_idx in seq_along(size_bands)) {
-          band <- size_bands[[band_idx]]
-          if (sub_area >= band[1] && sub_area <= band[2]) {
-            valid_cuts[[length(valid_cuts) + 1L]] <- list(
-              vertex = v,
-              side = "subtree",
-              capacity = as.integer(sub_cap),
-              area = sub_area,
-              size_band = band_idx
-            )
-            break # Only count in first matching band
-          }
-        }
-      }
+  # "First matching band" per area (NA if no band contains it), mirroring the
+  # break-on-first-match inner loop for arbitrary (possibly overlapping) bands.
+  first_band <- function(areas) {
+    out <- rep(NA_integer_, length(areas))
+    for (bi in seq_along(size_bands)) {
+      hit <- is.na(out) & areas >= band_mins[bi] & areas <= band_maxs[bi]
+      out[hit] <- bi
     }
-
-    # Check complement side against each size band
-    if (comp_area >= area_min_global && comp_area <= area_max_global) {
-      comp_density <- if (comp_area > 0) comp_cap / comp_area else 0
-      if (comp_density >= density_threshold) {
-        for (band_idx in seq_along(size_bands)) {
-          band <- size_bands[[band_idx]]
-          if (comp_area >= band[1] && comp_area <= band[2]) {
-            valid_cuts[[length(valid_cuts) + 1L]] <- list(
-              vertex = v,
-              side = "complement",
-              capacity = as.integer(comp_cap),
-              area = comp_area,
-              size_band = band_idx
-            )
-            break # Only count in first matching band
-          }
-        }
-      }
-    }
+    out
   }
 
-  valid_cuts
+  sub_density  <- ifelse(sub_area > 0, sub_cap / sub_area, 0)
+  comp_density <- ifelse(comp_area > 0, comp_cap / comp_area, 0)
+  sub_band  <- first_band(sub_area)
+  comp_band <- first_band(comp_area)
+
+  sub_ok <- not_root &
+    sub_area >= area_min_global & sub_area <= area_max_global &
+    sub_density >= density_threshold & !is.na(sub_band)
+  comp_ok <- not_root &
+    comp_area >= area_min_global & comp_area <= area_max_global &
+    comp_density >= density_threshold & !is.na(comp_band)
+
+  sub_idx  <- which(sub_ok)
+  comp_idx <- which(comp_ok)
+
+  if (length(sub_idx) == 0L && length(comp_idx) == 0L) {
+    return(list())
+  }
+
+  # Interleave so emission order matches the original loop: for each vertex the
+  # subtree cut precedes the complement cut. Keying subtree as 2v-1 and
+  # complement as 2v and sorting yields exactly that order.
+  keys  <- c(2L * sub_idx - 1L, 2L * comp_idx)
+  ord   <- order(keys)
+  verts <- c(sub_idx, comp_idx)[ord]
+  sides <- c(rep.int("subtree", length(sub_idx)),
+             rep.int("complement", length(comp_idx)))[ord]
+  caps  <- c(sub_cap[sub_idx], comp_cap[comp_idx])[ord]
+  areas <- c(sub_area[sub_idx], comp_area[comp_idx])[ord]
+  bands <- c(sub_band[sub_idx], comp_band[comp_idx])[ord]
+
+  lapply(seq_along(verts), function(i) list(
+    vertex = verts[i],
+    side = sides[i],
+    capacity = as.integer(caps[i]),
+    area = areas[i],
+    size_band = bands[i]
+  ))
 }
 
 
@@ -919,6 +947,15 @@ discover_secondaries_from_trees <- function(
     area_in_station_aligned <- if (!is.null(area_in_station_attr))
       area_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
 
+    # Topology-only copy of the component graph for the per-tree subgraph below.
+    # `tree` is used ONLY for its structure (vcount + the bfs/dfs traversals in
+    # compute_subtree_aggregates / compute_tree_dfs_metadata); all capacity/area/
+    # name data comes from the aligned vectors above and from tree_names. Stripping
+    # attributes keeps subgraph_from_edges and bfs/dfs cheap with a bit-identical
+    # traversal order/parent. The random draw is untouched: sample_spanning_tree()
+    # below still runs on the attributed tree_graph.
+    tree_graph_struct <- strip_graph_attributes(tree_graph)
+
     # =========================================================================
     # SAMPLE TREES FOR THIS COMPONENT
     # =========================================================================
@@ -938,7 +975,7 @@ discover_secondaries_from_trees <- function(
         next
       }
 
-      tree <- igraph::subgraph_from_edges(tree_graph, tree_edges, delete.vertices = FALSE)
+      tree <- igraph::subgraph_from_edges(tree_graph_struct, tree_edges, delete.vertices = FALSE)
       n_trees_sampled <- n_trees_sampled + 1L
 
       root <- sample.int(n_tree, 1L)
