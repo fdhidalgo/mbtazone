@@ -4,9 +4,11 @@
 #
 # When TRUE, validates state invariants after every accepted move.
 # Catches subtle bugs from state mutations (overlapping blocks, capacity drift).
-# Cost: ~100-500μs per accepted move (~1% overhead for 5000-step runs).
-# Set to FALSE for production runs after debugging is complete.
-DEBUG_INVARIANT_CHECKS <- TRUE
+# Cost: ~100-500μs per accepted move. On large parcel graphs the per-accepted-move
+# validation is O(N) set comparisons + an O(k^2) secondary-adjacency double loop +
+# two full capacity/area resums, which is a large share of per-step time at
+# production step counts (20000) -- so FALSE for production, as intended.
+DEBUG_INVARIANT_CHECKS <- FALSE
 
 # ============================================================================
 # MACRO CONSTRUCTION PARAMETERS
@@ -249,10 +251,14 @@ ENRICHMENT_BURN_IN <- MCMC_BURN_IN
 # This ensures ~500 states regardless of run length
 SAMPLE_MAX_STORED <- 500L
 
-# Store LCC signatures for discovery deduplication
-# TRUE = store signature at every step (needed for discovery)
-# FALSE = skip signatures (saves memory if not needed)
-STORE_LCC_SIGNATURES <- TRUE
+# Store LCC signatures for discovery deduplication.
+# This is the DEFAULT for run_parcel_mcmc(); the discovery supplement
+# (run_mcmc_discovery_supplement) passes store_lcc_signatures = TRUE explicitly, so
+# it is unaffected by this default. The production sampling path
+# (run_parcel_chain_from_region) never returns lcc_signatures, so storing them there
+# is a per-step digest::digest() that is computed and discarded -- hence FALSE.
+# TRUE = store signature at every step; FALSE = skip (saves a per-step hash + alloc).
+STORE_LCC_SIGNATURES <- FALSE
 
 
 # ============================================================================

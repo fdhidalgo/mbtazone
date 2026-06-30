@@ -961,8 +961,11 @@ run_parcel_mcmc <- function(
     # Update current state
     current_state <- result$new_state
 
-    # DEBUG: Check X_logical consistency after EVERY move
-    if (length(current_state$X_indices) != sum(current_state$X_logical)) {
+    # DEBUG: Check X_logical consistency after EVERY move. Gated behind
+    # DEBUG_INVARIANT_CHECKS and placed first so the O(N) sum(X_logical) is
+    # short-circuited (not computed) in production runs.
+    if (DEBUG_INVARIANT_CHECKS &&
+        length(current_state$X_indices) != sum(current_state$X_logical)) {
       # Compute expected X_logical from lcc and secondary union
       expected_from_components <- sum(current_state$lcc_logical) +
         length(setdiff(current_state$secondary_union_indices, which(current_state$lcc_logical)))
