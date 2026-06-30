@@ -32,17 +32,27 @@
 #'   input vectors indicating which pairs survived the distance cap
 build_nearest_point_lines <- function(from_geoms, to_geoms, crs,
                                       max_dist_m = Inf) {
-  raw <- lapply(seq_along(from_geoms), function(i) {
-    line <- sf::st_geometry(sf::st_nearest_points(from_geoms[i], to_geoms[i]))[[1]]
-    len  <- as.numeric(sf::st_length(sf::st_sfc(line, crs = crs)))
-    list(line = line, len = len)
-  })
+  if (length(from_geoms) == 0) {
+    return(list(
+      lines     = sf::st_sfc(crs = crs),
+      lengths_m = numeric(0),
+      keep      = logical(0)
+    ))
+  }
 
-  lengths <- vapply(raw, `[[`, numeric(1), "len")
+  # st_nearest_points / st_length are both vectorised over geometry pairs / an
+  # sfc, so the whole per-pair loop collapses into two GEOS calls. pairwise =
+  # TRUE computes the nearest-points line for from_geoms[i] <-> to_geoms[i] —
+  # the same line the per-element form produced — and st_length over the sfc
+  # returns the same per-feature lengths in order.
+  # st_nearest_points returns an sfc that already inherits the CRS of from_geoms
+  # (a subset of st_geometry(parcels_sf)), so no CRS restamp is needed here.
+  lines   <- sf::st_nearest_points(from_geoms, to_geoms, pairwise = TRUE)
+  lengths <- as.numeric(sf::st_length(lines))
   keep    <- lengths <= max_dist_m
 
   list(
-    lines     = sf::st_sfc(lapply(raw[keep], `[[`, "line"), crs = crs),
+    lines     = lines[keep],
     lengths_m = lengths[keep],
     keep      = keep
   )
@@ -86,9 +96,10 @@ validate_row_crossing_lines <- function(lines_sfc, line_lengths_m,
   crossing_lines    <- lines_sfc[crossing_idx]
   row_intersections <- sf::st_intersection(crossing_lines, row_union)
 
-  row_lengths <- vapply(seq_along(row_intersections), function(i) {
-    sum(as.numeric(sf::st_length(row_intersections[i])))
-  }, numeric(1))
+  # st_length is vectorised over the whole sfc and already returns the total
+  # length of each feature (summing MULTILINESTRING / GEOMETRYCOLLECTION
+  # pieces internally), so the per-feature loop + sum() collapses into one call.
+  row_lengths <- as.numeric(sf::st_length(row_intersections))
 
   coverage <- row_lengths / line_lengths_m[crossing_idx]
   passes   <- coverage >= min_coverage_ratio
