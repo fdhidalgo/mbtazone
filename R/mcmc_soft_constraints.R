@@ -170,6 +170,17 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
     return(list(feasible = FALSE, constraint_failed = "min_capacity"))
   }
 
+  # Optional HARD upper cap on capacity. The capacity prior does the shaping
+  # below it; this is only a backstop that rules out runaway plans far above
+  # anything a municipality adopted. It is opt-in: callers that do not set
+  # constraints$max_capacity (NULL / non-finite) get the historical behavior of
+  # no upper bound, so this check is a no-op for them.
+  if (!is.null(constraints$max_capacity) &&
+      is.finite(constraints$max_capacity) &&
+      state$total_capacity > constraints$max_capacity) {
+    return(list(feasible = FALSE, constraint_failed = "max_capacity"))
+  }
+
   # Area
   if (state$total_area < constraints$min_area) {
     return(list(feasible = FALSE, constraint_failed = "min_area"))
