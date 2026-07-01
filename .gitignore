@@ -52,3 +52,5 @@ dev/dev_potential/
 /.quarto/
 **/*.quarto_ipynb
 .positai/settings.json
+
+local/

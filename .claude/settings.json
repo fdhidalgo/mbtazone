@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n 'minimize_state_for_storage\\\\|$X\\\\b' /Users/ethansinger/projects/mbtazone/R/mcmc_parcel_mcmc_state.R)",
+      "Bash(grep -n '^\\\\s*X\\\\s*=\\\\|$X\\\\s*<-\\\\|state\\\\[\"X\"\\\\]' /Users/ethansinger/projects/mbtazone/R/mcmc_parcel_mcmc_state.R)"
+    ]
+  }
+}
