@@ -153,6 +153,16 @@ LCC_BAND_SAMPLES_PER_BAND <- 500L
 # Maximum BFS attempts per band before giving up
 LCC_BAND_MAX_ATTEMPTS <- 1000L
 
+# Hard wall-clock budget per band (seconds), shared across both passes. Bounds
+# the pathological case where a band's acceptance rate is ~0 and every attempt
+# grows a huge block (observed: 7.8 hours for one band that found nothing).
+LCC_BAND_TIME_BUDGET_S <- 900
+
+# Consecutive attempts without one constraint-valid candidate before a pass
+# gives up (Pass 1 hands over to the density-aware Pass 2; Pass 2 declares the
+# band unreachable).
+LCC_BAND_STALL_ATTEMPTS <- 150L
+
 # ============================================================================
 # KERNEL PROBABILITIES
 # ============================================================================

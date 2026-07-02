@@ -144,7 +144,21 @@ bfs_build_context <- function(graph, metric_lookup, eligible_pool = NULL,
 #'   \code{density_aware = TRUE} (capacity per area, e.g. 15 du/acre).
 #' @param beta Softmax temperature on the per-candidate density surplus when
 #'   \code{density_aware = TRUE}; larger is greedier toward denser additions.
-#' @return Same list shape as \code{\link{bfs_grow_block}}
+#' @param doom_min_density Optional density floor (capacity per area) that the
+#'   finished block must meet. Only used by the random (non-density-aware) path,
+#'   and only when \code{check_max_before_add = TRUE} with a finite
+#'   \code{target_max}: under those conditions the final capacity cannot exceed
+#'   \code{target_max} while area only grows, so the moment
+#'   \code{target_max / current_area} drops below this floor no continuation of
+#'   the attempt can ever satisfy the density requirement — the grow aborts with
+#'   \code{success = FALSE, doomed = TRUE}. The prune is exact: an attempt that
+#'   would have produced a density-passing block is never truncated (its
+#'   intermediate area always satisfies \code{target_max / area >= floor}), and
+#'   such attempts consume the identical RNG sequence. Requires a context built
+#'   with \code{metric2_lookup} (area). Default NULL (no pruning).
+#' @return Same list shape as \code{\link{bfs_grow_block}}, plus
+#'   \code{doomed = TRUE} when the grow was abandoned by the
+#'   \code{doom_min_density} prune.
 #' @keywords internal
 bfs_grow_block_ctx <- function(ctx,
                                seed_pool = NULL,
@@ -154,7 +168,8 @@ bfs_grow_block_ctx <- function(ctx,
                                check_max_before_add = FALSE,
                                density_aware = FALSE,
                                min_density = NULL,
-                               beta = 8) {
+                               beta = 8,
+                               doom_min_density = NULL) {
   node_names    <- ctx$node_names
   id_of         <- ctx$id_of
   adj_int       <- ctx$adj_int
@@ -183,8 +198,14 @@ bfs_grow_block_ctx <- function(ctx,
   seed_id <- seed_ids[sample.int(length(seed_ids), 1)]
   in_block <- logical(n)
   in_block[seed_id] <- TRUE
-  block_ids <- seed_id
+  # Preallocated block accumulator: appending via c() re-copies the whole vector
+  # every step, which is O(|block|^2) for the multi-thousand-parcel blocks that
+  # high-capacity bands grow in low-density towns.
+  block_ids <- integer(n)
+  block_ids[1L] <- seed_id
+  n_block <- 1L
   current_metric <- metric_by_id[seed_id]
+  doomed <- FALSE
 
   # Initial frontier: setdiff(neighbors(seed), seed) then intersect(., eligible).
   fr <- adj_int[[seed_id]]
@@ -223,7 +244,8 @@ bfs_grow_block_ctx <- function(ctx,
       w <- exp(z - max(z))
       next_id <- fk[sample.int(length(fk), 1, prob = w)]
 
-      block_ids <- c(block_ids, next_id)
+      n_block <- n_block + 1L
+      block_ids[n_block] <- next_id
       in_block[next_id] <- TRUE
       current_metric <- current_metric + metric_by_id[next_id]
       current_area   <- current_area + area_by_id[next_id]
@@ -239,7 +261,23 @@ bfs_grow_block_ctx <- function(ctx,
       }
     }
   } else {
-    while (length(fr) > 0 && current_metric < effective_target) {
+    # Doomed-attempt prune (see @param doom_min_density): valid only when the
+    # pre-add max check caps final capacity at target_max, so the best achievable
+    # final density is target_max / current_area. Equivalently, the attempt is
+    # doomed once current_area exceeds target_max / doom_min_density.
+    doom_check <- !is.null(doom_min_density) && doom_min_density > 0 &&
+      check_max_before_add && is.finite(target_max)
+    if (doom_check) {
+      area_by_id <- ctx$metric2_by_id
+      if (is.null(area_by_id)) {
+        stop("bfs_grow_block: doom_min_density requires a context built with metric2_lookup (area)")
+      }
+      doom_area_limit <- target_max / doom_min_density
+      current_area <- area_by_id[seed_id]
+      doomed <- current_area > doom_area_limit
+    }
+
+    while (!doomed && length(fr) > 0 && current_metric < effective_target) {
       next_id <- fr[sample.int(length(fr), 1)]
       next_metric <- metric_by_id[next_id]
 
@@ -250,9 +288,18 @@ bfs_grow_block_ctx <- function(ctx,
       }
 
       # Add node to block
-      block_ids <- c(block_ids, next_id)
+      n_block <- n_block + 1L
+      block_ids[n_block] <- next_id
       in_block[next_id] <- TRUE
       current_metric <- current_metric + next_metric
+
+      if (doom_check) {
+        current_area <- current_area + area_by_id[next_id]
+        if (current_area > doom_area_limit) {
+          doomed <- TRUE
+          break
+        }
+      }
 
       # Remove just next_id from frontier
       fr <- fr[fr != next_id]
@@ -270,10 +317,11 @@ bfs_grow_block_ctx <- function(ctx,
   }
 
   list(
-    block = node_names[block_ids],
+    block = node_names[block_ids[seq_len(n_block)]],
     metric_total = unname(current_metric),
-    success = (current_metric >= target_min),
-    seed = node_names[seed_id]
+    success = !doomed && (current_metric >= target_min),
+    seed = node_names[seed_id],
+    doomed = doomed
   )
 }
 
@@ -307,11 +355,15 @@ bfs_grow_block_ctx <- function(ctx,
 #' @param min_density Minimum aggregate density to maintain when
 #'   \code{density_aware = TRUE}.
 #' @param beta Softmax temperature for density-aware frontier selection.
+#' @param doom_min_density Optional density floor enabling the exact
+#'   doomed-attempt prune of \code{\link{bfs_grow_block_ctx}}. Requires
+#'   \code{ctx}. Default NULL (no pruning).
 #' @return List with:
 #'   - block: character vector of node IDs in grown block
 #'   - metric_total: final metric sum
 #'   - success: logical (TRUE if target_min reached)
 #'   - seed: the seed node used
+#'   - doomed: logical (ctx path only; TRUE if the doom prune abandoned the grow)
 #' @keywords internal
 bfs_grow_block <- function(graph,
                            metric_lookup,
@@ -324,7 +376,8 @@ bfs_grow_block <- function(graph,
                            ctx = NULL,
                            density_aware = FALSE,
                            min_density = NULL,
-                           beta = 8) {
+                           beta = 8,
+                           doom_min_density = NULL) {
 
   if (!is.null(ctx)) {
     return(bfs_grow_block_ctx(
@@ -336,7 +389,8 @@ bfs_grow_block <- function(graph,
       check_max_before_add = check_max_before_add,
       density_aware        = density_aware,
       min_density          = min_density,
-      beta                 = beta
+      beta                 = beta,
+      doom_min_density     = doom_min_density
     ))
   }
 
@@ -344,6 +398,9 @@ bfs_grow_block <- function(graph,
   # the character path does not maintain it, so require ctx for that mode.
   if (density_aware) {
     stop("bfs_grow_block: density_aware = TRUE requires a precomputed ctx (build with metric2_lookup = area)")
+  }
+  if (!is.null(doom_min_density)) {
+    stop("bfs_grow_block: doom_min_density requires a precomputed ctx (build with metric2_lookup = area)")
   }
 
   all_nodes <- igraph::V(graph)$name

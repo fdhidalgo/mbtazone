@@ -1115,13 +1115,26 @@ run_bfs_lcc_supplement <- function(
 #'   Default: LCC_BAND_MAX_ATTEMPTS.
 #' @param forbidden_parcels Character vector of parcels to exclude. Default: NULL.
 #' @param existing_keys Character vector of xxhash64 keys to skip. Default: character(0).
+#' @param time_budget_s Hard wall-clock budget in seconds for this band, shared
+#'   across both passes. Bands whose acceptance rate is ~0 (high-capacity bands
+#'   in low-density towns) previously ran the full attempt budget at unbounded
+#'   per-attempt cost — observed up to 7.8 hours for a single band that found
+#'   nothing. When the budget is hit the band returns what it has and sets
+#'   \code{band_stats$budget_exhausted}. Default: 900.
+#' @param stall_attempts Consecutive attempts without a single constraint-valid
+#'   candidate before a pass gives up. Pass 1 hands over to the density-aware
+#'   Pass 2 (the strategy actually suited to sparse towns); if Pass 2 stalls
+#'   with nothing found, the band is declared empirically unreachable
+#'   (\code{band_stats$unreachable}). Default: 150.
 #' @param verbose Print progress. Default: TRUE.
 #' @return List with:
 #'   - discovered_lccs: data.table with lcc_key, parcel_ids, capacity, area,
 #'       capacity_band, tree_count = 0, source = "bfs_stratified"
 #'   - band_stats: single-row data.table with band, cap_low, cap_high, attempts,
 #'       valid, unique_found, da_attempts (density-aware fallback attempts),
-#'       da_found (LCCs the fallback added)
+#'       da_found (LCCs the fallback added), elapsed_s, doomed_attempts
+#'       (attempts abandoned by the exact density prune), budget_exhausted,
+#'       unreachable
 #' @export
 discover_lccs_single_band <- function(
     parcel_graph,
@@ -1132,8 +1145,11 @@ discover_lccs_single_band <- function(
     max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
     forbidden_parcels = NULL,
     existing_keys = character(0),
+    time_budget_s = 900,
+    stall_attempts = 150L,
     verbose = TRUE
 ) {
+  band_start_time <- proc.time()[["elapsed"]]
   # Extract constraint values
   min_capacity <- constraints$min_capacity
   min_lcc_fraction <- constraints$min_lcc_fraction %||% 0.5
@@ -1213,6 +1229,8 @@ discover_lccs_single_band <- function(
   band_found <- 0L
   band_valid <- 0L
   discovered_list <- list()
+  doomed_attempts <- 0L
+  budget_exhausted <- FALSE
 
   # Validate, dedup, and record one grown candidate block. Shared by the random
   # pass and the density-aware fallback so the acceptance rule cannot drift.
@@ -1264,14 +1282,29 @@ discover_lccs_single_band <- function(
   }
 
   # One band-sampling pass: draw a random in-band capacity target, grow a block
-  # toward it, and offer the result to record_candidate(), until the band fills or
-  # the attempt budget is spent. Returns the number of attempts made. Pass 1 (random)
-  # and Pass 2 (density-aware fallback) differ only in the seed pool and frontier
-  # strategy, so they share this loop. record_candidate() carries no RNG, so Pass 1's
-  # runif()/bfs_grow_block() draw sequence is exactly the historical one.
-  run_bfs_pass <- function(seed_pool, density_aware, density_floor, track_progress) {
+  # toward it, and offer the result to record_candidate(), until the band fills,
+  # the attempt budget is spent, the shared wall-clock budget runs out, or the
+  # pass stalls (stall_attempts consecutive attempts without one constraint-valid
+  # candidate). Pass 1 (random) and Pass 2 (density-aware fallback) differ only in
+  # the seed pool and frontier strategy, so they share this loop. Pass 1 also gets
+  # the exact doomed-attempt density prune (Pass 2 maintains the density floor by
+  # construction, so the prune can never fire there). record_candidate() carries
+  # no RNG, so a Pass-1 attempt sequence that never dooms/stalls draws exactly the
+  # historical runif()/bfs_grow_block() sequence.
+  run_bfs_pass <- function(seed_pool, density_aware, density_floor, track_progress,
+                           doom_density = NULL) {
     attempts <- 0L
+    since_valid <- 0L
+    stalled <- FALSE
     while (band_found < samples_per_band && attempts < max_attempts_per_band) {
+      if (proc.time()[["elapsed"]] - band_start_time > time_budget_s) {
+        budget_exhausted <<- TRUE
+        break
+      }
+      if (since_valid >= stall_attempts) {
+        stalled <- TRUE
+        break
+      }
       attempts <- attempts + 1L
 
       if (track_progress && verbose && attempts %% 100 == 0) {
@@ -1289,21 +1322,31 @@ discover_lccs_single_band <- function(
           target_max = cap_high,
           check_max_before_add = TRUE,
           density_aware = density_aware,
-          min_density = density_floor
+          min_density = density_floor,
+          doom_min_density = doom_density
         ),
         error = function(e) NULL
       )
 
+      if (!is.null(result) && isTRUE(result$doomed)) {
+        doomed_attempts <<- doomed_attempts + 1L
+      }
+
+      valid_before <- band_valid
       if (record_candidate(result) && verbose) {
         cli::cli_progress_update(set = band_found)
       }
+      since_valid <- if (band_valid > valid_before) 0L else since_valid + 1L
     }
-    attempts
+    list(attempts = attempts, stalled = stalled)
   }
 
-  # Pass 1: random, density-blind BFS (behavior unchanged from prior versions).
-  band_attempts <- run_bfs_pass(dense_seeds, density_aware = FALSE,
-                                density_floor = NULL, track_progress = TRUE)
+  # Pass 1: random, density-blind BFS (behavior unchanged from prior versions for
+  # attempts that neither doom nor stall).
+  pass1 <- run_bfs_pass(dense_seeds, density_aware = FALSE,
+                        density_floor = NULL, track_progress = TRUE,
+                        doom_density = min_density)
+  band_attempts <- pass1$attempts
 
   # Pass 2: adaptive density-aware fallback. Fires only when Pass 1 under-fills the
   # band (a no-op otherwise — see this function's docstring for the why and the
@@ -1311,18 +1354,34 @@ discover_lccs_single_band <- function(
   # with no dense land gets no fabricated LCCs.
   da_attempts <- 0L
   da_found <- 0L
+  pass2_stalled <- FALSE
   if (band_found < samples_per_band && length(strictly_dense_seeds) > 0) {
     da_found_start <- band_found
-    da_attempts <- run_bfs_pass(strictly_dense_seeds, density_aware = TRUE,
-                                density_floor = min_density, track_progress = FALSE)
+    pass2 <- run_bfs_pass(strictly_dense_seeds, density_aware = TRUE,
+                          density_floor = min_density, track_progress = FALSE)
+    da_attempts <- pass2$attempts
     da_found <- band_found - da_found_start
     band_attempts <- band_attempts + da_attempts
+    pass2_stalled <- pass2$stalled
   }
+
+  # Unreachable = the band produced nothing and gave up: either Pass 2 stalled
+  # with no finds, or Pass 1 stalled and no dense seeds exist for Pass 2 to try.
+  unreachable <- band_found == 0L &&
+    (pass2_stalled || (pass1$stalled && length(strictly_dense_seeds) == 0))
+
+  band_elapsed_s <- proc.time()[["elapsed"]] - band_start_time
 
   if (verbose) {
     cli::cli_progress_done()
     cli::cli_alert_success(
-      "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid; density-aware fallback added {da_found} in {da_attempts} attempts)"
+      "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid; density-aware fallback added {da_found} in {da_attempts} attempts; {doomed_attempts} pruned as doomed; {round(band_elapsed_s)}s)"
+    )
+    if (budget_exhausted) cli::cli_alert_warning(
+      "Band {band_idx}: wall-clock budget of {time_budget_s}s exhausted"
+    )
+    if (unreachable) cli::cli_alert_warning(
+      "Band {band_idx}: declared empirically unreachable (both passes stalled with nothing found)"
     )
   }
 
@@ -1349,7 +1408,11 @@ discover_lccs_single_band <- function(
     valid = band_valid,
     unique_found = band_found,
     da_attempts = da_attempts,  # density-aware fallback attempts (0 if it never fired)
-    da_found = da_found         # unique LCCs the fallback added
+    da_found = da_found,        # unique LCCs the fallback added
+    elapsed_s = band_elapsed_s,
+    doomed_attempts = doomed_attempts,   # attempts abandoned by the exact density prune
+    budget_exhausted = budget_exhausted, # TRUE if time_budget_s cut the band short
+    unreachable = unreachable            # TRUE if both passes stalled with nothing found
   )
 
   list(
@@ -1411,6 +1474,10 @@ combine_stratified_band_results <- function(band_results) {
 #'   Default: NULL.
 #' @param existing_keys Character vector of xxhash64 keys to skip (from prior
 #'   discoveries like tree enumeration). Default: character(0).
+#' @param time_budget_s Per-band wall-clock budget in seconds (see
+#'   \code{\link{discover_lccs_single_band}}). Default: 900.
+#' @param stall_attempts Consecutive valid-free attempts before a pass gives up
+#'   (see \code{\link{discover_lccs_single_band}}). Default: 150.
 #' @param verbose Print progress. Default: TRUE.
 #' @return List with:
 #'   - discovered_lccs: data.table with lcc_key, parcel_ids, capacity, area,
@@ -1427,6 +1494,8 @@ discover_lccs_by_capacity_bands <- function(
     max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
     forbidden_parcels = NULL,
     existing_keys = character(0),
+    time_budget_s = 900,
+    stall_attempts = 150L,
     verbose = TRUE
 ) {
   if (verbose) {
@@ -1446,6 +1515,8 @@ discover_lccs_by_capacity_bands <- function(
       max_attempts_per_band = max_attempts_per_band,
       forbidden_parcels = forbidden_parcels,
       existing_keys = existing_keys,
+      time_budget_s = time_budget_s,
+      stall_attempts = stall_attempts,
       verbose = verbose
     )
   })

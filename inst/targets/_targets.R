@@ -240,6 +240,8 @@ list(
       max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
       forbidden_parcels = NULL,
       existing_keys = existing_lcc_keys,
+      time_budget_s = LCC_BAND_TIME_BUDGET_S,
+      stall_attempts = LCC_BAND_STALL_ATTEMPTS,
       verbose = TRUE
     ),
     pattern = map(bfs_band_grid),
