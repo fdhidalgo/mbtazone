@@ -354,25 +354,61 @@ get_addable_blocks_unconstrained <- function(state, library) {
     X_logical[state$X_indices] <- TRUE
   }
   
+  # Vectorized path over precomputed flat closure arrays (block ∪ its neighbors,
+  # see build_block_closure_arrays): a block is addable iff no member of its
+  # closure is in X, i.e. its hit count is zero. Same set, same ascending order
+  # as the per-block loop below. This runs twice per birth/death/swap move.
+  if (!is.null(library$closure_flat_block)) {
+    hits <- tabulate(library$closure_flat_block[X_logical[library$closure_flat_parcel]],
+                     nbins = n_blocks)
+    return(which(hits == 0L))
+  }
+
   # We use a simple loop over indices which is extremely fast in R for this purpose
   # Pre-allocate logical vector to store results
   is_addable <- logical(n_blocks)
-  
+
   blocks <- library$blocks
   neighbor_indices <- library$neighbor_indices
-  
+
   for (i in seq_len(n_blocks)) {
     # Check disjoint (no overlap with current X)
     # blocks[[i]] are integer indices
     if (any(X_logical[blocks[[i]]])) next
-    
+
     # Check non-adjacent (block's neighbors don't touch current X)
     if (any(X_logical[neighbor_indices[[i]]])) next
-    
+
     is_addable[i] <- TRUE
   }
-  
+
   which(is_addable)
+}
+
+#' Build flat closure arrays for the vectorized addable-block scan
+#'
+#' For each secondary block i, its closure is blocks[[i]] ∪ neighbor_indices[[i]]
+#' (the parcels whose membership in X makes the block un-addable). Flattening
+#' all closures into two parallel integer arrays lets
+#' \code{\link{get_addable_blocks_unconstrained}} replace its per-block loop
+#' with one logical gather + tabulate. Static for a run (the secondary library
+#' never changes during MCMC).
+#'
+#' @param library Secondary library (hydrated: blocks are integer indices)
+#' @return List with closure_flat_block (block id per closure member) and
+#'   closure_flat_parcel (parcel index per closure member)
+#' @keywords internal
+build_block_closure_arrays <- function(library) {
+  n_blocks <- library$n_blocks
+  closures <- vector("list", n_blocks)
+  for (i in seq_len(n_blocks)) {
+    closures[[i]] <- c(library$blocks[[i]], library$neighbor_indices[[i]])
+  }
+  lens <- lengths(closures)
+  list(
+    closure_flat_block = rep.int(seq_len(n_blocks), lens),
+    closure_flat_parcel = unlist(closures, use.names = FALSE)
+  )
 }
 
 #' Get removable secondary blocks for death move

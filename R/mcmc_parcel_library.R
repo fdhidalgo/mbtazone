@@ -2178,9 +2178,16 @@ build_secondary_library_from_discovery <- function(
 #' @return List with updated lcc_library and added (logical)
 add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
                                max_online = ONLINE_MAX_ENTRIES,
-                               neighbor_cache = NULL) {
+                               neighbor_cache = NULL,
+                               lcc_indices = NULL) {
   all_parcels <- lcc_library$parcel_names
-  lcc_indices <- parcel_ids_to_indices(lcc_parcels, all_parcels)
+  # Callers that maintain a membership mask can pass the indices directly and
+  # skip this O(n_parcels) character match — it runs before the duplicate check,
+  # i.e. on every enrichment attempt. Indices are only used sorted (hash key,
+  # stored block), so any order is equivalent.
+  if (is.null(lcc_indices)) {
+    lcc_indices <- parcel_ids_to_indices(lcc_parcels, all_parcels)
+  }
 
   # Skip empty or invalid LCCs (prevents corrupt library entries)
   if (length(lcc_indices) == 0) {
