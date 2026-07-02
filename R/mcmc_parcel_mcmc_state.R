@@ -474,13 +474,17 @@ get_lcc_boundary <- function(state, library, parcel_graph,
 
     # B_in: In LCC AND has neighbor outside X (X_counts < degree)
     is_B_in <- lcc_logical & (X_counts < degrees)
-    B_in <- parcel_names[is_B_in]
+    B_in_idx <- which(is_B_in)
 
     # B_out: Not in X AND not forbidden AND has neighbor in LCC (lcc_counts > 0)
     is_B_out <- (!X_logical) & (!forbidden_logical) & (lcc_counts > 0)
-    B_out <- parcel_names[is_B_out]
+    B_out_idx <- which(is_B_out)
 
-    return(list(B_in = B_in, B_out = B_out))
+    # B_in_idx/B_out_idx are the library indices aligned with B_in/B_out; kernels
+    # use them to read the maintained neighbor counts instead of recounting via
+    # character %in% (count_lcc_neighbours) per move.
+    return(list(B_in = parcel_names[B_in_idx], B_out = parcel_names[B_out_idx],
+                B_in_idx = B_in_idx, B_out_idx = B_out_idx))
   }
 
   # Fallback: loop-based implementation using integer indices
@@ -660,11 +664,11 @@ add_secondary_block <- function(state, block_id_to_add, library, parcel_graph,
     # Mark all block parcels as in X (block_indices computed above)
     new_X_logical[block_indices] <- TRUE
 
-    # Update X neighbor counts for all added parcels
+    # Update X neighbor counts for all added parcels. Positional [[: neighbor_idx
+    # is ordered by library$parcel_names; a character [[ scans all ~n names.
     if (!is.null(neighbor_idx) && length(block_indices) > 0) {
       for (idx in block_indices) {
-        m <- parcel_names[idx]
-        nbr_indices <- neighbor_idx[[m]]
+        nbr_indices <- neighbor_idx[[idx]]
         new_X_counts[nbr_indices] <- new_X_counts[nbr_indices] + 1L
       }
     }
@@ -787,14 +791,14 @@ remove_secondary_block <- function(state, block_id_to_remove, library, parcel_gr
     }
     new_state$X_logical <- new_X_logical
 
-    # Incremental update of X_neighbor_counts: decrement for all removed block parcels
+    # Incremental update of X_neighbor_counts: decrement for all removed block
+    # parcels. block_parcels is parcel_names[block_indices] by construction
+    # (library_block_parcels), so block_indices IS match(block_parcels,
+    # parcel_names) without the O(n) scan. Positional [[ as elsewhere.
     if (!is.null(neighbor_idx) && length(block_parcels) > 0) {
       new_X_counts <- state$X_neighbor_counts
-      removed_indices <- match(block_parcels, parcel_names)
-      removed_indices <- removed_indices[!is.na(removed_indices)]
-      for (idx in removed_indices) {
-        m <- parcel_names[idx]
-        nbr_indices <- neighbor_idx[[m]]
+      for (idx in block_indices) {
+        nbr_indices <- neighbor_idx[[idx]]
         new_X_counts[nbr_indices] <- new_X_counts[nbr_indices] - 1L
       }
       new_state$X_neighbor_counts <- new_X_counts
@@ -900,7 +904,9 @@ update_lcc <- function(state, unit_id, action, library, parcel_graph,
   # Incremental update of logical vectors and counts if available
   if (!is.null(state$lcc_logical) && !is.null(neighbor_idx)) {
     idx <- unit_idx
-    nbr_indices <- neighbor_idx[[unit_id]]
+    # Positional [[: neighbor_idx is ordered by library$parcel_names, and a
+    # character [[ on a named list is a linear scan over all ~n names.
+    nbr_indices <- if (!is.na(unit_idx)) neighbor_idx[[unit_idx]] else neighbor_idx[[unit_id]]
 
     # Copy and update logical vectors
     new_X_logical <- state$X_logical

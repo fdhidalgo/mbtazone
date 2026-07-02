@@ -338,6 +338,11 @@ lcc_local_move <- function(
   )
   B_in <- boundary$B_in
   B_out <- boundary$B_out
+  # Library indices aligned with B_in/B_out (fast-path boundary only). When
+  # present, boundary weights read the maintained lcc_neighbor_counts by index
+  # instead of recounting neighbors via character %in% (count_lcc_neighbours).
+  B_in_idx <- boundary$B_in_idx
+  B_out_idx <- boundary$B_out_idx
 
   n_in <- length(B_in)
   n_out <- length(B_out)
@@ -356,8 +361,14 @@ lcc_local_move <- function(
   # a parcel leaves it forbidden from B_out_new (secondary neighbour rule
   # in get_lcc_boundary), making the reverse add impossible.
   if (length(state$secondary_neighbor_indices) > 0) {
-    forbidden_names <- library$parcel_names[state$secondary_neighbor_indices]
-    B_in <- B_in[!B_in %in% forbidden_names]
+    if (!is.null(B_in_idx)) {
+      keep <- !(B_in_idx %in% state$secondary_neighbor_indices)
+      B_in <- B_in[keep]
+      B_in_idx <- B_in_idx[keep]
+    } else {
+      forbidden_names <- library$parcel_names[state$secondary_neighbor_indices]
+      B_in <- B_in[!B_in %in% forbidden_names]
+    }
     n_in <- length(B_in)
   }
 
@@ -384,8 +395,14 @@ lcc_local_move <- function(
   if (action == "add") {
 
     # Weight B_out by (LCC-neighbour count)^alpha
-    # Every parcel in B_out has >= 1 LCC neighbour, so log is safe
-    fwd_counts  <- count_lcc_neighbours(B_out, lcc_set, neighbor_cache, parcel_graph)
+    # Every parcel in B_out has >= 1 LCC neighbour, so log is safe.
+    # The maintained lcc_neighbor_counts are definitionally the same integers
+    # count_lcc_neighbours() recomputes, read here by library index.
+    fwd_counts  <- if (!is.null(B_out_idx)) {
+      setNames(state$lcc_neighbor_counts[B_out_idx], B_out)
+    } else {
+      count_lcc_neighbours(B_out, lcc_set, neighbor_cache, parcel_graph)
+    }
     fwd_log_w   <- boundary_weight_alpha * log(fwd_counts)
     fwd_log_sum <- log(sum(exp(fwd_log_w - max(fwd_log_w)))) + max(fwd_log_w)
     fwd_probs   <- exp(fwd_log_w - fwd_log_sum)
@@ -451,7 +468,11 @@ lcc_local_move <- function(
     #   Reverse  q(X'→X) = w^-1(selected) / W_in_new
     #   Ratio = (w^-1(selected) / W_in_new) / (w(selected) / W_out)
     new_lcc_set <- new_state$lcc_parcels
-    rev_counts  <- count_lcc_neighbours(B_in_new, new_lcc_set, neighbor_cache, parcel_graph)
+    rev_counts  <- if (!is.null(new_boundary$B_in_idx)) {
+      setNames(new_state$lcc_neighbor_counts[new_boundary$B_in_idx], B_in_new)
+    } else {
+      count_lcc_neighbours(B_in_new, new_lcc_set, neighbor_cache, parcel_graph)
+    }
     rev_log_w   <- -boundary_weight_alpha * log(pmax(rev_counts, 1L))
     rev_log_sum <- log(sum(exp(rev_log_w - max(rev_log_w)))) + max(rev_log_w)
     rev_idx     <- match(selected, B_in_new)
@@ -476,7 +497,11 @@ lcc_local_move <- function(
     # Weight B_in by (LCC-neighbour count)^(-alpha) — prefer tendril tips.
     # Safe: a connected LCC with >= 2 parcels guarantees every parcel has
     # >= 1 in-LCC neighbour, so log(fwd_counts) is always finite here.
-    fwd_counts  <- count_lcc_neighbours(B_in, lcc_set, neighbor_cache, parcel_graph)
+    fwd_counts  <- if (!is.null(B_in_idx)) {
+      setNames(state$lcc_neighbor_counts[B_in_idx], B_in)
+    } else {
+      count_lcc_neighbours(B_in, lcc_set, neighbor_cache, parcel_graph)
+    }
     fwd_log_w   <- -boundary_weight_alpha * log(fwd_counts)
     fwd_log_sum <- log(sum(exp(fwd_log_w - max(fwd_log_w)))) + max(fwd_log_w)
     fwd_probs   <- exp(fwd_log_w - fwd_log_sum)
@@ -493,7 +518,7 @@ lcc_local_move <- function(
       rem_logical <- NULL
       if (!is.null(neighbor_idx) && !is.null(state$lcc_logical)) {
         rem_logical <- state$lcc_logical
-        sel_idx <- match(selected, library$parcel_names)
+        sel_idx <- if (!is.null(B_in_idx)) B_in_idx[idx] else match(selected, library$parcel_names)
         if (!is.na(sel_idx)) rem_logical[sel_idx] <- FALSE
       }
       if (!lcc_is_connected(rem_logical, remaining_lcc, neighbor_idx, parcel_graph)) {
@@ -552,7 +577,11 @@ lcc_local_move <- function(
     #   Reverse  q(X'→X) = w(selected) / W_out_new
     #   Ratio = (w(selected) / W_out_new) / (w^-1(selected) / W_in)
     new_lcc_set <- new_state$lcc_parcels
-    rev_counts  <- count_lcc_neighbours(B_out_new, new_lcc_set, neighbor_cache, parcel_graph)
+    rev_counts  <- if (!is.null(new_boundary$B_out_idx)) {
+      setNames(new_state$lcc_neighbor_counts[new_boundary$B_out_idx], B_out_new)
+    } else {
+      count_lcc_neighbours(B_out_new, new_lcc_set, neighbor_cache, parcel_graph)
+    }
     rev_log_w   <- boundary_weight_alpha * log(pmax(rev_counts, 1L))
     rev_log_sum <- log(sum(exp(rev_log_w - max(rev_log_w)))) + max(rev_log_w)
     rev_idx     <- match(selected, B_out_new)
@@ -1426,6 +1455,20 @@ filter_compatible_lccs <- function(
     length(secondary_neighbor_indices) > 0
 
   if (use_union) {
+    # Two masks over the parcel universe replace three per-candidate %in% calls
+    # (each of which rebuilt a hash table over the secondary index sets).
+    # Conditions checked per candidate, value-identical to the %in% version:
+    #   1. LCC overlaps a secondary            -> any(sec_mask[lcc_indices])
+    #   2. a secondary neighbor is in the LCC  -> any(nbr_mask[lcc_indices])
+    #      (non-empty intersection is symmetric)
+    #   3. an LCC neighbor is in a secondary   -> any(sec_mask[lcc_nbr_indices])
+    # na.rm = TRUE reproduces %in%'s NA-never-matches semantics.
+    n_universe <- length(secondary_library$parcel_names)
+    sec_mask <- logical(n_universe)
+    sec_mask[secondary_union_indices] <- TRUE
+    bad_mask <- sec_mask
+    bad_mask[secondary_neighbor_indices] <- TRUE
+
     compatible_mask <- vapply(
       lcc_ids,
       function(lcc_id) {
@@ -1441,19 +1484,8 @@ filter_compatible_lccs <- function(
           return(FALSE)
         }
 
-        # Check disjoint with all secondaries
-        if (any(lcc_indices %in% secondary_union_indices)) {
-          return(FALSE)
-        }
-        # Check secondary neighbors don't overlap LCC
-        if (any(secondary_neighbor_indices %in% lcc_indices)) {
-          return(FALSE)
-        }
-        # Check LCC neighbors don't overlap secondaries
-        if (any(lcc_nbr_indices %in% secondary_union_indices)) {
-          return(FALSE)
-        }
-        TRUE
+        !any(bad_mask[lcc_indices], na.rm = TRUE) &&
+          !any(sec_mask[lcc_nbr_indices], na.rm = TRUE)
       },
       logical(1)
     )

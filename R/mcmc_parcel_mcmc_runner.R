@@ -260,6 +260,13 @@ run_parcel_mcmc <- function(
   # Graph parcel names (may differ in ordering from library after serialization)
   graph_parcel_names <- igraph::V(parcel_graph)$name
 
+  # The fast boundary path compares library-ordered X_neighbor_counts against
+  # graph-ordered degrees positionally, and kernels index the maintained counts
+  # by library position. Both are silently wrong if the orders diverge.
+  if (!identical(graph_parcel_names, lib_parcel_names)) {
+    stop("run_parcel_mcmc: parcel_graph vertex order does not match secondary_library$parcel_names; positional count/degree comparisons would be incorrect")
+  }
+
   degrees <- igraph::degree(parcel_graph)
   names(degrees) <- graph_parcel_names
 
