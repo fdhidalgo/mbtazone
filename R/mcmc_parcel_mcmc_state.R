@@ -716,6 +716,113 @@ add_secondary_block <- function(state, block_id_to_add, library, parcel_graph,
   new_state
 }
 
+#' Add several secondary blocks to an LCC-only state in one pass
+#'
+#' Equivalent to folding \code{\link{add_secondary_block}} over
+#' \code{block_ids} starting from \code{base_state}, but with one pass per
+#' length-n field instead of k passes (the sequential fold copies X_logical,
+#' X_neighbor_counts, and secondary_neighbor_counts, and re-sorts X_indices,
+#' once per block — O(k·n) per replace-LCC proposal). Field-by-field the result
+#' matches the sequential fold exactly:
+#' - integer count fields are sums of per-block contributions (tabulate over
+#'   the concatenated per-block index vectors == repeated += , since each
+#'   block's index vector is internally unique by construction);
+#' - floating-point totals are accumulated block-by-block in the same order,
+#'   preserving fp addition order;
+#' - X/X_indices/secondary fields are set unions of disjoint sets.
+#'
+#' Requires \code{base_state} to be a secondary-free LCC-only state carrying
+#' the incremental tracking fields (as built by \code{reset_to_lcc()} with
+#' \code{neighbor_idx}); falls back to the sequential fold otherwise.
+#'
+#' @param base_state Secondary-free LCC-only state (from reset_to_lcc)
+#' @param block_ids Integer vector of secondary block ids to add, in order
+#' @param library Secondary library
+#' @param parcel_graph igraph object
+#' @param neighbor_idx Named list of integer neighbor indices (library order)
+#' @return State equal to sequentially adding every block
+#' @keywords internal
+add_secondary_blocks_bulk <- function(base_state, block_ids, library,
+                                      parcel_graph, neighbor_idx = NULL) {
+  if (length(block_ids) == 0) return(base_state)
+
+  can_bulk <- !is.null(neighbor_idx) &&
+    !is.null(base_state$lcc_logical) &&
+    !is.null(base_state$secondary_neighbor_counts) &&
+    !is.null(base_state$secondary_union_indices) &&
+    length(base_state$secondary_blocks) == 0 &&
+    !is.null(library$neighbor_indices)
+
+  if (!can_bulk) {
+    new_state <- base_state
+    for (bid in block_ids) {
+      new_state <- add_secondary_block(new_state, bid, library, parcel_graph,
+                                       neighbor_idx = neighbor_idx)
+    }
+    return(new_state)
+  }
+
+  block_ids <- unname(block_ids)
+  all_block_idx <- unlist(library$blocks[block_ids], use.names = FALSE)
+  n_parcels <- length(library$parcel_names)
+
+  # Same invariant the sequential fold enforces per block: blocks must not
+  # overlap the LCC overlay nor each other.
+  if (any(base_state$X_logical[all_block_idx]) || anyDuplicated(all_block_idx) > 0L) {
+    stop(sprintf(
+      "Invariant violation in add_secondary_blocks_bulk: blocks [%s] overlap the LCC overlay or each other",
+      paste(head(block_ids, 10), collapse = ",")
+    ))
+  }
+
+  # Floating-point totals accumulated per block in order (identical fp
+  # addition order to the sequential fold).
+  total_capacity <- base_state$total_capacity
+  total_area <- base_state$total_area
+  total_capacity_in_station <- base_state$total_capacity_in_station
+  total_area_in_station <- base_state$total_area_in_station
+  for (bid in block_ids) {
+    block_indices <- library$blocks[[bid]]
+    added <- overlay_attr_sums(block_indices, library$parcel_names[block_indices],
+                               library, parcel_graph)
+    total_capacity <- total_capacity + added$capacity
+    total_area <- total_area + added$area
+    total_capacity_in_station <- total_capacity_in_station + added$capacity_in_station
+    total_area_in_station <- total_area_in_station + added$area_in_station
+  }
+
+  new_X_logical <- base_state$X_logical
+  new_X_logical[all_block_idx] <- TRUE
+
+  new_sec_counts <- base_state$secondary_neighbor_counts +
+    tabulate(unlist(library$neighbor_indices[block_ids], use.names = FALSE),
+             nbins = n_parcels)
+
+  new_X_counts <- base_state$X_neighbor_counts +
+    tabulate(unlist(neighbor_idx[all_block_idx], use.names = FALSE),
+             nbins = n_parcels)
+
+  # Field names and order match the last sequential add_secondary_block call.
+  list(
+    X = c(base_state$X, library_blocks_parcels(library, block_ids)),
+    X_indices = sort(unique(c(base_state$X_indices, all_block_idx))),
+    secondary_blocks = c(base_state$secondary_blocks, block_ids),
+    lcc_parcels = base_state$lcc_parcels,
+    total_capacity = total_capacity,
+    total_area = total_area,
+    total_capacity_in_station = total_capacity_in_station,
+    total_area_in_station = total_area_in_station,
+    secondary_union_indices = sort(unique(c(base_state$secondary_union_indices,
+                                            all_block_idx))),
+    secondary_neighbor_counts = new_sec_counts,
+    secondary_neighbor_indices = which(new_sec_counts > 0),
+    lcc_logical = base_state$lcc_logical,
+    lcc_neighbor_counts = base_state$lcc_neighbor_counts,
+    X_logical = new_X_logical,
+    X_neighbor_counts = new_X_counts
+  )
+}
+
 #' Remove a secondary block from state (for death move)
 #'
 #' Removes a secondary block from the state. The block must be in the current

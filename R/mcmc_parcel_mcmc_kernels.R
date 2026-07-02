@@ -1815,15 +1815,15 @@ replace_lcc_move <- function(
     nbr_to,
     lcc_state_cache
   )
-  for (bid in current_secondary_ids) {
-    new_state <- add_secondary_block(
-      new_state,
-      bid,
-      secondary_library,
-      parcel_graph,
-      neighbor_idx = neighbor_idx
-    )
-  }
+  # One-pass rebuild of all retained secondaries (field-identical to folding
+  # add_secondary_block, which copied every length-n tracking vector per block).
+  new_state <- add_secondary_blocks_bulk(
+    new_state,
+    current_secondary_ids,
+    secondary_library,
+    parcel_graph,
+    neighbor_idx = neighbor_idx
+  )
 
   # Step 5: Check feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(
