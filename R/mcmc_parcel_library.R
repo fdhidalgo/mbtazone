@@ -3393,7 +3393,19 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
   # stacked on top of any station blocks added in phase 1.
   if (!lcc_meets_capacity) {
     remaining <- setdiff(compatible_ids, selected)
-    k_target  <- rgeom(1, prob = 1 - exp(-K_PRIOR_LAMBDA))
+    # K_PRIOR_LAMBDA = 0 (no fragmentation penalty) is a flat, improper prior
+    # over k = 0, 1, 2, ... -- the penalty term itself (log_k_ratio =
+    # K_PRIOR_LAMBDA * ...) is fine at 0 in the birth/death kernels, but
+    # rgeom(prob = 1 - exp(-K_PRIOR_LAMBDA)) is not: a geometric distribution
+    # needs a strictly positive success probability, so prob = 0 returns NA
+    # (with a warning) instead of "no preference among any count". Restricted
+    # to the finite set of blocks actually available here, "no preference" is
+    # uniform over 0..length(remaining).
+    k_target <- if (isTRUE(K_PRIOR_LAMBDA == 0)) {
+      sample.int(length(remaining) + 1L, 1L) - 1L
+    } else {
+      rgeom(1, prob = 1 - exp(-K_PRIOR_LAMBDA))
+    }
     k_target  <- min(k_target, length(remaining))
     if (k_target > 0L) {
       shuffled_ids <- sample(remaining)
