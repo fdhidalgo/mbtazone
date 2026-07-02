@@ -1043,6 +1043,14 @@ update_lcc <- function(state, unit_id, action, library, parcel_graph,
   if (!is.null(state$secondary_neighbor_indices)) {
     new_state$secondary_neighbor_indices <- state$secondary_neighbor_indices
   }
+  # Carry the replace-LCC compatibility cache: compatibility of library LCCs
+  # depends only on the secondary set (filter_compatible_lccs never reads the
+  # current LCC), which LCC-local moves do not change. Dropping it here forced
+  # the ~O(library) cold recomputation on the next replace-LCC attempt after
+  # every lcc_local move.
+  if (!is.null(state$compatible_lccs_cache)) {
+    new_state$compatible_lccs_cache <- state$compatible_lccs_cache
+  }
 
   # Incremental update of logical vectors and counts if available
   if (!is.null(state$lcc_logical) && !is.null(neighbor_idx)) {

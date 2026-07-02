@@ -1662,8 +1662,23 @@ replace_lcc_move <- function(
   # This gives ~1700x speedup for consecutive replace_lcc moves
   all_active_ids <- which(active_mask)
   if (!is.null(state$compatible_lccs_cache)) {
-    # Use cached compatible set (very fast)
+    # Use cached compatible set (very fast). The cache is kept exact: carried
+    # through LCC-local moves (secondaries unchanged), appended on library
+    # enrichment (runner tests each new entry), dropped whenever secondaries
+    # change. It may retain evicted ids — harmless, every consumer intersects
+    # with active-derived sets.
     all_compatible_lccs <- state$compatible_lccs_cache
+    if (exists("DEBUG_INVARIANT_CHECKS") && isTRUE(DEBUG_INVARIANT_CHECKS) &&
+        k_current > 0) {
+      fresh_compatible <- filter_compatible_lccs(
+        all_active_ids, lcc_library, secondary_library, current_secondary_ids,
+        secondary_union_indices = state$secondary_union_indices,
+        secondary_neighbor_indices = state$secondary_neighbor_indices
+      )
+      if (!setequal(intersect(all_compatible_lccs, all_active_ids), fresh_compatible)) {
+        stop("BUG: compatible_lccs_cache diverged from fresh filter_compatible_lccs computation")
+      }
+    }
   } else if (k_current > 0) {
     # Compute fresh - this is the expensive operation (~900ms)
     all_compatible_lccs <- filter_compatible_lccs(

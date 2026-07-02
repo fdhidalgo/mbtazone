@@ -892,7 +892,23 @@ run_parcel_mcmc <- function(
             lcc_indices = if (!is.null(current_state$lcc_logical)) which(current_state$lcc_logical) else NULL
           )
           lcc_library <- enrich_result$lcc_library
-          if (enrich_result$added) online_adds <- online_adds + 1L
+          if (enrich_result$added) {
+            online_adds <- online_adds + 1L
+            # Keep the replace-LCC compatibility cache exact under enrichment:
+            # test just the new entry (O(k)) and append if compatible, instead
+            # of letting the cache go stale until the next secondary change.
+            if (!is.null(current_state$compatible_lccs_cache)) {
+              nid <- enrich_result$new_block_id
+              if (is_lcc_compatible_with_secondaries(
+                    lcc_library$blocks[[nid]],
+                    lcc_library$neighbor_indices[[nid]],
+                    current_state$secondary_blocks,
+                    secondary_library)) {
+                current_state$compatible_lccs_cache <-
+                  c(current_state$compatible_lccs_cache, nid)
+              }
+            }
+          }
         }
 
         r <- replace_lcc_move(
@@ -1062,7 +1078,21 @@ run_parcel_mcmc <- function(
         lcc_indices = if (!is.null(current_state$lcc_logical)) which(current_state$lcc_logical) else NULL
       )
       lcc_library <- enrich_result$lcc_library
-      if (enrich_result$added) online_adds <- online_adds + 1L
+      if (enrich_result$added) {
+        online_adds <- online_adds + 1L
+        # Same cache maintenance as the pre-replace-LCC enrichment above.
+        if (!is.null(current_state$compatible_lccs_cache)) {
+          nid <- enrich_result$new_block_id
+          if (is_lcc_compatible_with_secondaries(
+                lcc_library$blocks[[nid]],
+                lcc_library$neighbor_indices[[nid]],
+                current_state$secondary_blocks,
+                secondary_library)) {
+            current_state$compatible_lccs_cache <-
+              c(current_state$compatible_lccs_cache, nid)
+          }
+        }
+      }
     }
 
     # Record diagnostics

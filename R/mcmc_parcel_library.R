@@ -2316,7 +2316,7 @@ add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
   lcc_library$n_online <- (lcc_library$n_online %||% 0L) + 1L
   lcc_library$online_queue <- c(lcc_library$online_queue %||% integer(0), new_id)
 
-  list(lcc_library = lcc_library, added = TRUE)
+  list(lcc_library = lcc_library, added = TRUE, new_block_id = new_id)
 }
 
 # ============================================================================
