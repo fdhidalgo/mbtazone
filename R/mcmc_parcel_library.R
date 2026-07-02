@@ -2435,17 +2435,21 @@ find_viable_station_components <- function(parcel_graph, constraints) {
 #' @param k Number of items to select
 #' @return Integer vector of selected row indices
 select_maxmin_distant_seeds <- function(coords, k) {
+  coords <- as.matrix(coords)
   n <- nrow(coords)
   if (k >= n) return(seq_len(n))
 
-  # Compute full pairwise distance matrix once (vectorized)
-  dist_matrix <- as.matrix(dist(coords))
+  x <- coords[, 1]
+  y <- coords[, 2]
 
-  # Start with the most peripheral point (maximizes sum of distances to all others)
-  selected <- which.max(rowSums(dist_matrix))
+  # Greedy max-min needs only distances to the newest selected point, so the
+  # full pairwise matrix (O(n^2), ~200 MB at the 5000-block library cap) is
+  # unnecessary. Start at the point farthest from the centroid — a peripheral
+  # start like the former max-row-sum rule, without materializing the matrix.
+  selected <- which.max((x - mean(x))^2 + (y - mean(y))^2)
 
   # min_dist[i] = distance from i to its nearest selected point
-  min_dist <- dist_matrix[, selected]
+  min_dist <- sqrt((x - x[selected])^2 + (y - y[selected])^2)
 
   for (iter in seq_len(k - 1)) {
     # Pick the unselected point with the largest min-distance to selected set
@@ -2453,8 +2457,9 @@ select_maxmin_distant_seeds <- function(coords, k) {
     next_idx <- which.max(min_dist)
     selected <- c(selected, next_idx)
 
-    # Incrementally update min_dist — only need new column
-    min_dist <- pmin(min_dist, dist_matrix[, next_idx])
+    # Incrementally update min_dist against the newest selected point only
+    min_dist <- pmin(min_dist,
+                     sqrt((x - x[next_idx])^2 + (y - y[next_idx])^2))
   }
 
   selected
