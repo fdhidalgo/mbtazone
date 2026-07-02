@@ -505,6 +505,17 @@ discover_lccs_from_trees <- function(
     # Forbidden mask for this component
     forbidden_mask <- tree_names %in% forbidden_parcels
 
+    # Per-vertex random 31-bit signatures for O(1) cut deduplication. A cut's
+    # signature is the XOR of its members' signatures — a pure function of the
+    # parcel set, so duplicate cuts (the large majority; each unique LCC is
+    # rediscovered ~5x across trees) are recognized without extracting, sorting,
+    # and digesting their parcel vectors. Two independent 31-bit words give
+    # ~2^62 signature space: collision probability at 10^6 cuts is ~1e-7.
+    # The canonical xxhash64 lcc_key is still computed on first occurrence —
+    # cross-source dedup (combine_all_lcc_discoveries) depends on it.
+    sig1_by_vertex <- sample.int(.Machine$integer.max, n_tree, replace = TRUE)
+    sig2_by_vertex <- sample.int(.Machine$integer.max, n_tree, replace = TRUE)
+
     # =========================================================================
     # SAMPLE TREES FOR THIS COMPONENT
     # =========================================================================
@@ -557,35 +568,66 @@ discover_lccs_from_trees <- function(
 
       total_cuts_found <- total_cuts_found + length(valid_cuts)
 
-      # Compute DFS metadata ONCE per tree for O(k) cut extraction
-      dfs_metadata <- compute_tree_dfs_metadata(tree, root)
+      # DFS metadata for O(k) cut extraction — computed lazily on the first
+      # genuinely new cut, since a tree whose cuts are all duplicates never
+      # extracts anything.
+      dfs_metadata <- NULL
 
-      # Extract parcels for each valid cut using O(k) array slicing
+      # Bottom-up XOR fold of the per-vertex signatures (same traversal as
+      # compute_subtree_aggregates): sub_sig[v] is the XOR over v's subtree,
+      # so a cut's signature is O(1) — subtree side directly, complement side
+      # via XOR with the root total.
+      sub_sig1 <- sig1_by_vertex
+      sub_sig2 <- sig2_by_vertex
+      bfs_order <- aggregates$bfs_order
+      parent <- aggregates$parent
+      for (v in rev(bfs_order)) {
+        if (v != root) {
+          p <- parent[v]
+          sub_sig1[p] <- bitwXor(sub_sig1[p], sub_sig1[v])
+          sub_sig2[p] <- bitwXor(sub_sig2[p], sub_sig2[v])
+        }
+      }
+      total_sig1 <- sub_sig1[root]
+      total_sig2 <- sub_sig2[root]
+
+      # Dedup each valid cut by signature; extract + sort + digest only on the
+      # first occurrence of a parcel set.
       for (cut in valid_cuts) {
-        lcc_parcels <- extract_cut_parcels(
-          tree_names = tree_names,
-          cut_vertex = cut$vertex,
-          cut_side = cut$side,
-          dfs_metadata = dfs_metadata
-        )
-
-        # Create signature key using hash (full parcel string can exceed R's 10000 byte limit)
-        sorted_parcels <- sort(lcc_parcels)
-        lcc_key <- digest::digest(sorted_parcels, algo = "xxhash64")
+        v <- cut$vertex
+        if (cut$side == "subtree") {
+          s1 <- sub_sig1[v]; s2 <- sub_sig2[v]
+        } else {
+          s1 <- bitwXor(total_sig1, sub_sig1[v])
+          s2 <- bitwXor(total_sig2, sub_sig2[v])
+        }
+        sig_key <- paste0(comp_id, "|", s1, "|", s2)
 
         # Add to hash if new, or increment tree count
-        if (!exists(lcc_key, envir = lcc_hash, inherits = FALSE)) {
-          assign(lcc_key, list(
+        if (!exists(sig_key, envir = lcc_hash, inherits = FALSE)) {
+          if (is.null(dfs_metadata)) {
+            dfs_metadata <- compute_tree_dfs_metadata(tree, root)
+          }
+          lcc_parcels <- extract_cut_parcels(
+            tree_names = tree_names,
+            cut_vertex = v,
+            cut_side = cut$side,
+            dfs_metadata = dfs_metadata
+          )
+          # Canonical key (full parcel string can exceed R's 10000 byte limit)
+          lcc_key <- digest::digest(sort(lcc_parcels), algo = "xxhash64")
+          assign(sig_key, list(
+            lcc_key = lcc_key,
             parcel_ids = lcc_parcels,
             capacity = as.integer(cut$capacity),
             area = cut$area
           ), envir = lcc_hash)
-          assign(lcc_key, 1L, envir = lcc_tree_counts)
+          assign(sig_key, 1L, envir = lcc_tree_counts)
           n_unique_lccs <- n_unique_lccs + 1L
         } else {
           # Increment tree count (LCC found in multiple trees)
-          current_count <- get(lcc_key, envir = lcc_tree_counts)
-          assign(lcc_key, current_count + 1L, envir = lcc_tree_counts)
+          current_count <- get(sig_key, envir = lcc_tree_counts)
+          assign(sig_key, current_count + 1L, envir = lcc_tree_counts)
         }
       }
 
@@ -631,18 +673,17 @@ discover_lccs_from_trees <- function(
     ))
   }
 
-  # Build data.table from hash
-  discovered_lccs <- data.table::rbindlist(lapply(lcc_keys, function(key) {
-    lcc_data <- get(key, envir = lcc_hash)
-    tree_count <- get(key, envir = lcc_tree_counts)
-    data.table::data.table(
-      lcc_key = key,
-      parcel_ids = list(lcc_data$parcel_ids),
-      capacity = lcc_data$capacity,
-      area = lcc_data$area,
-      tree_count = tree_count
-    )
-  }))
+  # Build data.table from hash column-wise. The former rbindlist over one
+  # 1-row data.table per key was the documented 75-minute wall at ~1M uniques
+  # (and still sluggish at the 50k cap); this is a single allocation.
+  lcc_vals <- mget(lcc_keys, envir = lcc_hash)
+  discovered_lccs <- data.table::data.table(
+    lcc_key = vapply(lcc_vals, `[[`, character(1), "lcc_key"),
+    parcel_ids = unname(lapply(lcc_vals, `[[`, "parcel_ids")),
+    capacity = vapply(lcc_vals, `[[`, integer(1), "capacity"),
+    area = vapply(lcc_vals, `[[`, numeric(1), "area"),
+    tree_count = unlist(mget(lcc_keys, envir = lcc_tree_counts), use.names = FALSE)
+  )
 
   # Sort by tree_count (most frequently found first)
   data.table::setorder(discovered_lccs, -tree_count)

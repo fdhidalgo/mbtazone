@@ -96,15 +96,19 @@ select_blocks_by_coverage <- function(candidate_blocks, max_size, parcel_names,
     idx
   })
 
-  # Build inverted index: parcel -> list of candidate indices containing it
-  # This enables incremental score updates (O(overlap) instead of O(n_candidates))
+  # Build inverted index: parcel -> vector of candidate indices containing it.
+  # This enables incremental score updates (O(overlap) instead of O(n_candidates)).
+  # One split() over the flattened memberships; the former nested loop grew each
+  # parcel's vector with c(), re-copying it on every append (quadratic in
+  # per-parcel membership count — part of the Worcester-scale blowup).
   if (verbose) cli::cli_alert_info("  Building inverted index...")
+  membership_lens <- lengths(parcel_indices_list)
   parcel_to_candidates <- vector("list", n_parcels)
-  for (j in seq_len(n_candidates)) {
-    for (p in parcel_indices_list[[j]]) {
-      parcel_to_candidates[[p]] <- c(parcel_to_candidates[[p]], j)
-    }
-  }
+  split_index <- split(
+    rep.int(seq_len(n_candidates), membership_lens),
+    unlist(parcel_indices_list, use.names = FALSE)
+  )
+  parcel_to_candidates[as.integer(names(split_index))] <- split_index
 
   # Precompute initial scores for all candidates
   # Score = sum(1 / (coverage[p] + 1)) for p in LCC
