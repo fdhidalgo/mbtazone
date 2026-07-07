@@ -188,6 +188,7 @@ list(
       n_trees                = TREE_LCC_N_TREES,
       forbidden_parcels      = NULL,
       max_discovery_capacity = constraints$min_capacity * DISCOVERY_CAPACITY_MULTIPLIER,
+      max_unique_lccs        = LCC_DISCOVERY_MAX_UNIQUE,
       verbose                = TRUE
     )
   ),

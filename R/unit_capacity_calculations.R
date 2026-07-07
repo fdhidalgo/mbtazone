@@ -153,10 +153,18 @@ calculate_final_unit_capacity <- function(units_building_capacity,
                                         units_max_cap,
                                         units_graduated_lots) {
 
+  # All method vectors are one-per-parcel and must share a length; the previous
+  # data.frame() build failed loudly on any mismatch. pmin() would instead
+  # silently recycle a nonconforming vector, so assert equal lengths first.
+  method_lengths <- lengths(list(
+    units_building_capacity, units_density_limits, units_lot_coverage,
+    units_lot_area_req, units_far_limits, units_max_cap, units_graduated_lots
+  ))
+  stopifnot(length(unique(method_lengths)) == 1L)
+
   # Minimum across all methods. pmin(na.rm = TRUE) treats NA as missing (the old
-  # NA -> Inf substitution) and already returns NA_real_ when every method is NA,
-  # so no explicit all-NA guard is needed. pmin recycles its inputs, so mismatched
-  # lengths still surface the same way the old data.frame build did.
+  # NA -> Inf substitution) and returns NA_real_ when every method is NA, so no
+  # explicit all-NA guard is needed.
   min_values <- pmin(
     units_building_capacity,
     units_density_limits,

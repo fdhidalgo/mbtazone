@@ -239,13 +239,24 @@ compute_birth_tilt_weights <- function(block_ids, library,
   }
 
   caps <- library$metadata$capacity[block_ids]
-  # NA capacity (e.g. from rbindlist fill=TRUE in library construction) gets
-  # zero weight rather than propagating NA into the probability vector.
-  caps[is.na(caps)] <- 0
   log_w <- -tilt_lambda * caps
+  # Blocks with missing capacity (e.g. rbindlist fill = TRUE padding rows) are
+  # excluded from the proposal: assign zero weight (-Inf log weight). Substituting
+  # 0 for NA would instead give them the *maximum* weight under positive tilt,
+  # since w_i = exp(-tilt_lambda * capacity_i) is largest at capacity 0.
+  log_w[is.na(log_w)] <- -Inf
 
   # Log-sum-exp for numerical stability
   max_log_w <- max(log_w)
+  if (!is.finite(max_log_w)) {
+    # Every candidate block has missing capacity: no valid birth target.
+    return(list(
+      weights = rep(0, n),
+      log_weights = log_w,
+      log_sum_w = -Inf,
+      valid = FALSE
+    ))
+  }
   log_sum_w <- max_log_w + log(sum(exp(log_w - max_log_w)))
 
   # Normalized weights for sampling
