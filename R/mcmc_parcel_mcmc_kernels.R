@@ -1668,8 +1668,7 @@ replace_lcc_move <- function(
     # change. It may retain evicted ids — harmless, every consumer intersects
     # with active-derived sets.
     all_compatible_lccs <- state$compatible_lccs_cache
-    if (exists("DEBUG_INVARIANT_CHECKS") && isTRUE(DEBUG_INVARIANT_CHECKS) &&
-        k_current > 0) {
+    if (isTRUE(DEBUG_INVARIANT_CHECKS) && k_current > 0) {
       fresh_compatible <- filter_compatible_lccs(
         all_active_ids, lcc_library, secondary_library, current_secondary_ids,
         secondary_union_indices = state$secondary_union_indices,

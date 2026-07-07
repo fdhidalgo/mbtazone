@@ -194,6 +194,46 @@ update_move_stats <- function(counts, mt, result) {
   invisible(counts)
 }
 
+# Enrich the online LCC library with the current LCC and keep the replace-LCC
+# compatibility cache exact. Adding the current LCC guarantees the reverse
+# replace-LCC move is always available (100% library coverage). Testing just the
+# new entry (O(k)) and appending it keeps `compatible_lccs_cache` correct without
+# waiting for the next secondary change to rebuild it. Returns the (possibly
+# grown) library, the (possibly updated) state, and whether a new entry was added.
+enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_graph,
+                                         secondary_library, max_online_entries,
+                                         neighbor_cache) {
+  enrich_result <- add_lcc_to_library(
+    lcc_library,
+    current_state$lcc_parcels,
+    parcel_graph,
+    max_online_entries,
+    neighbor_cache = neighbor_cache,  # Use name-based cache, not neighbor_idx
+    lcc_indices = if (!is.null(current_state$lcc_logical)) {
+      which(current_state$lcc_logical)
+    } else {
+      NULL
+    }
+  )
+  lcc_library <- enrich_result$lcc_library
+  if (enrich_result$added && !is.null(current_state$compatible_lccs_cache)) {
+    nid <- enrich_result$new_block_id
+    if (is_lcc_compatible_with_secondaries(
+          lcc_library$blocks[[nid]],
+          lcc_library$neighbor_indices[[nid]],
+          current_state$secondary_blocks,
+          secondary_library)) {
+      current_state$compatible_lccs_cache <-
+        c(current_state$compatible_lccs_cache, nid)
+    }
+  }
+  list(
+    lcc_library = lcc_library,
+    current_state = current_state,
+    added = enrich_result$added
+  )
+}
+
 # ============================================================================
 # MAIN MCMC SAMPLER
 # ============================================================================
@@ -883,32 +923,13 @@ run_parcel_mcmc <- function(
         # Immediate enrichment: add current LCC to library before attempting Replace-LCC
         # This guarantees the reverse move is always possible (100% library coverage)
         if (enable_online_enrichment) {
-          enrich_result <- add_lcc_to_library(
-            lcc_library,
-            current_state$lcc_parcels,
-            parcel_graph,
-            max_online_entries,
-            neighbor_cache = neighbor_cache,  # Use name-based cache, not neighbor_idx
-            lcc_indices = if (!is.null(current_state$lcc_logical)) which(current_state$lcc_logical) else NULL
+          enrich_result <- enrich_lcc_library_and_cache(
+            lcc_library, current_state, parcel_graph,
+            secondary_library, max_online_entries, neighbor_cache
           )
           lcc_library <- enrich_result$lcc_library
-          if (enrich_result$added) {
-            online_adds <- online_adds + 1L
-            # Keep the replace-LCC compatibility cache exact under enrichment:
-            # test just the new entry (O(k)) and append if compatible, instead
-            # of letting the cache go stale until the next secondary change.
-            if (!is.null(current_state$compatible_lccs_cache)) {
-              nid <- enrich_result$new_block_id
-              if (is_lcc_compatible_with_secondaries(
-                    lcc_library$blocks[[nid]],
-                    lcc_library$neighbor_indices[[nid]],
-                    current_state$secondary_blocks,
-                    secondary_library)) {
-                current_state$compatible_lccs_cache <-
-                  c(current_state$compatible_lccs_cache, nid)
-              }
-            }
-          }
+          current_state <- enrich_result$current_state
+          if (enrich_result$added) online_adds <- online_adds + 1L
         }
 
         r <- replace_lcc_move(
@@ -1069,30 +1090,13 @@ run_parcel_mcmc <- function(
       step %% enrichment_interval == 0 &&
       (is.null(enrichment_burn_in) || step <= enrichment_burn_in)
     if (should_enrich) {
-      enrich_result <- add_lcc_to_library(
-        lcc_library,
-        current_state$lcc_parcels,
-        parcel_graph,
-        max_online_entries,
-        neighbor_cache = neighbor_cache,  # Use name-based cache, not neighbor_idx
-        lcc_indices = if (!is.null(current_state$lcc_logical)) which(current_state$lcc_logical) else NULL
+      enrich_result <- enrich_lcc_library_and_cache(
+        lcc_library, current_state, parcel_graph,
+        secondary_library, max_online_entries, neighbor_cache
       )
       lcc_library <- enrich_result$lcc_library
-      if (enrich_result$added) {
-        online_adds <- online_adds + 1L
-        # Same cache maintenance as the pre-replace-LCC enrichment above.
-        if (!is.null(current_state$compatible_lccs_cache)) {
-          nid <- enrich_result$new_block_id
-          if (is_lcc_compatible_with_secondaries(
-                lcc_library$blocks[[nid]],
-                lcc_library$neighbor_indices[[nid]],
-                current_state$secondary_blocks,
-                secondary_library)) {
-            current_state$compatible_lccs_cache <-
-              c(current_state$compatible_lccs_cache, nid)
-          }
-        }
-      }
+      current_state <- enrich_result$current_state
+      if (enrich_result$added) online_adds <- online_adds + 1L
     }
 
     # Record diagnostics
