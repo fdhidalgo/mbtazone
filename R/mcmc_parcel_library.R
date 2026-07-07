@@ -96,15 +96,19 @@ select_blocks_by_coverage <- function(candidate_blocks, max_size, parcel_names,
     idx
   })
 
-  # Build inverted index: parcel -> list of candidate indices containing it
-  # This enables incremental score updates (O(overlap) instead of O(n_candidates))
+  # Build inverted index: parcel -> vector of candidate indices containing it.
+  # This enables incremental score updates (O(overlap) instead of O(n_candidates)).
+  # One split() over the flattened memberships; the former nested loop grew each
+  # parcel's vector with c(), re-copying it on every append (quadratic in
+  # per-parcel membership count — part of the Worcester-scale blowup).
   if (verbose) cli::cli_alert_info("  Building inverted index...")
+  membership_lens <- lengths(parcel_indices_list)
   parcel_to_candidates <- vector("list", n_parcels)
-  for (j in seq_len(n_candidates)) {
-    for (p in parcel_indices_list[[j]]) {
-      parcel_to_candidates[[p]] <- c(parcel_to_candidates[[p]], j)
-    }
-  }
+  split_index <- split(
+    rep.int(seq_len(n_candidates), membership_lens),
+    unlist(parcel_indices_list, use.names = FALSE)
+  )
+  parcel_to_candidates[as.integer(names(split_index))] <- split_index
 
   # Precompute initial scores for all candidates
   # Score = sum(1 / (coverage[p] + 1)) for p in LCC
@@ -937,6 +941,10 @@ run_bfs_lcc_supplement <- function(
 
   discovered_list <- list()
 
+  # Precompute integer-indexed BFS context once (graph/metric/eligible constant
+  # across the sampling loop; only seed_pool varies). Behavior-identical.
+  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_parcels)
+
   if (verbose) {
     cli::cli_progress_bar(
       "BFS LCC exploration",
@@ -987,10 +995,8 @@ run_bfs_lcc_supplement <- function(
       # BFS grow toward target capacity (using eligible parcels to exclude forbidden)
       result <- tryCatch(
         bfs_grow_block(
-          graph = parcel_graph,
-          metric_lookup = capacity_lookup,
+          ctx = bfs_ctx,
           seed_pool = start_parcel,
-          eligible_pool = eligible_parcels,
           target_min = min_lcc_capacity,
           target_exact = target_capacity
         ),
@@ -1091,6 +1097,16 @@ run_bfs_lcc_supplement <- function(
 #' dramatically improve hit rate vs random seeding. BFS can still grow through
 #' any eligible parcel — only the seed selection is filtered.
 #'
+#' Runs in two passes. Pass 1 is the historical random, density-blind BFS. If it
+#' cannot fill the band within \code{max_attempts_per_band} (small towns where
+#' dense parcels are scarce and scattered, so random growth dilutes density below
+#' \code{min_density} before reaching the capacity target), Pass 2 retries with
+#' density-preserving frontier selection (\code{bfs_grow_block(density_aware =
+#' TRUE)}). Pass 2 is a no-op whenever Pass 1 fills the band, so towns whose
+#' libraries already saturate draw the identical random sequence and are
+#' byte-identical; \code{band_stats$da_attempts}/\code{da_found} record when it
+#' fires.
+#'
 #' @param parcel_graph igraph object with capacity/area attributes
 #' @param constraints MBTA constraints list (min_capacity, min_area, min_density,
 #'   min_lcc_fraction)
@@ -1103,12 +1119,26 @@ run_bfs_lcc_supplement <- function(
 #'   Default: LCC_BAND_MAX_ATTEMPTS.
 #' @param forbidden_parcels Character vector of parcels to exclude. Default: NULL.
 #' @param existing_keys Character vector of xxhash64 keys to skip. Default: character(0).
+#' @param time_budget_s Hard wall-clock budget in seconds for this band, shared
+#'   across both passes. Bands whose acceptance rate is ~0 (high-capacity bands
+#'   in low-density towns) previously ran the full attempt budget at unbounded
+#'   per-attempt cost — observed up to 7.8 hours for a single band that found
+#'   nothing. When the budget is hit the band returns what it has and sets
+#'   \code{band_stats$budget_exhausted}. Default: 900.
+#' @param stall_attempts Consecutive attempts without a single constraint-valid
+#'   candidate before a pass gives up. Pass 1 hands over to the density-aware
+#'   Pass 2 (the strategy actually suited to sparse towns); if Pass 2 stalls
+#'   with nothing found, the band is declared empirically unreachable
+#'   (\code{band_stats$unreachable}). Default: 150.
 #' @param verbose Print progress. Default: TRUE.
 #' @return List with:
 #'   - discovered_lccs: data.table with lcc_key, parcel_ids, capacity, area,
 #'       capacity_band, tree_count = 0, source = "bfs_stratified"
 #'   - band_stats: single-row data.table with band, cap_low, cap_high, attempts,
-#'       valid, unique_found
+#'       valid, unique_found, da_attempts (density-aware fallback attempts),
+#'       da_found (LCCs the fallback added), elapsed_s, doomed_attempts
+#'       (attempts abandoned by the exact density prune), budget_exhausted,
+#'       unreachable
 #' @export
 discover_lccs_single_band <- function(
     parcel_graph,
@@ -1119,8 +1149,11 @@ discover_lccs_single_band <- function(
     max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
     forbidden_parcels = NULL,
     existing_keys = character(0),
+    time_budget_s = 900,
+    stall_attempts = 150L,
     verbose = TRUE
 ) {
+  band_start_time <- proc.time()[["elapsed"]]
   # Extract constraint values
   min_capacity <- constraints$min_capacity
   min_lcc_fraction <- constraints$min_lcc_fraction %||% 0.5
@@ -1162,12 +1195,17 @@ discover_lccs_single_band <- function(
   parcel_density <- capacity_lookup[eligible_parcels] / area_lookup[eligible_parcels]
   # Handle NaN/Inf from zero-area parcels
   parcel_density[!is.finite(parcel_density)] <- 0
-  dense_seeds <- eligible_parcels[parcel_density >= min_density]
+  # Parcels dense enough to anchor a compliant block on their own. Pass 1 widens its
+  # seed pool to all eligible parcels when too few of these exist (random growth can
+  # still find valid blocks); the density-aware fallback (Pass 2) seeds strictly from
+  # this set, so reuse it in both places rather than recomputing the predicate.
+  strictly_dense_seeds <- eligible_parcels[parcel_density >= min_density]
+  dense_seeds <- strictly_dense_seeds
 
   if (length(dense_seeds) < 10) {
     dense_seeds <- eligible_parcels
     if (verbose) cli::cli_alert_warning(
-      "Band {band_idx}: Few dense parcels for seeding ({length(dense_seeds)}), using all eligible"
+      "Band {band_idx}: Few dense parcels for seeding ({length(strictly_dense_seeds)}), using all eligible"
     )
   }
 
@@ -1183,11 +1221,61 @@ discover_lccs_single_band <- function(
     assign(key, TRUE, envir = lcc_hash)
   }
 
-  # Per-band BFS discovery
-  band_attempts <- 0L
+  # Precompute integer-indexed BFS context once (seed_pool/eligible_pool constant
+  # across this band's sampling loop). Behavior-identical to per-call igraph use.
+  # Carry area as a second metric so the density-aware fallback below can evaluate
+  # per-step density; the random pass ignores metric2 and is unaffected.
+  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_parcels,
+                               metric2_lookup = area_lookup)
+
+  # Per-band BFS discovery. band_found / band_valid / discovered_list are mutated by
+  # record_candidate() (below) via <<-; band_attempts is returned by run_bfs_pass().
   band_found <- 0L
   band_valid <- 0L
   discovered_list <- list()
+  doomed_attempts <- 0L
+  budget_exhausted <- FALSE
+
+  # Validate, dedup, and record one grown candidate block. Shared by the random
+  # pass and the density-aware fallback so the acceptance rule cannot drift.
+  # Mutates band_valid / band_found / discovered_list / lcc_hash in this frame and
+  # returns TRUE iff a new unique valid LCC was recorded. Contains no RNG, so it
+  # does not perturb the sampler's draw sequence.
+  record_candidate <- function(result) {
+    if (is.null(result) || !result$success) return(FALSE)
+
+    candidate_parcels <- result$block
+    candidate_capacity <- result$metric_total
+    candidate_area <- sum(area_lookup[candidate_parcels])
+    candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
+    candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
+
+    if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) return(FALSE)
+    if (candidate_capacity < cap_low || candidate_capacity > cap_high) return(FALSE)
+    if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) return(FALSE)
+    if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) return(FALSE)
+    if (st$check_station_area && candidate_area_in_station < st$station_area_min) return(FALSE)
+
+    band_valid <<- band_valid + 1L
+
+    # Deduplication
+    lcc_key <- digest::digest(sort(candidate_parcels), algo = "xxhash64")
+    if (exists(lcc_key, envir = lcc_hash, inherits = FALSE)) return(FALSE)
+
+    assign(lcc_key, TRUE, envir = lcc_hash)
+    band_found <<- band_found + 1L
+
+    discovered_list[[band_found]] <<- data.table::data.table(
+      lcc_key = lcc_key,
+      parcel_ids = list(candidate_parcels),
+      capacity = as.integer(candidate_capacity),
+      area = candidate_area,
+      capacity_band = band_idx,
+      tree_count = 0L,
+      source = "bfs_stratified"
+    )
+    TRUE
+  }
 
   if (verbose) {
     cli::cli_progress_bar(
@@ -1197,71 +1285,107 @@ discover_lccs_single_band <- function(
     )
   }
 
-  while (band_found < samples_per_band && band_attempts < max_attempts_per_band) {
-    band_attempts <- band_attempts + 1L
+  # One band-sampling pass: draw a random in-band capacity target, grow a block
+  # toward it, and offer the result to record_candidate(), until the band fills,
+  # the attempt budget is spent, the shared wall-clock budget runs out, or the
+  # pass stalls (stall_attempts consecutive attempts without one constraint-valid
+  # candidate). Pass 1 (random) and Pass 2 (density-aware fallback) differ only in
+  # the seed pool and frontier strategy, so they share this loop. Pass 1 also gets
+  # the exact doomed-attempt density prune (Pass 2 maintains the density floor by
+  # construction, so the prune can never fire there). record_candidate() carries
+  # no RNG, so a Pass-1 attempt sequence that never dooms/stalls draws exactly the
+  # historical runif()/bfs_grow_block() sequence.
+  run_bfs_pass <- function(seed_pool, density_aware, density_floor, track_progress,
+                           doom_density = NULL) {
+    attempts <- 0L
+    since_valid <- 0L
+    stalled <- FALSE
+    while (band_found < samples_per_band && attempts < max_attempts_per_band) {
+      if (proc.time()[["elapsed"]] - band_start_time > time_budget_s) {
+        budget_exhausted <<- TRUE
+        break
+      }
+      if (since_valid >= stall_attempts) {
+        stalled <- TRUE
+        break
+      }
+      attempts <- attempts + 1L
 
-    if (verbose && band_attempts %% 100 == 0) {
-      cli::cli_progress_update(set = band_found)
+      if (track_progress && verbose && attempts %% 100 == 0) {
+        cli::cli_progress_update(set = band_found)
+      }
+
+      target_capacity <- runif(1, cap_low, cap_high)
+
+      result <- tryCatch(
+        bfs_grow_block(
+          ctx = bfs_ctx,
+          seed_pool = seed_pool,
+          target_min = cap_low,
+          target_exact = target_capacity,
+          target_max = cap_high,
+          check_max_before_add = TRUE,
+          density_aware = density_aware,
+          min_density = density_floor,
+          doom_min_density = doom_density
+        ),
+        error = function(e) NULL
+      )
+
+      if (!is.null(result) && isTRUE(result$doomed)) {
+        doomed_attempts <<- doomed_attempts + 1L
+      }
+
+      valid_before <- band_valid
+      if (record_candidate(result) && verbose) {
+        cli::cli_progress_update(set = band_found)
+      }
+      since_valid <- if (band_valid > valid_before) 0L else since_valid + 1L
     }
-
-    target_capacity <- runif(1, cap_low, cap_high)
-
-    result <- tryCatch(
-      bfs_grow_block(
-        graph = parcel_graph,
-        metric_lookup = capacity_lookup,
-        seed_pool = dense_seeds,
-        eligible_pool = eligible_parcels,
-        target_min = cap_low,
-        target_exact = target_capacity,
-        target_max = cap_high,
-        check_max_before_add = TRUE
-      ),
-      error = function(e) NULL
-    )
-
-    if (is.null(result) || !result$success) next
-
-    candidate_parcels <- result$block
-    candidate_capacity <- result$metric_total
-    candidate_area <- sum(area_lookup[candidate_parcels])
-    candidate_cap_in_station <- sum(cap_in_station_lookup[candidate_parcels])
-    candidate_area_in_station <- sum(area_in_station_lookup[candidate_parcels])
-
-    if (length(forbidden_set) > 0 && any(candidate_parcels %in% forbidden_set)) next
-    if (candidate_capacity < cap_low || candidate_capacity > cap_high) next
-    if (candidate_area > 0 && candidate_capacity / candidate_area < min_density) next
-    if (st$check_station_cap && candidate_cap_in_station < st$station_cap_min) next
-    if (st$check_station_area && candidate_area_in_station < st$station_area_min) next
-
-    band_valid <- band_valid + 1L
-
-    # Deduplication
-    lcc_key <- digest::digest(sort(candidate_parcels), algo = "xxhash64")
-    if (exists(lcc_key, envir = lcc_hash, inherits = FALSE)) next
-
-    assign(lcc_key, TRUE, envir = lcc_hash)
-    band_found <- band_found + 1L
-
-    discovered_list[[band_found]] <- data.table::data.table(
-      lcc_key = lcc_key,
-      parcel_ids = list(candidate_parcels),
-      capacity = as.integer(candidate_capacity),
-      area = candidate_area,
-      capacity_band = band_idx,
-      tree_count = 0L,
-      source = "bfs_stratified"
-    )
-
-    if (verbose) {
-      cli::cli_progress_update(set = band_found)
-    }
+    list(attempts = attempts, stalled = stalled)
   }
+
+  # Pass 1: random, density-blind BFS (behavior unchanged from prior versions for
+  # attempts that neither doom nor stall).
+  pass1 <- run_bfs_pass(dense_seeds, density_aware = FALSE,
+                        density_floor = NULL, track_progress = TRUE,
+                        doom_density = min_density)
+  band_attempts <- pass1$attempts
+
+  # Pass 2: adaptive density-aware fallback. Fires only when Pass 1 under-fills the
+  # band (a no-op otherwise — see this function's docstring for the why and the
+  # byte-identical guarantee). Seeds strictly from genuinely dense parcels, so a town
+  # with no dense land gets no fabricated LCCs.
+  da_attempts <- 0L
+  da_found <- 0L
+  pass2_stalled <- FALSE
+  if (band_found < samples_per_band && length(strictly_dense_seeds) > 0) {
+    da_found_start <- band_found
+    pass2 <- run_bfs_pass(strictly_dense_seeds, density_aware = TRUE,
+                          density_floor = min_density, track_progress = FALSE)
+    da_attempts <- pass2$attempts
+    da_found <- band_found - da_found_start
+    band_attempts <- band_attempts + da_attempts
+    pass2_stalled <- pass2$stalled
+  }
+
+  # Unreachable = the band produced nothing and gave up: either Pass 2 stalled
+  # with no finds, or Pass 1 stalled and no dense seeds exist for Pass 2 to try.
+  unreachable <- band_found == 0L &&
+    (pass2_stalled || (pass1$stalled && length(strictly_dense_seeds) == 0))
+
+  band_elapsed_s <- proc.time()[["elapsed"]] - band_start_time
 
   if (verbose) {
     cli::cli_progress_done()
     cli::cli_alert_success(
-      "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid)"
+      "Band {band_idx}: {band_found} unique LCCs from {band_attempts} attempts ({band_valid} valid; density-aware fallback added {da_found} in {da_attempts} attempts; {doomed_attempts} pruned as doomed; {round(band_elapsed_s)}s)"
+    )
+    if (budget_exhausted) cli::cli_alert_warning(
+      "Band {band_idx}: wall-clock budget of {time_budget_s}s exhausted"
+    )
+    if (unreachable) cli::cli_alert_warning(
+      "Band {band_idx}: declared empirically unreachable (both passes stalled with nothing found)"
     )
   }
 
@@ -1286,7 +1410,13 @@ discover_lccs_single_band <- function(
     cap_high = cap_high,
     attempts = band_attempts,
     valid = band_valid,
-    unique_found = band_found
+    unique_found = band_found,
+    da_attempts = da_attempts,  # density-aware fallback attempts (0 if it never fired)
+    da_found = da_found,        # unique LCCs the fallback added
+    elapsed_s = band_elapsed_s,
+    doomed_attempts = doomed_attempts,   # attempts abandoned by the exact density prune
+    budget_exhausted = budget_exhausted, # TRUE if time_budget_s cut the band short
+    unreachable = unreachable            # TRUE if both passes stalled with nothing found
   )
 
   list(
@@ -1348,6 +1478,10 @@ combine_stratified_band_results <- function(band_results) {
 #'   Default: NULL.
 #' @param existing_keys Character vector of xxhash64 keys to skip (from prior
 #'   discoveries like tree enumeration). Default: character(0).
+#' @param time_budget_s Per-band wall-clock budget in seconds (see
+#'   \code{\link{discover_lccs_single_band}}). Default: 900.
+#' @param stall_attempts Consecutive valid-free attempts before a pass gives up
+#'   (see \code{\link{discover_lccs_single_band}}). Default: 150.
 #' @param verbose Print progress. Default: TRUE.
 #' @return List with:
 #'   - discovered_lccs: data.table with lcc_key, parcel_ids, capacity, area,
@@ -1364,6 +1498,8 @@ discover_lccs_by_capacity_bands <- function(
     max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
     forbidden_parcels = NULL,
     existing_keys = character(0),
+    time_budget_s = 900,
+    stall_attempts = 150L,
     verbose = TRUE
 ) {
   if (verbose) {
@@ -1383,6 +1519,8 @@ discover_lccs_by_capacity_bands <- function(
       max_attempts_per_band = max_attempts_per_band,
       forbidden_parcels = forbidden_parcels,
       existing_keys = existing_keys,
+      time_budget_s = time_budget_s,
+      stall_attempts = stall_attempts,
       verbose = verbose
     )
   })
@@ -1446,6 +1584,13 @@ run_bfs_secondary_supplement <- function(
   names(area_lookup) <- all_parcels
   names(capacity_lookup) <- all_parcels
 
+  # Precompute integer-indexed BFS context once (graph/metric/eligible constant
+  # across every band and attempt; only target_area varies). Dispatches the
+  # bfs_grow_block calls below to the integer fast path bfs_grow_block_ctx(),
+  # which reproduces the character path's frontier order and sample.int() draw
+  # sequence exactly. Behavior-identical.
+  bfs_ctx <- bfs_build_context(parcel_graph, area_lookup, eligible_pool = NULL)
+
   if (verbose) {
     cli::cli_h2("BFS Secondary Supplement")
     cli::cli_alert_info("Tree discoveries: {nrow(tree_dt)}")
@@ -1487,10 +1632,8 @@ run_bfs_secondary_supplement <- function(
       # BFS grow
       result <- tryCatch(
         bfs_grow_block(
-          graph = parcel_graph,
-          metric_lookup = area_lookup,
+          ctx = bfs_ctx,
           seed_pool = NULL,  # Any parcel
-          eligible_pool = NULL,
           target_min = min_area,
           target_exact = target_area
         ),
@@ -1763,23 +1906,33 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     selected$source else rep("tree_discovered", n_blocks)
   spectral_regions <- rep(NA_character_, n_blocks)
 
+  # Map each block's parcel names to integer vertex ids ONCE (order-preserving
+  # match), then index id-keyed attribute vectors. This replaces four separate
+  # character V(graph)[pids]$attr subsets per block with one match per block;
+  # summation/averaging order is unchanged, so values are bit-identical.
+  blocks_idx <- lapply(blocks, parcel_ids_to_indices, parcel_names = all_parcels)
+  area_in_station_v     <- igraph::V(parcel_graph)$area_in_station
+  capacity_in_station_v <- igraph::V(parcel_graph)$capacity_in_station
+  centroid_x_v          <- igraph::V(parcel_graph)$centroid_x
+  centroid_y_v          <- igraph::V(parcel_graph)$centroid_y
+
   # Compute station metrics for station constraint pre-filtering in replace-LCC
-  area_in_station <- vapply(blocks, function(pids)
-    sum(igraph::V(parcel_graph)[pids]$area_in_station), numeric(1))
-  capacity_in_station <- vapply(blocks, function(pids)
-    sum(igraph::V(parcel_graph)[pids]$capacity_in_station), numeric(1))
+  area_in_station <- vapply(blocks_idx, function(ix)
+    sum(area_in_station_v[ix]), numeric(1))
+  capacity_in_station <- vapply(blocks_idx, function(ix)
+    sum(capacity_in_station_v[ix]), numeric(1))
 
   # Compute centroids for max-min seed selection in chain initialisation
-  centroid_x <- vapply(blocks, function(pids)
-    mean(igraph::V(parcel_graph)[pids]$centroid_x), numeric(1))
-  centroid_y <- vapply(blocks, function(pids)
-    mean(igraph::V(parcel_graph)[pids]$centroid_y), numeric(1))
+  centroid_x <- vapply(blocks_idx, function(ix)
+    mean(centroid_x_v[ix]), numeric(1))
+  centroid_y <- vapply(blocks_idx, function(ix)
+    mean(centroid_y_v[ix]), numeric(1))
 
   metadata <- data.table::data.table(
     block_id            = seq_len(n_blocks),
     area                = selected$area,
     capacity            = selected$capacity,
-    n_parcels           = vapply(blocks, length, integer(1)),
+    n_parcels           = vapply(blocks_idx, length, integer(1)),
     size_band           = "tree_discovered",
     density             = selected$capacity / selected$area,
     source              = block_sources,
@@ -1790,15 +1943,12 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     centroid_y          = centroid_y
   )
 
-  # Store blocks as integer indices into parcel_names
-  blocks <- lapply(blocks, parcel_ids_to_indices, parcel_names = all_parcels)
+  # Store blocks as integer indices into parcel_names (reuse the map built above)
+  blocks <- blocks_idx
 
   cli::cli_alert_info("Building neighbor indices ({n_blocks} blocks)...")
   cli::cli_alert_info("  Precomputing neighbor cache ({length(all_parcels)} parcels)...")
-  neighbor_cache <- setNames(
-    lapply(all_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-    all_parcels
-  )
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
 
   cli::cli_alert_info("  Building neighbor indices with cached neighbors...")
   neighbor_indices <- vector("list", n_blocks)
@@ -1989,10 +2139,7 @@ build_secondary_library_from_discovery <- function(
   # Build neighbor indices
   cli::cli_alert_info("Building neighbor indices ({n_blocks} blocks)...")
 
-  neighbor_cache <- setNames(
-    lapply(all_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-    all_parcels
-  )
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
 
   neighbor_indices <- vector("list", n_blocks)
   for (i in seq_len(n_blocks)) {
@@ -2035,9 +2182,16 @@ build_secondary_library_from_discovery <- function(
 #' @return List with updated lcc_library and added (logical)
 add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
                                max_online = ONLINE_MAX_ENTRIES,
-                               neighbor_cache = NULL) {
+                               neighbor_cache = NULL,
+                               lcc_indices = NULL) {
   all_parcels <- lcc_library$parcel_names
-  lcc_indices <- parcel_ids_to_indices(lcc_parcels, all_parcels)
+  # Callers that maintain a membership mask can pass the indices directly and
+  # skip this O(n_parcels) character match — it runs before the duplicate check,
+  # i.e. on every enrichment attempt. Indices are only used sorted (hash key,
+  # stored block), so any order is equivalent.
+  if (is.null(lcc_indices)) {
+    lcc_indices <- parcel_ids_to_indices(lcc_parcels, all_parcels)
+  }
 
   # Skip empty or invalid LCCs (prevents corrupt library entries)
   if (length(lcc_indices) == 0) {
@@ -2162,7 +2316,7 @@ add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
   lcc_library$n_online <- (lcc_library$n_online %||% 0L) + 1L
   lcc_library$online_queue <- c(lcc_library$online_queue %||% integer(0), new_id)
 
-  list(lcc_library = lcc_library, added = TRUE)
+  list(lcc_library = lcc_library, added = TRUE, new_block_id = new_id)
 }
 
 # ============================================================================
@@ -2281,17 +2435,21 @@ find_viable_station_components <- function(parcel_graph, constraints) {
 #' @param k Number of items to select
 #' @return Integer vector of selected row indices
 select_maxmin_distant_seeds <- function(coords, k) {
+  coords <- as.matrix(coords)
   n <- nrow(coords)
   if (k >= n) return(seq_len(n))
 
-  # Compute full pairwise distance matrix once (vectorized)
-  dist_matrix <- as.matrix(dist(coords))
+  x <- coords[, 1]
+  y <- coords[, 2]
 
-  # Start with the most peripheral point (maximizes sum of distances to all others)
-  selected <- which.max(rowSums(dist_matrix))
+  # Greedy max-min needs only distances to the newest selected point, so the
+  # full pairwise matrix (O(n^2), ~200 MB at the 5000-block library cap) is
+  # unnecessary. Start at the point farthest from the centroid — a peripheral
+  # start like the former max-row-sum rule, without materializing the matrix.
+  selected <- which.max((x - mean(x))^2 + (y - mean(y))^2)
 
   # min_dist[i] = distance from i to its nearest selected point
-  min_dist <- dist_matrix[, selected]
+  min_dist <- sqrt((x - x[selected])^2 + (y - y[selected])^2)
 
   for (iter in seq_len(k - 1)) {
     # Pick the unselected point with the largest min-distance to selected set
@@ -2299,8 +2457,9 @@ select_maxmin_distant_seeds <- function(coords, k) {
     next_idx <- which.max(min_dist)
     selected <- c(selected, next_idx)
 
-    # Incrementally update min_dist — only need new column
-    min_dist <- pmin(min_dist, dist_matrix[, next_idx])
+    # Incrementally update min_dist against the newest selected point only
+    min_dist <- pmin(min_dist,
+                     sqrt((x - x[next_idx])^2 + (y - y[next_idx])^2))
   }
 
   selected
@@ -2361,14 +2520,216 @@ select_seed_lccs <- function(lcc_library, n_chains = 4L) {
 }
 
 
+#' Assess whether a feasible MCMC seed can exist for a town
+#'
+#' Sound, O(n) necessary-condition check run before seeding. For each hard
+#' constraint it computes the town-wide ceiling — the maximum value attainable,
+#' reached by selecting every parcel — and compares it against the requirement.
+#' If any ceiling falls short, no overlay (LCC + secondaries) can satisfy that
+#' constraint, so seeding would scan the entire library in vain (for an
+#' infeasible town that is thousands of LCCs x secondary attempts x chains,
+#' i.e. hours, ending in the same failure). Failing here turns that into an
+#' instant, explained abort.
+#'
+#' The ceilings are sums over ALL parcels, hence upper bounds: selecting fewer
+#' parcels can only lower each sum, so this never reports a seedable town as
+#' infeasible (no false negatives). Station coverage may be supplied by
+#' disconnected secondary blocks, so the correct sound ceiling is the town-wide
+#' sum — not a connected-component bound like find_viable_station_components().
+#' Thresholds match check_parcel_feasibility() exactly.
+#'
+#' @param parcel_graph igraph with capacity, area, capacity_in_station and
+#'   area_in_station vertex attributes.
+#' @param constraints MBTA constraints list (min_capacity, min_area,
+#'   station_capacity_pct, station_area_pct).
+#' @return list(feasible = logical, failures = character()): one human-readable
+#'   line per violated ceiling (empty when feasible).
+#' @export
+assess_seeding_feasibility <- function(parcel_graph, constraints) {
+  zero_na <- function(x) { x[is.na(x)] <- 0; x }
+  cap     <- zero_na(igraph::V(parcel_graph)$capacity)
+  area    <- zero_na(igraph::V(parcel_graph)$area)
+  cap_st  <- zero_na(igraph::V(parcel_graph)$capacity_in_station)
+  area_st <- zero_na(igraph::V(parcel_graph)$area_in_station)
+
+  failures <- character(0)
+
+  if (sum(cap) < constraints$min_capacity) {
+    failures <- c(failures, sprintf(
+      "min_capacity: town-wide capacity %s < required %s",
+      format(round(sum(cap)), big.mark = ","),
+      format(round(constraints$min_capacity), big.mark = ",")))
+  }
+
+  has_area_constraint <- !is.null(constraints$min_area) &&
+    !is.na(constraints$min_area) && constraints$min_area > 0
+  if (has_area_constraint && sum(area) < constraints$min_area) {
+    failures <- c(failures, sprintf(
+      "min_area: town-wide area %.1f < required %.1f acres",
+      sum(area), constraints$min_area))
+  }
+
+  n_station <- sum(cap_st > 0 | area_st > 0)
+
+  if (!is.null(constraints$station_capacity_pct) &&
+      !is.na(constraints$station_capacity_pct) &&
+      constraints$station_capacity_pct > 0) {
+    req <- constraints$station_capacity_pct / 100 * constraints$min_capacity
+    if (sum(cap_st) < req) {
+      failures <- c(failures, sprintf(
+        "station_capacity_pct: town-wide capacity-in-station %s < required %s (%g%% of min_capacity); %d parcel(s) in any station area",
+        format(round(sum(cap_st)), big.mark = ","),
+        format(round(req), big.mark = ","),
+        constraints$station_capacity_pct, n_station))
+    }
+  }
+
+  if (!is.null(constraints$station_area_pct) &&
+      !is.na(constraints$station_area_pct) &&
+      constraints$station_area_pct > 0 && has_area_constraint) {
+    req <- constraints$station_area_pct / 100 * constraints$min_area
+    if (sum(area_st) < req) {
+      failures <- c(failures, sprintf(
+        "station_area_pct: town-wide area-in-station %.1f < required %.1f acres (%g%% of min_area); %d parcel(s) in any station area",
+        sum(area_st), req, constraints$station_area_pct, n_station))
+    }
+  }
+
+  list(feasible = length(failures) == 0L, failures = failures)
+}
+
+
+#' Which station sub-constraints are active for a town
+#'
+#' A station capacity/area sub-constraint is active only when its percentage is a
+#' positive number; the area sub-constraint additionally needs a finite min_area
+#' (NA min_area means no area requirement). Centralises the check shared by the
+#' seeder (generate_initial_states_from_lccs) and the secondary selector
+#' (select_initial_secondary_blocks).
+#'
+#' @param constraints MBTA constraints list.
+#' @return list(cap_pct, area_pct, cap_active, area_active).
+#' @keywords internal
+station_constraint_flags <- function(constraints) {
+  cap_pct  <- constraints$station_capacity_pct
+  area_pct <- constraints$station_area_pct
+  list(
+    cap_pct     = cap_pct,
+    area_pct    = area_pct,
+    cap_active  = !is.null(cap_pct)  && !is.na(cap_pct)  && cap_pct  > 0,
+    area_active = !is.null(area_pct) && !is.na(area_pct) && area_pct > 0 &&
+      !is.null(constraints$min_area) && !is.na(constraints$min_area)
+  )
+}
+
+
+#' Construct a feasible MCMC seed directly when the library cannot supply one
+#'
+#' Last-resort seeder (Layer 3 of the station-aware seeding fix) used by
+#' generate_initial_states_from_lccs() when the LCC library + secondaries fail
+#' to seed a chain within the attempt budget. Rather than rely on the library,
+#' it builds a state from the parcel graph: BFS-grow a connected LCC to
+#' min_capacity, then attach station-aware secondaries via
+#' select_initial_secondary_blocks(), then validate the FULL state (LCC +
+#' secondaries) with check_parcel_feasibility(). This is what lets it satisfy a
+#' station requirement whose coverage must be assembled from disconnected
+#' secondary blocks — the case the library and the old LCC-alone BFS path
+#' (generate_initial_parcel_state_in_region) both miss.
+#'
+#' Seeds the LCC growth from three rotating pools across restarts — station
+#' parcels (captures station coverage in the LCC itself), all parcels (frees
+#' station areas for secondaries), and the union of existing library LCC parcels
+#' (a known connected high-capacity region to grow from) — to cover the
+#' connected-station, disconnected-station, and sparse-region cases.
+#'
+#' @param parcel_graph igraph with capacity/area/capacity_in_station/
+#'   area_in_station vertex attributes.
+#' @param constraints MBTA constraints list.
+#' @param libraries Libraries list (needs secondary_library; uses lcc_library if
+#'   present for a seed pool). The secondary_library should already carry the
+#'   precomputed station vectors attached by the caller.
+#' @param max_restarts Maximum BFS attempts (default 90).
+#' @return An initialised parcel MCMC state, or NULL if none was found.
+#' @keywords internal
+construct_feasible_seed <- function(parcel_graph, constraints, libraries,
+                                    max_restarts = 90L) {
+  vtx <- igraph::V(parcel_graph)
+  all_parcels <- vtx$name
+  cap_lookup  <- vtx$capacity; names(cap_lookup)  <- all_parcels
+  area_lookup <- vtx$area;     names(area_lookup) <- all_parcels
+  csv <- vtx$capacity_in_station; csv[is.na(csv)] <- 0
+  asv <- vtx$area_in_station;     asv[is.na(asv)] <- 0
+  station_parcels <- all_parcels[csv > 0 | asv > 0]
+
+  lcc_seed_pool <- NULL
+  if (!is.null(libraries$lcc_library) && libraries$lcc_library$n_blocks > 0) {
+    lpn <- libraries$lcc_library$parcel_names
+    lcc_seed_pool <- unique(lpn[unlist(libraries$lcc_library$blocks, use.names = FALSE)])
+  }
+
+  min_cap  <- constraints$min_capacity
+  min_area <- constraints$min_area
+  max_cap  <- min_cap * DISCOVERY_CAPACITY_MULTIPLIER
+  bfs_ctx  <- bfs_build_context(parcel_graph, cap_lookup, eligible_pool = NULL)
+
+  for (attempt in seq_len(max_restarts)) {
+    pool_choice <- attempt %% 3L
+    seed_pool <-
+      if (pool_choice == 0L && length(station_parcels) > 0) station_parcels
+      else if (pool_choice == 2L && !is.null(lcc_seed_pool))  lcc_seed_pool
+      else all_parcels
+
+    # Aim above min_capacity (the upper part of the valid band) so the LCC gives
+    # secondaries more min_lcc_fraction headroom to carry station coverage.
+    target_cap <- runif(1, (min_cap + max_cap) / 2, max_cap)
+    res <- bfs_grow_block(ctx = bfs_ctx, seed_pool = seed_pool,
+                          target_min = min_cap, target_exact = target_cap)
+    lcc  <- res$block
+    cap  <- res$metric_total
+    area <- sum(area_lookup[lcc], na.rm = TRUE)
+    if (!(cap >= min_cap && cap <= max_cap &&
+          (is.na(min_area) || area >= min_area))) next
+
+    secondary_block_ids <- select_initial_secondary_blocks(
+      lcc_parcels  = lcc,
+      library      = libraries$secondary_library,
+      parcel_graph = parcel_graph,
+      constraints  = constraints
+    )
+    sec_parcels <- library_blocks_parcels(libraries$secondary_library,
+                                          secondary_block_ids)
+    state <- initialize_parcel_state(
+      parcel_ids          = c(lcc, sec_parcels),
+      secondary_block_ids = secondary_block_ids,
+      library             = libraries$secondary_library,
+      parcel_graph        = parcel_graph
+    )
+    feas <- check_parcel_feasibility(
+      state        = state,
+      library      = libraries$secondary_library,
+      parcel_graph = parcel_graph,
+      constraints  = constraints
+    )
+    if (feas$feasible) return(state)
+  }
+
+  NULL
+}
+
+
 #' Generate initial MCMC states from library LCCs
 #'
 #' Replaces generate_initial_parcel_state_in_region(). Selects n_chains
 #' maximally distant LCCs from the library and uses each directly as the
 #' initial LCC state, then adds compatible secondary blocks.
 #'
-#' All constraint satisfaction (capacity, area, density, station proximity)
-#' is guaranteed by library construction — no BFS expansion needed.
+#' Runs assess_seeding_feasibility() first: if a hard constraint is town-wide
+#' infeasible (e.g. a station requirement the parcels cannot meet) it aborts in
+#' O(n) instead of scanning the whole library. Note that capacity/area/density/
+#' station coverage are NOT fully guaranteed by library construction for towns
+#' whose station requirement is <= 50% (LCC discovery only filters on the
+#' "excess over 50%" station bound, expecting secondaries to supply the rest),
+#' so per-candidate feasibility is still re-checked below.
 #'
 #' @param lcc_library LCC library from build_lcc_library_from_tree_discovery()
 #' @param libraries Full libraries list (needs secondary_library)
@@ -2385,6 +2746,20 @@ generate_initial_states_from_lccs <- function(
     n_chains = 4L
 ) {
   cli::cli_h2("Generating Initial MCMC States from LCC Library")
+
+  # Structural feasibility gate. If a hard constraint's town-wide ceiling falls
+  # short, no seed exists; abort now rather than scanning the library for hours
+  # before failing anyway. See assess_seeding_feasibility().
+  feas <- assess_seeding_feasibility(parcel_graph, constraints)
+  if (!feas$feasible) {
+    bullets <- feas$failures
+    names(bullets) <- rep("x", length(bullets))
+    cli::cli_abort(c(
+      "No feasible MCMC seed can exist for this town (structural infeasibility):",
+      bullets,
+      i = "Aborted before scanning the library. A station shortfall with 0 parcels in any station area usually means a requirements-vs-data mismatch (e.g. no parcels flagged TRANSIT='Y' despite a station requirement)."
+    ))
+  }
 
   # Hydrate before use
   lcc_library                 <- hydrate_library(lcc_library)
@@ -2407,12 +2782,75 @@ generate_initial_states_from_lccs <- function(
     cli::cli_abort("No LCCs in library with valid centroids for seeding")
   }
 
-  # Max-min selection on filtered candidates
-  coords       <- cbind(candidates$centroid_x, candidates$centroid_y)
-  selected_rows <- select_maxmin_distant_seeds(coords, k = min(n_chains, n_available))
-  # Remaining candidates as ordered fallbacks (for post-secondary validation)
-  fallback_rows <- setdiff(seq_len(n_available), selected_rows)
-  ordered_ids   <- candidates$block_id[c(selected_rows, fallback_rows)]
+  # Candidate ordering (Layer 1). When a station constraint is active, order
+  # LCCs by how much of the station requirement they already cover on their own,
+  # so the chains seed from station-dense LCCs (which secondaries can top up)
+  # rather than the peripheral, low-coverage LCCs that pure geographic max-min
+  # spread tends to pick. Geographic diversity is retained by running max-min
+  # within the strongest-coverage pool. Without a station constraint, keep the
+  # original max-min-on-all-candidates behaviour.
+  scf <- station_constraint_flags(constraints)
+  station_cap_pct  <- scf$cap_pct
+  station_area_pct <- scf$area_pct
+  cap_active       <- scf$cap_active
+  area_active      <- scf$area_active
+  station_active   <- cap_active || area_active
+
+  if (station_active) {
+    req_cap_station  <- if (cap_active)
+      station_cap_pct  / 100 * constraints$min_capacity else 0
+    req_area_station <- if (area_active)
+      station_area_pct / 100 * constraints$min_area     else 0
+    cap_cov  <- if (req_cap_station  > 0)
+      pmin(candidates$capacity_in_station / req_cap_station, 1) else
+        rep(1, n_available)
+    area_cov <- if (req_area_station > 0)
+      pmin(candidates$area_in_station / req_area_station, 1) else
+        rep(1, n_available)
+    cov_score <- pmin(cap_cov, area_cov)  # binding station-coverage fraction [0,1]
+
+    ord_by_cov  <- order(cov_score, decreasing = TRUE)
+    pool_size   <- min(n_available, max(4L * n_chains, 20L))
+    pool_rows   <- ord_by_cov[seq_len(pool_size)]
+    pool_coords <- cbind(candidates$centroid_x[pool_rows],
+                         candidates$centroid_y[pool_rows])
+    preferred_rows <- pool_rows[
+      select_maxmin_distant_seeds(pool_coords, k = min(n_chains, pool_size))
+    ]
+    rest_rows   <- setdiff(ord_by_cov, preferred_rows)  # coverage-desc order kept
+    ordered_ids <- candidates$block_id[c(preferred_rows, rest_rows)]
+    preferred_ids <- candidates$block_id[preferred_rows]
+
+    cli::cli_alert_info(
+      "Station constraint active: ordered {n_available} LCCs by station coverage (best LCC alone covers {round(100 * max(cov_score))}% of the station requirement)"
+    )
+
+    # Precompute per-parcel and per-block station coverage once and attach to
+    # the secondary library, so select_initial_secondary_blocks (called
+    # O(LCCs x attempts) times below) reads them instead of rescanning the graph
+    # on every call. Mirrors the runner's cap_vec/cap_station_vec precompute.
+    sl_names <- libraries$secondary_library$parcel_names
+    csv <- igraph::V(parcel_graph)[sl_names]$capacity_in_station; csv[is.na(csv)] <- 0
+    asv <- igraph::V(parcel_graph)[sl_names]$area_in_station;     asv[is.na(asv)] <- 0
+    libraries$secondary_library$cap_station_vec    <- csv
+    libraries$secondary_library$area_station_vec   <- asv
+    libraries$secondary_library$block_cap_station  <-
+      vapply(libraries$secondary_library$blocks, function(b) sum(csv[b]), numeric(1))
+    libraries$secondary_library$block_area_station <-
+      vapply(libraries$secondary_library$blocks, function(b) sum(asv[b]), numeric(1))
+  } else {
+    coords        <- cbind(candidates$centroid_x, candidates$centroid_y)
+    selected_rows <- select_maxmin_distant_seeds(coords, k = min(n_chains, n_available))
+    fallback_rows <- setdiff(seq_len(n_available), selected_rows)
+    ordered_ids   <- candidates$block_id[c(selected_rows, fallback_rows)]
+    preferred_ids <- candidates$block_id[selected_rows]
+  }
+
+  # When a station constraint is active, bound the per-chain library scan; if it
+  # cannot seed a chain within the budget, the constructive fallback below
+  # (construct_feasible_seed) takes over. Without a station constraint, keep the
+  # historical full-library scan.
+  lib_attempt_budget <- if (station_active) 50L else length(ordered_ids)
 
   all_parcels    <- lcc_library$parcel_names
   initial_states <- vector("list", n_chains)
@@ -2420,12 +2858,21 @@ generate_initial_states_from_lccs <- function(
 
   for (i in seq_len(n_chains)) {
     success <- FALSE
+    attempts_this_chain <- 0L
 
     for (bid in ordered_ids) {
       if (bid %in% used_block_ids) next
+      # Bound the per-chain library scan when a constructive fallback is
+      # available (Layer 1 has put the best station-coverage candidates first,
+      # so failing the budget means the library is unlikely to seed this town).
+      if (attempts_this_chain >= lib_attempt_budget) break
+      attempts_this_chain <- attempts_this_chain + 1L
 
       lcc_indices <- lcc_library$blocks[[bid]]
       lcc_parcels <- all_parcels[lcc_indices]
+      # Precomputed external neighbors of this library LCC (names), passed to the
+      # secondary selector so it skips a per-attempt graph neighbor scan.
+      lcc_nbr_names <- all_parcels[lcc_library$neighbor_indices[[bid]]]
 
       # Try up to n_sec_attempts random secondary draws for this LCC before
       # moving to the next fallback seed. Each attempt draws a fresh k from
@@ -2437,10 +2884,11 @@ generate_initial_states_from_lccs <- function(
 
       for (sec_attempt in seq_len(n_sec_attempts)) {
         secondary_block_ids <- select_initial_secondary_blocks(
-          lcc_parcels  = lcc_parcels,
-          library      = libraries$secondary_library,
-          parcel_graph = parcel_graph,
-          constraints  = constraints
+          lcc_parcels        = lcc_parcels,
+          library            = libraries$secondary_library,
+          parcel_graph       = parcel_graph,
+          constraints        = constraints,
+          lcc_neighbor_names = lcc_nbr_names
         )
 
         sec_parcels <- library_blocks_parcels(
@@ -2469,7 +2917,7 @@ generate_initial_states_from_lccs <- function(
       }
 
       if (!feas$feasible) {
-        if (bid %in% candidates$block_id[selected_rows]) {
+        if (bid %in% preferred_ids) {
           cli::cli_alert_warning(
             "Chain {i}: preferred seed block_id={bid} fails '{feas$constraint_failed}' after {n_sec_attempts} attempts, trying fallbacks..."
           )
@@ -2489,10 +2937,31 @@ generate_initial_states_from_lccs <- function(
       break
     }
 
+    # Constructive fallback (Layer 3). The library could not seed this chain
+    # within the attempt budget. Build a feasible state directly: grow a
+    # connected capacity LCC and attach station-aware secondaries, validating
+    # the full state. The grown LCC is not a library block (current_lcc_id = NA),
+    # which the replace-LCC kernel accepts. Returns NULL if no constructible seed
+    # was found.
     if (!success) {
-      cli::cli_abort(
-        "Chain {i}: no valid initial state found after trying all {length(ordered_ids)} station-valid LCCs"
+      cli::cli_alert_info(
+        "Chain {i}: no library seed within {min(lib_attempt_budget, length(ordered_ids))} attempts; attempting constructive seeding"
       )
+      state <- construct_feasible_seed(parcel_graph, constraints, libraries)
+      if (!is.null(state)) {
+        initial_states[[i]] <- state
+        cli::cli_alert_success(
+          "  Chain {i}: constructive seed, {length(state$lcc_parcels)} LCC parcels, {length(state$secondary_blocks)} secondary blocks"
+        )
+        success <- TRUE
+      }
+    }
+
+    if (!success) {
+      cli::cli_abort(c(
+        "Chain {i}: no feasible initial state found — neither library ({length(ordered_ids)} LCCs) nor constructive seeding succeeded.",
+        i = "The town passed the structural feasibility gate (town-wide ceilings) but no connected LCC + secondaries combination satisfied every constraint. This usually means an impoverished LCC library or marginal station feasibility (e.g. the only connected min-capacity region is too small to give secondaries enough min_lcc_fraction headroom for the station rule). Inspect the LCC library size and assess_seeding_feasibility()."
+      ))
     }
   }
 
@@ -2733,18 +3202,25 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
                               !is.na(constraints$station_capacity_pct)) {
     (constraints$station_capacity_pct / 100) * min_cap
   } else NULL
+  # Guard: min_area = NA means no minimum area constraint (e.g. adjacent_small_town)
+  # Multiplying NA by station_area_pct would propagate NA into the comparison below.
   required_station_area <- if (!is.null(constraints$station_area_pct) &&
-                               !is.na(constraints$station_area_pct)) {
+                               !is.na(constraints$station_area_pct) &&
+                               !is.na(min_area)) {
     (constraints$station_area_pct / 100) * min_area
   } else NULL
+
+  # Precompute integer-indexed BFS context once (graph/metric/eligible constant
+  # across every restart; only target_cap varies). Dispatches the bfs_grow_block
+  # call below to the integer fast path; behavior-identical.
+  bfs_ctx <- bfs_build_context(parcel_graph, capacity_lookup, eligible_pool = NULL)
 
   for (attempt in seq_len(max_restarts)) {
     # BFS expansion from region seed with capacity bound
     # Sample target within valid range to get varied initial states
     target_cap <- runif(1, min_cap, max_cap)
     result <- bfs_grow_block(
-      graph = parcel_graph,
-      metric_lookup = capacity_lookup,
+      ctx = bfs_ctx,
       seed_pool = region_parcels,
       target_min = min_cap,
       target_exact = target_cap
@@ -2754,8 +3230,10 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
     current_cap <- result$metric_total
     current_area <- sum(area_lookup[current_lcc], na.rm = TRUE)
 
-    # Check basic feasibility with both lower and upper bounds
-    if (!(current_cap >= min_cap && current_cap <= max_cap && current_area >= min_area)) {
+    # Check basic feasibility with both lower and upper bounds.
+    # Treat min_area = NA as "no area constraint" (e.g. adjacent_small_town).
+    area_ok <- is.na(min_area) || (current_area >= min_area)
+    if (!(current_cap >= min_cap && current_cap <= max_cap && area_ok)) {
       next
     }
 
@@ -2798,8 +3276,23 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
 
 #' Select initial secondary blocks compatible with an LCC
 #'
-#' Greedily selects secondary blocks that are disjoint and non-adjacent to
-#' both the LCC and each other, targeting approximately 50% LCC fraction.
+#' Greedily selects secondary blocks that are disjoint and non-adjacent to both
+#' the LCC and each other, in two phases:
+#'   1. Station phase (only when the LCC alone does not cover the town's station
+#'      capacity/area requirement): add station-dense blocks — ranked by station
+#'      coverage per unit capacity, so the gap closes with the least capacity
+#'      bloat — until the shortfall is covered. This is what lets the seeder
+#'      satisfy the station rule deterministically instead of by luck; it is also
+#'      why a station-deficient high-capacity LCC is *not* short-circuited to zero
+#'      secondaries (see below).
+#'   2. Capacity phase (only when the LCC is below min_capacity): the original
+#'      geometric-prior random fill, adding a handful of blocks to cross the
+#'      capacity threshold.
+#'
+#' For a non-station-deficient LCC the station phase is a no-op, so behaviour is
+#' identical to the pre-station logic: a high-capacity LCC gets zero secondaries
+#' (the birth/death kernel adds them from a clean low-capacity start), and a
+#' low-capacity LCC gets the geometric-prior random fill.
 #'
 #' @param lcc_parcels Character vector of parcel IDs in the LCC
 #' @param library Secondary library
@@ -2807,7 +3300,8 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
 #' @param constraints Constraints list with min_lcc_fraction
 #' @return Integer vector of selected block IDs
 select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
-                                            constraints) {
+                                            constraints,
+                                            lcc_neighbor_names = NULL) {
   if (library$n_blocks == 0) return(integer(0))
 
   # Compute LCC capacity
@@ -2824,7 +3318,7 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
   parcel_names <- library$parcel_names
   n_parcels <- length(parcel_names)
 
-  # Build LCC logical and neighbor logical for compatibility checking
+  # Build LCC logical for compatibility/coverage checks
   lcc_indices <- match(lcc_parcels, parcel_names)
   # Guard against NA if lcc_parcels aren't all in library$parcel_names
   lcc_indices <- lcc_indices[!is.na(lcc_indices)]
@@ -2835,12 +3329,58 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
   lcc_logical <- logical(n_parcels)
   lcc_logical[lcc_indices] <- TRUE
 
-  # Get LCC neighbors
-  lcc_neighbor_names <- unique(unlist(
-    lapply(lcc_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-    use.names = FALSE
-  ))
-  lcc_neighbor_names <- setdiff(lcc_neighbor_names, lcc_parcels)
+  # ---- Station shortfall of the LCC alone --------------------------------
+  scf <- station_constraint_flags(constraints)
+  station_cap_pct  <- scf$cap_pct
+  station_area_pct <- scf$area_pct
+  cap_active       <- scf$cap_active
+  area_active      <- scf$area_active
+
+  cap_gap <- 0
+  area_gap <- 0
+  cap_station_parcel <- NULL
+  area_station_parcel <- NULL
+  if (cap_active || area_active) {
+    # Per-parcel station coverage indexed by library parcel order. Use the
+    # vectors the caller precomputed once for this seeding call (attached to the
+    # library, as the runner does with cap_vec) when present; otherwise read
+    # them from the graph here for standalone callers. Precomputing matters:
+    # this function is called O(LCCs x attempts) times, and the igraph subset
+    # below scans every parcel each call.
+    cap_station_parcel  <- library$cap_station_vec
+    area_station_parcel <- library$area_station_vec
+    if (is.null(cap_station_parcel) || is.null(area_station_parcel)) {
+      cap_station_parcel  <- igraph::V(parcel_graph)[parcel_names]$capacity_in_station
+      area_station_parcel <- igraph::V(parcel_graph)[parcel_names]$area_in_station
+      cap_station_parcel[is.na(cap_station_parcel)]   <- 0
+      area_station_parcel[is.na(area_station_parcel)] <- 0
+    }
+    if (cap_active) {
+      req_cap_station <- station_cap_pct / 100 * constraints$min_capacity
+      cap_gap <- max(0, req_cap_station - sum(cap_station_parcel[lcc_indices]))
+    }
+    if (area_active) {
+      req_area_station <- station_area_pct / 100 * constraints$min_area
+      area_gap <- max(0, req_area_station - sum(area_station_parcel[lcc_indices]))
+    }
+  }
+  station_deficient <- (cap_gap > 0) || (area_gap > 0)
+  lcc_meets_capacity <- lcc_capacity >= constraints$min_capacity
+
+  # If the LCC already meets capacity AND covers the station rule, no
+  # secondaries are needed — the original high-capacity short-circuit. The
+  # birth/death kernel adds secondaries naturally from a clean start; drawing k
+  # from the geometric prior here would push the initial state to 4-6x minimum.
+  # Returning here BEFORE the LCC-neighbor scan and compatible-block discovery
+  # below skips that work for the large share of candidates that hit this path.
+  if (lcc_meets_capacity && !station_deficient) return(integer(0))
+
+  # Get LCC neighbors (only needed now that we know secondaries will be added).
+  # Use the caller's precomputed neighbor names (the library loop passes
+  # lcc_library$neighbor_indices) when available; otherwise scan the graph.
+  if (is.null(lcc_neighbor_names)) {
+    lcc_neighbor_names <- get_parcel_set_neighbors(lcc_parcels, parcel_graph)
+  }
   lcc_nbr_indices <- match(lcc_neighbor_names, parcel_names)
   lcc_nbr_indices <- lcc_nbr_indices[!is.na(lcc_nbr_indices)]
   lcc_nbr_logical <- logical(n_parcels)
@@ -2860,60 +3400,108 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
 
   if (length(compatible_ids) == 0) return(integer(0))
 
-  # High-capacity LCCs start with no secondaries — the chain's birth/death
-  # kernel adds them naturally from a clean low-capacity starting point.
-  # Without this guard, drawing k from the geometric prior (E[k] ≈ 9.5) on
-  # a band-5 LCC (cap ≈ 2× min_capacity) fills secondary capacity to the
-  # min_lcc_fraction ceiling, producing initial states at 4–6× minimum.
-  if (lcc_capacity >= constraints$min_capacity) return(integer(0))
+  block_caps      <- library$metadata$capacity
+  block_neighbors <- library$neighbor_indices  # may be NULL; try_add() falls back
 
-  # Low-cap LCCs (bands 1–2) need secondaries to reach min_capacity.
-  # Draw k from the geometric prior — conservatively, since only a handful
-  # of blocks are needed to cross the feasibility threshold.
-  # Loop bound: at most length(compatible_ids) iterations; exits early via
-  # break once k_target blocks are placed.
-  k_target <- rgeom(1, prob = 1 - exp(-K_PRIOR_LAMBDA))
-  k_target <- min(k_target, length(compatible_ids))
-
-  if (k_target == 0L) return(integer(0))
-
-  # Random shuffle — no capacity ordering. The iterative non-adjacency walk
-  # is identical to before; only the visit order changes.
-  shuffled_ids <- sample(compatible_ids)
-  block_caps   <- library$metadata$capacity[shuffled_ids]
-
+  # Mutable accumulators for the greedy walk, shared by both phases. try_add()
+  # enforces disjointness, non-adjacency, and the min_lcc_fraction capacity
+  # ceiling, mirroring the original single-phase loop.
   selected             <- integer(0)
   selected_union       <- logical(n_parcels)
   selected_nbrs        <- logical(n_parcels)
   current_sec_capacity <- 0
 
-  for (i in seq_along(shuffled_ids)) {
-    if (length(selected) >= k_target) break
-
-    bid  <- shuffled_ids[i]
-    bcap <- block_caps[i]
-
-    # Respect min_lcc_fraction ceiling (hard constraint)
-    if (current_sec_capacity + bcap > max_sec_capacity) next
-
+  try_add <- function(bid) {
+    bcap <- block_caps[bid]
+    if (current_sec_capacity + bcap > max_sec_capacity) return(FALSE)
     block_indices <- blocks[[bid]]
+    if (any(selected_union[block_indices])) return(FALSE)
+    if (any(selected_nbrs[block_indices]))  return(FALSE)
 
-    if (any(selected_union[block_indices])) next
-    if (any(selected_nbrs[block_indices])) next
+    selected             <<- c(selected, bid)
+    selected_union[block_indices] <<- TRUE
+    current_sec_capacity <<- current_sec_capacity + bcap
+    if (station_deficient) {
+      cap_gap  <<- max(0, cap_gap  - sum(cap_station_parcel[block_indices]))
+      area_gap <<- max(0, area_gap - sum(area_station_parcel[block_indices]))
+    }
 
-    selected               <- c(selected, bid)
-    selected_union[block_indices] <- TRUE
-    current_sec_capacity   <- current_sec_capacity + bcap
+    # Mark the block's external neighbors. Use the library's precomputed
+    # neighbor_indices (integer indices into parcel_names, block members
+    # excluded) — the same vectors the kernels use — instead of an igraph
+    # neighbor scan per added block, which dominated seeding time on dense,
+    # high-station towns that add many secondaries.
+    nbr_idx <- block_neighbors[[bid]]
+    if (is.null(nbr_idx)) {
+      nbr_idx <- parcel_ids_to_indices(
+        get_parcel_set_neighbors(parcel_names[block_indices], parcel_graph),
+        parcel_names
+      )
+    }
+    selected_nbrs[nbr_idx] <<- TRUE
+    TRUE
+  }
 
-    block_parcels   <- parcel_names[block_indices]
-    block_nbr_names <- unique(unlist(
-      lapply(block_parcels, function(m) igraph::neighbors(parcel_graph, m)$name),
-      use.names = FALSE
-    ))
-    block_nbr_names <- setdiff(block_nbr_names, block_parcels)
-    block_nbr_idx   <- match(block_nbr_names, parcel_names)
-    block_nbr_idx   <- block_nbr_idx[!is.na(block_nbr_idx)]
-    selected_nbrs[block_nbr_idx] <- TRUE
+  # ---- Phase 1: close the station gap ------------------------------------
+  if (station_deficient) {
+    # Rank compatible blocks by station coverage toward the active gap(s) per
+    # unit capacity (descending), so the shortfall closes with minimal added
+    # capacity. Blocks with no station coverage are excluded from this phase.
+    denom_cap  <- if (cap_active  && req_cap_station  > 0) req_cap_station  else 1
+    denom_area <- if (area_active && req_area_station > 0) req_area_station else 1
+    # Per-block station sums: precomputed by the caller (full-length, one entry
+    # per library block) when present, else computed here. Subset to compatibles.
+    block_cs_all <- library$block_cap_station
+    block_as_all <- library$block_area_station
+    if (is.null(block_cs_all) || is.null(block_as_all)) {
+      block_cs_all <- vapply(blocks, function(b) sum(cap_station_parcel[b]), numeric(1))
+      block_as_all <- vapply(blocks, function(b) sum(area_station_parcel[b]), numeric(1))
+    }
+    block_cap_station  <- block_cs_all[compatible_ids]
+    block_area_station <- block_as_all[compatible_ids]
+    station_value <- (if (cap_gap  > 0) block_cap_station  / denom_cap  else 0) +
+                     (if (area_gap > 0) block_area_station / denom_area else 0)
+    has_station   <- station_value > 0
+    if (any(has_station)) {
+      eff <- station_value[has_station] /
+        pmax(block_caps[compatible_ids[has_station]], 1e-9)
+      station_ids <- compatible_ids[has_station][order(eff, decreasing = TRUE)]
+      for (bid in station_ids) {
+        if (cap_gap <= 0 && area_gap <= 0) break
+        try_add(bid)
+      }
+    }
+  }
+
+  # ---- Phase 2: capacity fill for low-capacity LCCs ----------------------
+  # Low-cap LCCs (bands 1-2) need secondaries to reach min_capacity. Draw k from
+  # the geometric prior and add that many more blocks from a random shuffle of
+  # the remaining compatible blocks — identical to the original fill, but
+  # stacked on top of any station blocks added in phase 1.
+  if (!lcc_meets_capacity) {
+    remaining <- setdiff(compatible_ids, selected)
+    # K_PRIOR_LAMBDA = 0 (no fragmentation penalty) is a flat, improper prior
+    # over k = 0, 1, 2, ... -- the penalty term itself (log_k_ratio =
+    # K_PRIOR_LAMBDA * ...) is fine at 0 in the birth/death kernels, but
+    # rgeom(prob = 1 - exp(-K_PRIOR_LAMBDA)) is not: a geometric distribution
+    # needs a strictly positive success probability, so prob = 0 returns NA
+    # (with a warning) instead of "no preference among any count". Restricted
+    # to the finite set of blocks actually available here, "no preference" is
+    # uniform over 0..length(remaining).
+    k_target <- if (isTRUE(K_PRIOR_LAMBDA == 0)) {
+      sample.int(length(remaining) + 1L, 1L) - 1L
+    } else {
+      rgeom(1, prob = 1 - exp(-K_PRIOR_LAMBDA))
+    }
+    k_target  <- min(k_target, length(remaining))
+    if (k_target > 0L) {
+      shuffled_ids <- sample(remaining)
+      n_added <- 0L
+      for (bid in shuffled_ids) {
+        if (n_added >= k_target) break
+        if (try_add(bid)) n_added <- n_added + 1L
+      }
+    }
   }
 
   selected

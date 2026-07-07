@@ -142,13 +142,25 @@ load_district_data <- function(
   district_geometry$centroid_y <- coords[, 2]
 
   # Step 6: Clip right-of-way and transit stations to district bounding box
-  right_of_way_sf <- sf::st_read(right_of_way, quiet = TRUE)
+  bbox_poly <- sf::st_as_sfc(sf::st_bbox(district_geometry))
+  sf::st_crs(bbox_poly) <- sf::st_crs(district_geometry)
+
+  # Push the bbox filter into the GDAL read (wkt_filter): the right-of-way file
+  # is statewide, and parsing all of it for every municipality dominated data
+  # prep. wkt_filter is interpreted in the layer's CRS, so only use it when the
+  # layer is already EPSG:26986 (the MassGIS norm); otherwise read in full as
+  # before. The downstream st_intersection makes the result identical either
+  # way — the filter only skips features that could never intersect the bbox.
+  row_layer_crs <- tryCatch(sf::st_layers(right_of_way)$crs[[1]],
+                            error = function(e) sf::st_crs(NA))
+  right_of_way_sf <- if (!is.na(row_layer_crs) && row_layer_crs == sf::st_crs(26986)) {
+    sf::st_read(right_of_way, quiet = TRUE, wkt_filter = sf::st_as_text(bbox_poly))
+  } else {
+    sf::st_read(right_of_way, quiet = TRUE)
+  }
   if (is.na(sf::st_crs(right_of_way_sf)$epsg) || sf::st_crs(right_of_way_sf)$epsg != 26986) {
     right_of_way_sf <- sf::st_transform(right_of_way_sf, 26986)
   }
-
-  bbox_poly <- sf::st_as_sfc(sf::st_bbox(district_geometry))
-  sf::st_crs(bbox_poly) <- sf::st_crs(district_geometry)
 
   district_right_of_way <- sf::st_make_valid(
     sf::st_intersection(right_of_way_sf, bbox_poly)

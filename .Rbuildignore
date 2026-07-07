@@ -6,3 +6,5 @@
 ^ext$
 ^inst/reports/.*\.html$
 ^inst/reports/.*\.md$
+^\.positai$
+^\.claude$

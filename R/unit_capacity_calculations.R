@@ -153,26 +153,28 @@ calculate_final_unit_capacity <- function(units_building_capacity,
                                         units_max_cap,
                                         units_graduated_lots) {
 
-  # Create data frame for minimum calculation (will fail naturally if lengths differ)
-  unit_methods <- data.frame(
-    building_capacity = units_building_capacity,
-    density_limits = units_density_limits,
-    lot_coverage = units_lot_coverage,
-    lot_area_req = units_lot_area_req,
-    far_limits = units_far_limits,
-    max_cap = units_max_cap,
-    graduated_lots = units_graduated_lots
-  )
+  # All method vectors are one-per-parcel and must share a length; the previous
+  # data.frame() build failed loudly on any mismatch. pmin() would instead
+  # silently recycle a nonconforming vector, so assert equal lengths first.
+  method_lengths <- lengths(list(
+    units_building_capacity, units_density_limits, units_lot_coverage,
+    units_lot_area_req, units_far_limits, units_max_cap, units_graduated_lots
+  ))
+  stopifnot(length(unique(method_lengths)) == 1L)
 
-  # Calculate minimum across all methods using purrr for consistency
-  min_values <- purrr::pmap_dbl(unit_methods, function(...) {
-    values <- c(...)
-    if (all(is.na(values))) {
-      return(NA_real_)
-    }
-    values[is.na(values)] <- Inf
-    min(values)
-  })
+  # Minimum across all methods. pmin(na.rm = TRUE) treats NA as missing (the old
+  # NA -> Inf substitution) and returns NA_real_ when every method is NA, so no
+  # explicit all-NA guard is needed.
+  min_values <- pmin(
+    units_building_capacity,
+    units_density_limits,
+    units_lot_coverage,
+    units_lot_area_req,
+    units_far_limits,
+    units_max_cap,
+    units_graduated_lots,
+    na.rm = TRUE
+  )
 
   # Apply final rounding rules per MBTA Communities model
   final_capacity <- data.table::fcase(

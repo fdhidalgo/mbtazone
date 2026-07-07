@@ -52,3 +52,4 @@ dev/dev_potential/
 /.quarto/
 **/*.quarto_ipynb
 .positai/settings.json
+.posit/assistant

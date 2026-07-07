@@ -96,6 +96,65 @@ compute_penalty_difference <- function(current_cap, proposed_cap, constraints,
 #' @param parcel_graph igraph object
 #' @param constraints MBTA constraints
 #' @return List with feasible (logical) and constraint_failed (character or NULL)
+#' Test connectivity of a parcel set via BFS over precomputed adjacency
+#'
+#' Equivalent to \code{igraph::is_connected(induced_subgraph(graph, parcels))}
+#' but without constructing a subgraph object. Walks the precomputed
+#' library-indexed adjacency list restricted to the in-set membership mask.
+#'
+#' @param set_idx Integer library indices of the parcels in the set.
+#' @param in_set Logical vector (length n_parcels) marking set membership.
+#' @param neighbor_idx_list List (library order) of integer neighbor indices.
+#' @return TRUE if the set induces a single connected component.
+#' @keywords internal
+is_set_connected <- function(set_idx, in_set, neighbor_idx_list) {
+  n <- length(set_idx)
+  if (n <= 1L) {
+    return(TRUE)
+  }
+  visited <- logical(length(in_set))
+  frontier <- set_idx[1L]
+  visited[frontier] <- TRUE
+  count <- 1L
+  while (length(frontier) > 0L) {
+    nb <- unlist(neighbor_idx_list[frontier], use.names = FALSE)
+    if (length(nb) == 0L) break
+    nb <- nb[in_set[nb] & !visited[nb]]
+    if (length(nb) == 0L) break
+    nb <- unique(nb)
+    visited[nb] <- TRUE
+    count <- count + length(nb)
+    frontier <- nb
+  }
+  count == n
+}
+
+#' Test whether an LCC parcel set is connected (BFS fast path with igraph fallback)
+#'
+#' Shared connectivity check for the replace-LCC feasibility test and the
+#' lcc_local removal move. Uses \code{is_set_connected()} over the precomputed
+#' library-indexed adjacency when both a membership mask and \code{neighbor_idx}
+#' are available, otherwise falls back to \code{igraph} on the named parcel set.
+#' Both paths return the same boolean. Connectivity is start-vertex independent,
+#' so the membership mask need not match any particular index ordering.
+#'
+#' @param set_logical Logical membership mask (library-indexed), or NULL to force
+#'   the igraph fallback.
+#' @param set_parcels Character parcel ids of the set (igraph fallback + size).
+#' @param neighbor_idx Library-indexed adjacency list, or NULL for the fallback.
+#' @param parcel_graph igraph object (fallback source).
+#' @return TRUE if the set is a single connected component.
+#' @keywords internal
+lcc_is_connected <- function(set_logical, set_parcels, neighbor_idx, parcel_graph) {
+  if (length(set_parcels) <= 1L) {
+    return(TRUE)
+  }
+  if (!is.null(neighbor_idx) && !is.null(set_logical)) {
+    return(is_set_connected(which(set_logical), set_logical, neighbor_idx))
+  }
+  igraph::is_connected(igraph::induced_subgraph(parcel_graph, set_parcels))
+}
+
 check_hard_constraints_only <- function(state, library, parcel_graph, constraints) {
   # Guard against invalid states (zero/NA values)
   if (is.null(state$total_area) || !is.finite(state$total_area) || state$total_area <= 0) {
@@ -109,6 +168,17 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
   # Capacity above min is handled by a soft prior (penalized but not rejected)
   if (state$total_capacity < constraints$min_capacity) {
     return(list(feasible = FALSE, constraint_failed = "min_capacity"))
+  }
+
+  # Optional HARD upper cap on capacity. The capacity prior does the shaping
+  # below it; this is only a backstop that rules out runaway plans far above
+  # anything a municipality adopted. It is opt-in: callers that do not set
+  # constraints$max_capacity (NULL / non-finite) get the historical behavior of
+  # no upper bound, so this check is a no-op for them.
+  if (!is.null(constraints$max_capacity) &&
+      is.finite(constraints$max_capacity) &&
+      state$total_capacity > constraints$max_capacity) {
+    return(list(feasible = FALSE, constraint_failed = "max_capacity"))
   }
 
   # Area
@@ -132,13 +202,12 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
     return(list(feasible = FALSE, constraint_failed = "min_lcc_fraction"))
   }
 
-  # LCC connectivity
-  lcc_parcels <- state$lcc_parcels
-  if (length(lcc_parcels) > 1) {
-    lcc_subgraph <- igraph::induced_subgraph(parcel_graph, lcc_parcels)
-    if (!igraph::is_connected(lcc_subgraph)) {
-      return(list(feasible = FALSE, constraint_failed = "lcc_connectivity"))
-    }
+  # LCC connectivity. Reuse the maintained library-indexed membership mask
+  # (state$lcc_logical) for the BFS fast path; lcc_is_connected() falls back to
+  # igraph when the precomputed adjacency or mask is unavailable.
+  if (!lcc_is_connected(state$lcc_logical, state$lcc_parcels,
+                        library$neighbor_idx, parcel_graph)) {
+    return(list(feasible = FALSE, constraint_failed = "lcc_connectivity"))
   }
   
   ## Check min area and capacity near transit if specified in constraints
