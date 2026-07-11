@@ -23,15 +23,14 @@ library(targets)
 # ============================================================================
 
 BENCHMARK_DISTRICTS <- list(
-  list(name = "Norwood",    type = "commuter_rail"),  # primary dev district
-  list(name = "Brookline",  type = "rapid_transit"),   # large, known convergence issues
-  list(name = "Beverly",    type = "commuter_rail"), # Three distinct valid areas, geographic mixing test
-  list(name = "Everett",    type = "rapid_transit"), # Reasonably well behaved rapid_transit
-  list(name = "Ayer",    type = "commuter_rail"), # Area constraint bites, converges above minimum
-  list(name = "Ashland",   type = "commuter_rail"), # Commuter rail with centroid_x drift
-  list(name = "Malden",    type = "rapid_transit"), # Poor convergence rapid transit
-  list(name = "Amesbury",   type = "adjacent"), # Well behaved adjacent district
-  list(name = "Auburn",   type = "adjacent") # Slighyly less well-behaved adjacent district
+  list(name = "Worcester",  type = "commuter_rail"), # Largest single-zone town; stress-tests unique-LCC cap / tree-discovery perf
+  list(name = "Salem",      type = "commuter_rail"),
+  list(name = "Everett",    type = "rapid_transit"),
+  list(name = "Medford",    type = "rapid_transit"),
+  list(name = "Maynard",    type = "adjacent"), # Known quantity from density-precompute bench
+  list(name = "Shrewsbury", type = "adjacent"),
+  list(name = "Groveland",  type = "adjacent_small_town"), # Density-aware fallback edge case (0 LCCs pre-fix)
+  list(name = "Harvard",    type = "adjacent_small_town") # Known quantity from LCC discovery bench
 )
 
 # ============================================================================
@@ -98,12 +97,19 @@ cfg_val <- function(cfg, name) {
   if (is.null(v)) "N/A" else as.character(v)
 }
 
+# Format a duration in seconds as "Hh MMm SSs" (whole runs are hours long).
+format_elapsed <- function(secs) {
+  secs <- round(secs)
+  sprintf("%dh %02dm %02ds", secs %/% 3600, (secs %% 3600) %/% 60, secs %% 60)
+}
+
 # ============================================================================
 # RUN DISTRICTS
 # ============================================================================
 
 n <- length(BENCHMARK_DISTRICTS)
 results <- vector("list", n)
+benchmark_start <- Sys.time()
 
 for (i in seq_len(n)) {
   d     <- BENCHMARK_DISTRICTS[[i]]
@@ -114,8 +120,9 @@ for (i in seq_len(n)) {
   cat(sprintf("[%d/%d] %s (%s)\n", i, n, name, type))
   Sys.setenv(DISTRICT_NAME = name, DISTRICT_TYPE = type)
 
-  run_status <- "failed"
-  run_error  <- NA_character_
+  run_status  <- "failed"
+  run_error   <- NA_character_
+  district_start <- Sys.time()
 
   tryCatch({
     tar_make(
@@ -124,11 +131,16 @@ for (i in seq_len(n)) {
       reporter = "timestamp"
     )
     run_status <- "success"
-    cat(sprintf("  v SUCCESS\n"))
   }, error = function(e) {
     run_error  <<- conditionMessage(e)
-    cat(sprintf("  x FAILED: %s\n", run_error))
   })
+
+  elapsed_s <- as.numeric(difftime(Sys.time(), district_start, units = "secs"))
+  if (run_status == "success") {
+    cat(sprintf("  v SUCCESS (%s)\n", format_elapsed(elapsed_s)))
+  } else {
+    cat(sprintf("  x FAILED (%s): %s\n", format_elapsed(elapsed_s), run_error))
+  }
 
   # Copy reports (pipeline writes using district_name verbatim)
   llm_src  <- file.path(
@@ -149,14 +161,17 @@ for (i in seq_len(n)) {
   if (!html_ok) cat(sprintf("  ! HTML report not found: %s\n", html_src))
 
   results[[i]] <- list(
-    name    = name,
-    type    = type,
-    status  = run_status,
-    error   = run_error,
-    llm_ok  = llm_ok,
-    html_ok = html_ok
+    name      = name,
+    type      = type,
+    status    = run_status,
+    error     = run_error,
+    llm_ok    = llm_ok,
+    html_ok   = html_ok,
+    elapsed_s = elapsed_s
   )
 }
+
+benchmark_elapsed_s <- as.numeric(difftime(Sys.time(), benchmark_start, units = "secs"))
 
 # ============================================================================
 # CONFIG SNAPSHOT
@@ -190,6 +205,7 @@ md <- c(
   paste0("- **Branch**:    ", git_branch),
   paste0("- **Commit**:    ", git_hash),
   paste0("- **Districts**: ", n_success, " / ", n, " succeeded"),
+  paste0("- **Elapsed**:   ", format_elapsed(benchmark_elapsed_s)),
   "",
   "## Config",
   "",
@@ -212,15 +228,15 @@ md <- c(
   "",
   "## District Results",
   "",
-  "| District | Type | Status | LLM | HTML | Notes |",
-  "|:---|:---|:---|:---:|:---:|:---|"
+  "| District | Type | Status | Elapsed | LLM | HTML | Notes |",
+  "|:---|:---|:---|---:|:---:|:---:|:---|"
 )
 
 for (r in results) {
   note <- if (!is.na(r$error)) paste0("`", substr(r$error, 1, 80), "`") else ""
   md <- c(md, sprintf(
-    "| %s | %s | %s | %s | %s | %s |",
-    r$name, r$type, r$status,
+    "| %s | %s | %s | %s | %s | %s | %s |",
+    r$name, r$type, r$status, format_elapsed(r$elapsed_s),
     if (isTRUE(r$llm_ok))  "v" else "x",
     if (isTRUE(r$html_ok)) "v" else "x",
     note
@@ -237,4 +253,5 @@ cat(sprintf("\n=== BENCHMARK COMPLETE ===\n"))
 cat(sprintf("Run:     %s\n", run_label))
 cat(sprintf("Output:  %s\n", out_dir))
 cat(sprintf("Success: %d / %d\n", n_success, n))
+cat(sprintf("Elapsed: %s\n", format_elapsed(benchmark_elapsed_s)))
 cat(sprintf("Summary: %s\n", file.path(out_dir, "run_summary.md")))
