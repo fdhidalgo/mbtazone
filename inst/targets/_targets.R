@@ -10,7 +10,7 @@
 # The pipeline has the following structure:
 #
 #   Tier 1: Data Preparation
-#     norwood_data -> adjacency_graph -> constraints
+#     norwood_data -> graph_spec -> adjacency_graph -> target_spec
 #
 #   Tier 2: Parcel Graph Construction
 #     parcel_graph_result
@@ -120,19 +120,39 @@ list(
     }
   ),
 
+  # Tier-2 graph-construction tuning spec — built early so adjacency_graph and
+  # parcel_graph_result can both read from it.
   tar_target(
-    adjacency_graph,
-    build_adjacency_graph(
-      geometry_sf        = district_data$district_geometry,
-      right_of_way_sf    = district_data$district_right_of_way,
-      max_dist_ft        = MAX_DIST_FEET,
-      min_coverage_ratio = MIN_COVERAGE_RATIO
+    graph_spec,
+    parcel_graph_spec(
+      max_dist_ft            = MAX_DIST_FEET,
+      touch_threshold_ft     = TOUCH_THRESHOLD_FEET,
+      min_coverage_ratio     = MIN_COVERAGE_RATIO,
+      macro_scale            = MACRO_SCALE,
+      macro_base_area_min    = MACRO_BASE_AREA_MIN,
+      macro_base_area_max    = MACRO_BASE_AREA_MAX,
+      macro_atomic_threshold = MACRO_ATOMIC_THRESHOLD
     )
   ),
 
   tar_target(
-    constraints,
-    define_constraints(district_data)
+    adjacency_graph,
+    build_adjacency_graph(
+      geometry_sf         = district_data$district_geometry,
+      right_of_way_sf     = district_data$district_right_of_way,
+      max_dist_ft         = graph_spec$max_dist_ft,
+      touch_threshold_ft  = graph_spec$touch_threshold_ft,
+      min_coverage_ratio  = graph_spec$min_coverage_ratio
+    )
+  ),
+
+  tar_target(
+    target_spec,
+    parcel_target_spec(
+      district_data,
+      capacity_prior_lambda = CAPACITY_PRIOR_LAMBDA,
+      k_prior_lambda        = K_PRIOR_LAMBDA
+    )
   ),
 
   # ============================================================================
@@ -140,30 +160,67 @@ list(
   # ============================================================================
 
   # Parcel graph from parcel adjacency
-  # MACRO_SCALE = 0: identity mapping (raw parcels)
-  # MACRO_SCALE > 0: aggregation with scaled area targets
+  # macro_scale = 0: identity mapping (raw parcels)
+  # macro_scale > 0: aggregation with scaled area targets
   tar_target(
     parcel_graph_result,
-    if (MACRO_SCALE == 0) {
+    if (graph_spec$macro_scale == 0) {
       build_identity_parcel_graph(adjacency_graph)
     } else {
       build_parcel_graph_target(
         adjacency_graph,
-        target_area_min = MACRO_BASE_AREA_MIN * MACRO_SCALE,
-        target_area_max = MACRO_BASE_AREA_MAX * MACRO_SCALE,
-        atomic_threshold = MACRO_ATOMIC_THRESHOLD,
+        target_area_min = graph_spec$macro_base_area_min * graph_spec$macro_scale,
+        target_area_max = graph_spec$macro_base_area_max * graph_spec$macro_scale,
+        atomic_threshold = graph_spec$macro_atomic_threshold,
         seed = 123
       )
     }
   ),
 
-  # Main MCMC config - can change freely
+  # Main MCMC sampler spec - can change freely
   # Changes here only rebuild parcel_mcmc_result
-  # Using "lifted" config for non-reversible MCMC with momentum
+  # Using the "lifted" preset for non-reversible MCMC with momentum
   # (improves mixing in k dimension via direction persistence)
   tar_target(
-    parcel_main_config,
-    define_parcel_kernel_configs(n_steps = MCMC_STEPS_MACRO)[["lifted"]]
+    sampler_spec,
+    parcel_sampler_spec_lifted(
+      n_steps                  = MCMC_STEPS_MACRO,
+      swap_cap_tolerance       = SWAP_CAP_TOLERANCE,
+      birth_tilt_lambda        = BIRTH_TILT_LAMBDA,
+      debug_invariant_checks   = DEBUG_INVARIANT_CHECKS,
+      mcmc_burn_in             = MCMC_BURN_IN,
+      enable_online_enrichment = ENABLE_ONLINE_ENRICHMENT,
+      enrichment_interval      = ONLINE_ENRICHMENT_INTERVAL,
+      max_online_entries       = ONLINE_MAX_ENTRIES,
+      enrichment_burn_in       = ENRICHMENT_BURN_IN,
+      max_stored_samples       = SAMPLE_MAX_STORED,
+      store_lcc_signatures     = STORE_LCC_SIGNATURES
+    )
+  ),
+
+  # Discovery/library tuning spec - can change freely
+  tar_target(
+    discovery_spec,
+    parcel_discovery_spec(
+      discovery_capacity_multiplier = DISCOVERY_CAPACITY_MULTIPLIER,
+      tree_lcc_n_trees              = TREE_LCC_N_TREES,
+      bfs_lcc_n_samples             = BFS_LCC_N_SAMPLES,
+      bfs_lcc_n_seeds               = BFS_LCC_N_SEEDS,
+      lcc_capacity_bands_relative   = LCC_CAPACITY_BANDS_RELATIVE,
+      lcc_band_samples_per_band     = LCC_BAND_SAMPLES_PER_BAND,
+      lcc_band_max_attempts         = LCC_BAND_MAX_ATTEMPTS,
+      lcc_band_time_budget_s        = LCC_BAND_TIME_BUDGET_S,
+      lcc_band_stall_attempts       = LCC_BAND_STALL_ATTEMPTS,
+      lcc_discovery_max_unique      = LCC_DISCOVERY_MAX_UNIQUE,
+      lcc_library_max_size          = LCC_LIBRARY_MAX_SIZE,
+      bfs_reservation_lcc           = BFS_RESERVATION_LCC,
+      sec_size_bands                = SEC_SIZE_BANDS,
+      library_density_threshold     = LIBRARY_DENSITY_THRESHOLD,
+      tree_sec_n_trees              = TREE_SEC_N_TREES,
+      bfs_sec_quota_per_band        = BFS_SEC_QUOTA_PER_BAND,
+      sec_library_max_size          = SEC_LIBRARY_MAX_SIZE,
+      bfs_reservation_sec           = BFS_RESERVATION_SEC
+    )
   ),
 
   # ============================================================================
@@ -184,11 +241,12 @@ list(
     tree_discovered_lccs,
     discover_lccs_from_trees(
       parcel_graph           = parcel_graph_result$parcel_graph,
-      constraints            = constraints,
-      n_trees                = TREE_LCC_N_TREES,
+      constraints            = target_spec$constraints,
+      n_trees                = discovery_spec$tree_lcc_n_trees,
       forbidden_parcels      = NULL,
-      max_discovery_capacity = constraints$min_capacity * DISCOVERY_CAPACITY_MULTIPLIER,
-      max_unique_lccs        = LCC_DISCOVERY_MAX_UNIQUE,
+      max_discovery_capacity = target_spec$constraints$min_capacity *
+        discovery_spec$discovery_capacity_multiplier,
+      max_unique_lccs        = discovery_spec$lcc_discovery_max_unique,
       verbose                = TRUE
     )
   ),
@@ -201,9 +259,10 @@ list(
     run_bfs_lcc_supplement(
       tree_discovered_lccs = tree_discovered_lccs,
       parcel_graph = parcel_graph_result$parcel_graph,
-      constraints = constraints,
-      n_samples = BFS_LCC_N_SAMPLES,
-      n_seeds = BFS_LCC_N_SEEDS,
+      constraints = target_spec$constraints,
+      discovery_capacity_multiplier = discovery_spec$discovery_capacity_multiplier,
+      n_samples = discovery_spec$bfs_lcc_n_samples,
+      n_seeds = discovery_spec$bfs_lcc_n_seeds,
       forbidden_parcels = NULL,
       verbose = TRUE
     )
@@ -217,7 +276,7 @@ list(
   # Band grid for dynamic branching
   tar_target(
     bfs_band_grid,
-    data.frame(band_idx = seq_along(LCC_CAPACITY_BANDS_RELATIVE))
+    data.frame(band_idx = seq_along(discovery_spec$lcc_capacity_bands_relative))
   ),
 
   # Precomputing existing-lcc keys as a target to prevent crashing if timing is off
@@ -234,15 +293,15 @@ list(
     bfs_stratified_band,
     discover_lccs_single_band(
       parcel_graph = parcel_graph_result$parcel_graph,
-      constraints = constraints,
+      constraints = target_spec$constraints,
       band_idx = bfs_band_grid$band_idx,
-      capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
-      samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
-      max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
+      capacity_bands_relative = discovery_spec$lcc_capacity_bands_relative,
+      samples_per_band = discovery_spec$lcc_band_samples_per_band,
+      max_attempts_per_band = discovery_spec$lcc_band_max_attempts,
       forbidden_parcels = NULL,
       existing_keys = existing_lcc_keys,
-      time_budget_s = LCC_BAND_TIME_BUDGET_S,
-      stall_attempts = LCC_BAND_STALL_ATTEMPTS,
+      time_budget_s = discovery_spec$lcc_band_time_budget_s,
+      stall_attempts = discovery_spec$lcc_band_stall_attempts,
       verbose = FALSE
     ),
     pattern = map(bfs_band_grid),
@@ -272,9 +331,9 @@ list(
     build_lcc_library_from_tree_discovery(
       combined_discovered_lccs$discovered_blocks,
       parcel_graph_result$parcel_graph,
-      constraints    = constraints,
-      max_library_size = LCC_LIBRARY_MAX_SIZE,
-      bfs_reservation = BFS_RESERVATION_LCC
+      constraints    = target_spec$constraints,
+      max_library_size = discovery_spec$lcc_library_max_size,
+      bfs_reservation = discovery_spec$bfs_reservation_lcc
     )
   ),
 
@@ -292,9 +351,9 @@ list(
     tree_discovered_secondaries,
     discover_secondaries_from_trees(
       parcel_graph = parcel_graph_result$parcel_graph,
-      size_bands = SEC_SIZE_BANDS,
-      density_threshold = LIBRARY_DENSITY_THRESHOLD,
-      n_trees = TREE_SEC_N_TREES,
+      size_bands = discovery_spec$sec_size_bands,
+      density_threshold = discovery_spec$library_density_threshold,
+      n_trees = discovery_spec$tree_sec_n_trees,
       verbose = TRUE
     )
   ),
@@ -306,9 +365,9 @@ list(
     run_bfs_secondary_supplement(
       tree_discovered_secondaries = tree_discovered_secondaries,
       parcel_graph = parcel_graph_result$parcel_graph,
-      size_bands = SEC_SIZE_BANDS,
-      quota_per_band = BFS_SEC_QUOTA_PER_BAND,
-      density_threshold = LIBRARY_DENSITY_THRESHOLD,
+      size_bands = discovery_spec$sec_size_bands,
+      quota_per_band = discovery_spec$bfs_sec_quota_per_band,
+      density_threshold = discovery_spec$library_density_threshold,
       verbose = TRUE
     )
   ),
@@ -331,8 +390,8 @@ list(
     build_secondary_library_from_discovery(
       combined_discovered = combined_discovered_secondaries,
       parcel_graph = parcel_graph_result$parcel_graph,
-      max_library_size = SEC_LIBRARY_MAX_SIZE,
-      bfs_reservation = BFS_RESERVATION_SEC
+      max_library_size = discovery_spec$sec_library_max_size,
+      bfs_reservation = discovery_spec$bfs_reservation_sec
     )
   ),
 
@@ -351,7 +410,7 @@ list(
       parcel_graph = parcel_graph_result$parcel_graph,
       lcc_library = discovered_lcc_library,
       secondary_library = discovered_secondary_library,
-      constraints = constraints
+      constraints = target_spec$constraints
     )
   ),
 
@@ -377,14 +436,15 @@ list(
   tar_target(
     parcel_initial_states_k_pos,
     generate_initial_states_from_lccs(
-      lcc_library   = discovered_lcc_library,
-      libraries     = list(
+      lcc_library    = discovered_lcc_library,
+      libraries      = list(
         secondary_library = discovered_secondary_library,
         lcc_library       = discovered_lcc_library
       ),
-      parcel_graph  = parcel_graph_result$parcel_graph,
-      constraints   = constraints,
-      n_chains      = 4L
+      parcel_graph   = parcel_graph_result$parcel_graph,
+      target_spec    = target_spec,
+      discovery_spec = discovery_spec,
+      n_chains       = 4L
     )
   ),
 
@@ -407,7 +467,7 @@ list(
   tar_target(
     parcel_multichain_config,
     define_parcel_multichain_configs(
-      base_config = parcel_main_config,
+      base_config = sampler_spec,
       n_chains    = length(parcel_initial_states),
       n_steps     = MCMC_STEPS_MACRO,
       region_ids  = paste0("chain_", seq_along(parcel_initial_states))
@@ -426,7 +486,7 @@ list(
     run_parcel_chain_from_region(
       config              = parcel_multichain_config[[parcel_chain_grid$chain_id]],
       parcel_graph_result = parcel_graph_result,
-      constraints         = constraints,
+      target_spec         = target_spec,
       secondary_library   = discovered_secondary_library,
       lcc_library         = discovered_lcc_library,
       initial_state       = parcel_initial_state,  # now a single state per branch
@@ -451,14 +511,15 @@ list(
     parcel_metrics,
     compute_multichain_parcel_metrics(
       all_parcel_chain_results,
-      parcel_graph_result$parcel_graph
+      parcel_graph_result$parcel_graph,
+      mcmc_burn_in = sampler_spec$mcmc_burn_in
     )
   ),
 
   # Parcel convergence diagnostics
   tar_target(
     parcel_rhat_table,
-    compute_parcel_multichain_rhat(all_parcel_chain_results)
+    compute_parcel_multichain_rhat(all_parcel_chain_results, sampler_spec$mcmc_burn_in)
   ),
 
   # parcel_geographic_coverage — drop region_assignments argument
@@ -484,7 +545,8 @@ list(
     parcel_irreducibility_report,
     create_parcel_irreducibility_report(
       all_parcel_chain_results,
-      parcel_graph_result$parcel_graph
+      parcel_graph_result$parcel_graph,
+      mcmc_burn_in = sampler_spec$mcmc_burn_in
       # region_assignments omitted — defaults to NULL
     )
   ),

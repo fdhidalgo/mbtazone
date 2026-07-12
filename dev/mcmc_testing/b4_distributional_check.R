@@ -11,12 +11,10 @@ label <- if (length(args) >= 3) args[[3]] else "run"
 
 suppressMessages(pkgload::load_all(".", quiet = TRUE))
 suppressMessages(library(targets))
-source("inst/targets/temp_targets_config.R")
-source("inst/targets/temp_targets_parcel_config.R")
 
 store <- file.path("ext", paste0("_targets_", town))
 pg <- tar_read_raw("parcel_graph_result", store = store)
-cons <- tar_read_raw("constraints", store = store)
+cons <- tar_read_raw("target_spec", store = store)
 sec <- hydrate_library(tar_read_raw("discovered_secondary_library", store = store))
 lcc <- hydrate_library(tar_read_raw("discovered_lcc_library", store = store))
 cfg <- tar_read_raw("parcel_multichain_config", store = store)[[1]]
@@ -28,7 +26,7 @@ set.seed(20260702L)
 t0 <- proc.time()[["elapsed"]]
 res <- run_parcel_mcmc(pg$parcel_graph, ist, cons, sec, lcc, cfg,
   parcel_assignments = pg$parcel_assignments, neighbor_cache = pg$neighbor_cache,
-  enable_online_enrichment = TRUE, verbose = FALSE)
+  verbose = FALSE)
 el <- proc.time()[["elapsed"]] - t0
 
 st <- res$stats

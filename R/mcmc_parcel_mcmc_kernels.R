@@ -210,14 +210,9 @@ compute_lcc_capacity_weights <- function(lcc_ids, lcc_library) {
 #'
 #' @param block_ids Integer vector of addable block IDs
 #' @param library Secondary library with $metadata$capacity
-#' @param tilt_lambda Tilt strength (default: BIRTH_TILT_LAMBDA)
+#' @param tilt_lambda Tilt strength (`sampler_spec$birth_tilt_lambda`)
 #' @return List with weights, log_weights, log_sum_w, valid
-compute_birth_tilt_weights <- function(block_ids, library,
-                                       tilt_lambda = NULL) {
-  if (is.null(tilt_lambda)) {
-    tilt_lambda <- BIRTH_TILT_LAMBDA
-  }
-
+compute_birth_tilt_weights <- function(block_ids, library, tilt_lambda) {
   n <- length(block_ids)
   if (n == 0) {
     return(list(
@@ -331,6 +326,7 @@ lcc_local_move <- function(
     library,
     parcel_graph,
     constraints,
+    capacity_prior_lambda,
     neighbor_cache = NULL,
     neighbor_indices = NULL,
     degrees = NULL,
@@ -647,7 +643,8 @@ lcc_local_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     new_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_accept_ratio <- log_accept_ratio + penalty_diff
 
@@ -693,6 +690,9 @@ symmetric_birth_death_move <- function(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
+  k_prior_lambda,
+  birth_tilt_lambda,
   neighbor_idx = NULL
 ) {
   k_current <- length(state$secondary_blocks)
@@ -724,7 +724,7 @@ symmetric_birth_death_move <- function(
   n_rem <- length(removable)
 
   # Compute capacity-tilted birth weights
-  birth_weights <- compute_birth_tilt_weights(addable, library)
+  birth_weights <- compute_birth_tilt_weights(addable, library, birth_tilt_lambda)
   W_add <- exp(birth_weights$log_sum_w)  # sum of birth weights (= n_add when tilt=0)
 
   # Total universe size: weighted births + uniform deaths
@@ -836,7 +836,7 @@ symmetric_birth_death_move <- function(
   n_add_new <- length(addable_rev)
 
   # Universe size in proposed state (weighted births + uniform deaths)
-  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library)
+  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library, birth_tilt_lambda)
   W_add_new <- exp(rev_birth_weights$log_sum_w)
   Z_new <- W_add_new + n_rem_new
 
@@ -847,7 +847,7 @@ symmetric_birth_death_move <- function(
     log_q_ratio <- log(Z_old) - log(Z_new) - log_w_selected
   } else {
     removed_cap <- library$metadata$capacity[block_id]
-    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_w_removed <- -birth_tilt_lambda * removed_cap
     log_q_ratio <- log_w_removed + log(Z_old) - log(Z_new)
   }
 
@@ -855,14 +855,15 @@ symmetric_birth_death_move <- function(
   log_pi_ratio <- compute_penalty_difference(
     state$total_capacity,
     proposed_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
 
   # K prior penalty difference (linear: penalizes birth, favors death)
   # Birth: k_proposed = k+1, so (k - (k+1)) = -1, log_k_ratio = -lambda
   # Death: k_proposed = k-1, so (k - (k-1)) = +1, log_k_ratio = +lambda
   k_proposed <- length(proposed_state$secondary_blocks)
-  log_k_ratio <- K_PRIOR_LAMBDA * (k_current - k_proposed)
+  log_k_ratio <- k_prior_lambda * (k_current - k_proposed)
 
   # Reference measure correction: cancel combinatorial volume C(n_pool, k)
   # so the marginal on k matches the intended geometric prior
@@ -946,6 +947,9 @@ lifted_birth_death_move <- function(
     library,
     parcel_graph,
     constraints,
+    capacity_prior_lambda,
+    k_prior_lambda,
+    birth_tilt_lambda,
     neighbor_idx = NULL
 ) {
   k <- length(state$secondary_blocks)
@@ -1015,7 +1019,7 @@ lifted_birth_death_move <- function(
   # Propose move in current direction only
   if (direction == "birth") {
     # Capacity-tilted birth proposal
-    birth_weights <- compute_birth_tilt_weights(addable, library)
+    birth_weights <- compute_birth_tilt_weights(addable, library, birth_tilt_lambda)
     idx <- sample.int(n_add, 1, prob = birth_weights$weights)
     block_id <- addable[idx]
     log_w_selected <- birth_weights$log_weights[idx]
@@ -1108,9 +1112,9 @@ lifted_birth_death_move <- function(
     # Forward: q(y|x) = 1 / n_rem                      [uniform death]
     # Reverse: q(x|y) = w_removed / W(addable_new)      [weighted birth]
     # log(q(x|y)/q(y|x)) = log(w_removed) - log(W(addable_new)) + log(n_rem)
-    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library)
+    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library, birth_tilt_lambda)
     removed_cap <- library$metadata$capacity[block_id]
-    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_w_removed <- -birth_tilt_lambda * removed_cap
     log_W_addable_new <- rev_birth_weights$log_sum_w
     log_q_ratio <- log_w_removed - log_W_addable_new + log(n_rem)
   }
@@ -1147,12 +1151,13 @@ lifted_birth_death_move <- function(
   # Compute MH acceptance
   # Capacity prior penalty difference
   log_cap_ratio <- compute_penalty_difference(
-    state$total_capacity, proposed_state$total_capacity, constraints
+    state$total_capacity, proposed_state$total_capacity, constraints,
+    capacity_prior_lambda
   )
 
   # K prior penalty difference
   k_new <- length(proposed_state$secondary_blocks)
-  log_k_ratio <- K_PRIOR_LAMBDA * (k - k_new)
+  log_k_ratio <- k_prior_lambda * (k - k_new)
 
   # Reference measure correction: cancel combinatorial volume C(n_pool, k)
   n_pool <- library$n_blocks
@@ -1239,6 +1244,7 @@ secondary_swap_move <- function(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
   cap_tolerance = 50,
   neighbor_idx = NULL
 ) {
@@ -1366,7 +1372,8 @@ secondary_swap_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     proposed_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_accept <- log_accept + penalty_diff
   accept_prob <- min(1, exp(log_accept))
@@ -1602,6 +1609,8 @@ replace_lcc_move <- function(
   secondary_library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
+  debug_invariant_checks = FALSE,
   neighbor_idx = NULL,
   parcel_names = NULL,
   nbr_from = NULL,
@@ -1679,7 +1688,7 @@ replace_lcc_move <- function(
     # change. It may retain evicted ids — harmless, every consumer intersects
     # with active-derived sets.
     all_compatible_lccs <- state$compatible_lccs_cache
-    if (isTRUE(DEBUG_INVARIANT_CHECKS) && k_current > 0) {
+    if (isTRUE(debug_invariant_checks) && k_current > 0) {
       fresh_compatible <- filter_compatible_lccs(
         all_active_ids, lcc_library, secondary_library, current_secondary_ids,
         secondary_union_indices = state$secondary_union_indices,
@@ -1961,7 +1970,8 @@ replace_lcc_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     new_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_q_ratio <- log_q_ratio + penalty_diff
 

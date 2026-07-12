@@ -44,19 +44,19 @@ source(file.path(PKG_ROOT, "inst/targets/temp_targets_config.R"))
 source(file.path(PKG_ROOT, "inst/targets/temp_targets_parcel_config.R"))
 
 stopifnot("warm store missing" = dir.exists(STORE))
-tar_load(c(parcel_graph_result, constraints, discovered_secondary_library,
-           discovered_lcc_library, parcel_initial_states, parcel_main_config),
+tar_load(c(parcel_graph_result, target_spec, discovered_secondary_library,
+           discovered_lcc_library, parcel_initial_states, sampler_spec),
          store = STORE)
 
 cfg <- define_parcel_multichain_configs(
-  base_config = parcel_main_config, n_chains = 1L,
+  base_config = sampler_spec, n_chains = 1L,
   n_steps = STEPS, region_ids = "chain_1")[[1]]
 
 run_once <- function() {
   set.seed(SEED)
   res <- suppressMessages(run_parcel_chain_from_region(
     config = cfg, parcel_graph_result = parcel_graph_result,
-    constraints = constraints, secondary_library = discovered_secondary_library,
+    target_spec = target_spec, secondary_library = discovered_secondary_library,
     lcc_library = discovered_lcc_library,
     initial_state = parcel_initial_states[[1]], verbose = FALSE))
   res$parcel_samples

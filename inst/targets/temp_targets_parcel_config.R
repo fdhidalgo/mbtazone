@@ -204,25 +204,6 @@ LCC_BAND_STALL_ATTEMPTS <- 150L
 SWAP_CAP_TOLERANCE <- 150
 
 # ============================================================================
-# MULTI-BIRTH / MULTI-DEATH MOVES
-# ============================================================================
-#
-# Multi-move kernels can add/remove 1-3 secondary blocks per step.
-# This enables "tunneling" between states with different numbers of
-# secondary components (k), addressing the observation that k=0 states
-# are feasible but rarely visited with single-block moves.
-
-# Probability distribution for number of blocks to add/remove (r)
-# P(r=1) = 0.90, P(r=2) = 0.08, P(r=3) = 0.02
-# Strongly favor single-block moves; r>1 has near-zero MH acceptance
-# due to combinatorial reverse proposal probability.
-MULTI_MOVE_PROBS <- c(0.90, 0.08, 0.02)
-
-# Maximum blocks to add/remove in a single move (derived from probs length)
-MULTI_MOVE_MAX_R <- length(MULTI_MOVE_PROBS)
-
-
-# ============================================================================
 # BIRTH PROPOSAL TILT (Capacity-Weighted Births)
 # ============================================================================
 # Tilts birth proposals toward lower-capacity secondary blocks.
@@ -271,12 +252,14 @@ ENRICHMENT_BURN_IN <- MCMC_BURN_IN
 SAMPLE_MAX_STORED <- 500L
 
 # Store LCC signatures for discovery deduplication.
-# This is the DEFAULT for run_parcel_mcmc(); the discovery supplement
-# (run_mcmc_discovery_supplement) passes store_lcc_signatures = TRUE explicitly, so
-# it is unaffected by this default. The production sampling path
-# (run_parcel_chain_from_region) never returns lcc_signatures, so storing them there
-# is a per-step digest::digest() that is computed and discarded -- hence FALSE.
-# TRUE = store signature at every step; FALSE = skip (saves a per-step hash + alloc).
+# This becomes the sampler_spec default via parcel_sampler_spec(); the discovery
+# supplement (run_mcmc_discovery_supplement) overrides it to TRUE on its own
+# constructed spec (chain_config$store_lcc_signatures <- TRUE) before calling
+# run_parcel_mcmc(), so it is unaffected by this default. The production sampling
+# path (run_parcel_chain_from_region) never returns lcc_signatures, so storing
+# them there is a per-step digest::digest() that is computed and discarded --
+# hence FALSE. TRUE = store signature at every step; FALSE = skip (saves a
+# per-step hash + alloc).
 STORE_LCC_SIGNATURES <- FALSE
 
 

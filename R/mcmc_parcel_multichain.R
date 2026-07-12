@@ -73,7 +73,7 @@ compute_gelman_rubin <- function(chain_values) {
 #' Region IDs should come from partition_parcels_by_station_feasibility(), which
 #' identifies viable station components. Regions are named "R1", "R2", etc.
 #'
-#' @param base_config Base kernel configuration (from define_parcel_kernel_configs())
+#' @param base_config Base sampler spec (from `parcel_sampler_spec()`/presets)
 #' @param n_chains Number of chains to run (default 4)
 #' @param n_steps Number of MCMC steps per chain (default MCMC_STEPS_MACRO)
 #' @param region_ids Character vector of region identifiers for labelling chains.
@@ -116,7 +116,7 @@ define_parcel_multichain_configs <- function(base_config,
 #'
 #' @param config Chain configuration from define_parcel_multichain_configs()
 #' @param parcel_graph_result Result from build_parcel_graph_target()
-#' @param constraints MBTA constraints
+#' @param target_spec Target spec from `parcel_target_spec()`
 #' @param secondary_library Secondary block library
 #' @param lcc_library Discovered LCC library (shared across all chains)
 #' @param region_assignments Ignored, currently kept for backward compatibility only.
@@ -130,7 +130,7 @@ define_parcel_multichain_configs <- function(base_config,
 #' @param region_assignments Ignored, kept for backward compatibility only.
 run_parcel_chain_from_region <- function(config,
                                          parcel_graph_result,
-                                         constraints,
+                                         target_spec,
                                          secondary_library,
                                          lcc_library,
                                          initial_state,
@@ -161,17 +161,18 @@ run_parcel_chain_from_region <- function(config,
     initial_state <- initial_state[[1]]
   }
 
-  # Run parcel MCMC
+  # Run parcel MCMC. enable_online_enrichment comes from sampler_spec (config)
+  # itself now — the default/lifted presets default it to TRUE, matching
+  # today's production behavior.
   result <- run_parcel_mcmc(
     parcel_graph          = parcel_graph,
     initial_state         = initial_state,
-    constraints           = constraints,
+    target_spec           = target_spec,
     secondary_library     = secondary_library,
     lcc_library           = lcc_library,
-    config                = config,
+    sampler_spec          = config,
     parcel_assignments    = parcel_graph_result$parcel_assignments,
     neighbor_cache        = parcel_graph_result$neighbor_cache,
-    enable_online_enrichment = TRUE,
     verbose               = verbose
   )
 
@@ -203,9 +204,11 @@ run_parcel_chain_from_region <- function(config,
 #' multiple chains: capacity, n_components, lcc_capacity, centroid_x, centroid_y.
 #'
 #' @param chain_results List of parcel chain results from run_parcel_chain_from_region()
+#' @param mcmc_burn_in Number of leading samples to discard from each chain's
+#'   trajectory before computing R-hat (typically `sampler_spec$mcmc_burn_in`)
 #' @return data.table with columns: metric, rhat, rhat_upper, n_eff
 #' @export
-compute_parcel_multichain_rhat <- function(chain_results) {
+compute_parcel_multichain_rhat <- function(chain_results, mcmc_burn_in) {
   # Filter out failed chains
   valid_chains <- Filter(function(x) !isTRUE(x$initialization_failed), chain_results)
 
@@ -235,10 +238,10 @@ compute_parcel_multichain_rhat <- function(chain_results) {
     chain_values <- lapply(valid_chains, function(r) {
       if (is.null(r$diagnostics)) return(NULL)
       traj <- r$diagnostics[[traj_name]]
-      # Apply burn-in: discard first MCMC_BURN_IN samples
-      if (MCMC_BURN_IN > 0) {
-        if (length(traj) <= MCMC_BURN_IN) return(NULL)  # Not enough samples after burn-in
-        traj <- traj[(MCMC_BURN_IN + 1):length(traj)]
+      # Apply burn-in: discard first mcmc_burn_in samples
+      if (mcmc_burn_in > 0) {
+        if (length(traj) <= mcmc_burn_in) return(NULL)  # Not enough samples after burn-in
+        traj <- traj[(mcmc_burn_in + 1):length(traj)]
       }
       traj
     })
@@ -569,11 +572,14 @@ plot_parcel_rhat_summary <- function(rhat_table) {
 #'
 #' @param chain_results List of parcel chain results
 #' @param parcel_graph igraph object
+#' @param mcmc_burn_in Number of leading samples to discard from each chain's
+#'   trajectory before computing R-hat (typically `sampler_spec$mcmc_burn_in`)
 #' @param region_assignments Region partition
 #' @return List with all diagnostics and summary
 #' @export
 create_parcel_irreducibility_report <- function(chain_results,
                                                 parcel_graph,
+                                                mcmc_burn_in,
                                                 region_assignments = NULL) {
   # Count chains
   n_attempted <- length(chain_results)
@@ -581,7 +587,7 @@ create_parcel_irreducibility_report <- function(chain_results,
   n_failed <- n_attempted - n_valid
 
   # Compute diagnostics
-  rhat <- compute_parcel_multichain_rhat(chain_results)
+  rhat <- compute_parcel_multichain_rhat(chain_results, mcmc_burn_in)
   coverage <- summarize_parcel_geographic_coverage(chain_results, parcel_graph, region_assignments)
   separation <- detect_parcel_chain_separation(chain_results, parcel_graph)
   ks_tests <- compare_parcel_chain_distributions(chain_results)

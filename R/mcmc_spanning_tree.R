@@ -317,7 +317,8 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
 #' @param n_trees Number of spanning trees to sample (default 500)
 #' @param forbidden_parcels Optional character vector of parcels to exclude from LCCs
 #' @param max_discovery_capacity Optional upper bound on LCC capacity for discovery.
-#'   LCCs above this are skipped. Default: min_capacity * DISCOVERY_CAPACITY_MULTIPLIER.
+#'   LCCs above this are skipped. NULL disables the bound. Callers typically pass
+#'   `constraints$min_capacity * discovery_spec$discovery_capacity_multiplier`.
 #' @param verbose Print progress (default TRUE)
 #' @return List with:
 #'   - discovered_lccs: data.table with lcc_key, parcel_ids (list col), capacity, area, tree_count
@@ -371,11 +372,7 @@ discover_lccs_from_trees <- function(
   min_cap <- constraints$min_capacity
   feasible_comp_ids <- which(comp_capacities >= min_cap)
 
-  # Compute discovery upper bound if not provided
-  if (is.null(max_discovery_capacity)) {
-    max_discovery_capacity <- min_cap * DISCOVERY_CAPACITY_MULTIPLIER
-  }
-  if (verbose) {
+  if (verbose && !is.null(max_discovery_capacity)) {
     cli::cli_alert_info("Discovery capacity bound: {round(max_discovery_capacity)}")
   }
 

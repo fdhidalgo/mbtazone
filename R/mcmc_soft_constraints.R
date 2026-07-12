@@ -9,7 +9,7 @@
 #
 # The penalty enters the MH acceptance ratio as:
 #   log_accept += penalty(current_state) - penalty(proposed_state)
-#   penalty = CAPACITY_PRIOR_LAMBDA * (capacity - min_capacity)
+#   penalty = capacity_prior_lambda * (capacity - min_capacity)
 #
 # This preserves detailed balance while favoring lower-capacity configurations.
 
@@ -32,14 +32,9 @@
 #'
 #' @param capacity Current total capacity
 #' @param min_cap Minimum capacity constraint
-#' @param lambda Penalty strength (default: CAPACITY_PRIOR_LAMBDA from config)
+#' @param lambda Penalty strength (`target_spec$priors$capacity_prior_lambda`)
 #' @return Numeric penalty value (>= 0, where 0 means at minimum)
-compute_capacity_penalty <- function(capacity, min_cap,
-                                     lambda = NULL) {
-  if (is.null(lambda)) {
-    lambda <- CAPACITY_PRIOR_LAMBDA
-  }
-
+compute_capacity_penalty <- function(capacity, min_cap, lambda) {
   # Penalize capacity above min_capacity (prior favoring near-minimum)
   # min_capacity itself is a hard constraint checked elsewhere
 
@@ -58,13 +53,9 @@ compute_capacity_penalty <- function(capacity, min_cap,
 #' @param current_cap Current state capacity
 #' @param proposed_cap Proposed state capacity
 #' @param constraints Constraint list with min_capacity
-#' @param lambda Capacity prior strength (default: CAPACITY_PRIOR_LAMBDA from config)
+#' @param lambda Capacity prior strength (`target_spec$priors$capacity_prior_lambda`)
 #' @return Log penalty difference to add to MH ratio
-compute_penalty_difference <- function(current_cap, proposed_cap, constraints,
-                                       lambda = NULL) {
-  if (is.null(lambda)) {
-    lambda <- CAPACITY_PRIOR_LAMBDA
-  }
+compute_penalty_difference <- function(current_cap, proposed_cap, constraints, lambda) {
   pen_current <- compute_capacity_penalty(
     current_cap, constraints$min_capacity, lambda
   )

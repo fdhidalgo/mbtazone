@@ -20,9 +20,9 @@
 # nondeterminism is a bug, not a speedup.
 #
 # It loads a pre-built warm targets store (no gpkg / pipeline rebuild needed) for
-# the two fixed inputs the discovery consumes — `parcel_graph_result` and
-# `constraints` — then runs the full LCC discovery chain TWICE with a fixed seed
-# and reports:
+# the fixed inputs the discovery consumes — `parcel_graph_result`, `target_spec`,
+# and `discovery_spec` — then runs the full LCC discovery chain TWICE with a
+# fixed seed and reports:
 #   ELAPSED       min wall-clock of one full discovery run (s)
 #   OUTPUT_HASH   rlang::hash of the discovered_lcc_library
 #   HASH_MATCH    OUTPUT_HASH == baseline hash (the correctness gate)
@@ -58,14 +58,13 @@ BASELINE <- file.path(PKG_ROOT, "dev", "bench", "discovery_baseline.txt")
 setwd(PKG_ROOT)
 suppressMessages(pkgload::load_all(PKG_ROOT, quiet = TRUE,
                                    helpers = FALSE, attach_testthat = FALSE))
-# Discovery size constants are plain top-level objects in these config files
-# (n_trees, BFS sample counts, capacity bands, library cap). Sourcing them here
-# mirrors the pipeline; they are FROZEN inputs to the measurement, not targets.
-source(file.path(PKG_ROOT, "inst/targets/temp_targets_config.R"))
-source(file.path(PKG_ROOT, "inst/targets/temp_targets_parcel_config.R"))
+# Discovery size constants (n_trees, BFS sample counts, capacity bands, library
+# cap) arrive via the `discovery_spec` target loaded below — FROZEN inputs to
+# the measurement, not rebuilt here.
 
 stopifnot("warm store missing" = dir.exists(STORE))
-tar_load(c(parcel_graph_result, constraints), store = STORE)
+tar_load(c(parcel_graph_result, target_spec, discovery_spec), store = STORE)
+constraints <- target_spec$constraints
 
 # --- one full LCC discovery (Tier 3A of inst/targets/_targets.R) -------------
 # Reproduces the target chain tree_discovered_lccs -> bfs_discovered_lccs ->
@@ -79,9 +78,10 @@ run_once <- function() {
   tree_lccs <- discover_lccs_from_trees(
     parcel_graph           = pg,
     constraints            = constraints,
-    n_trees                = TREE_LCC_N_TREES,
+    n_trees                = discovery_spec$tree_lcc_n_trees,
     forbidden_parcels      = NULL,
-    max_discovery_capacity = constraints$min_capacity * DISCOVERY_CAPACITY_MULTIPLIER,
+    max_discovery_capacity = constraints$min_capacity *
+      discovery_spec$discovery_capacity_multiplier,
     verbose                = FALSE
   )
 
@@ -90,8 +90,9 @@ run_once <- function() {
     tree_discovered_lccs = tree_lccs,
     parcel_graph         = pg,
     constraints          = constraints,
-    n_samples            = BFS_LCC_N_SAMPLES,
-    n_seeds              = BFS_LCC_N_SEEDS,
+    discovery_capacity_multiplier = discovery_spec$discovery_capacity_multiplier,
+    n_samples            = discovery_spec$bfs_lcc_n_samples,
+    n_seeds              = discovery_spec$bfs_lcc_n_seeds,
     forbidden_parcels    = NULL,
     verbose              = FALSE
   )
@@ -103,14 +104,14 @@ run_once <- function() {
 
   # Stage 2b: capacity-stratified BFS — RNG. Pipeline parallelises these bands
   # across crew workers; the bench runs them serially (see header).
-  band_results <- lapply(seq_along(LCC_CAPACITY_BANDS_RELATIVE), function(b) {
+  band_results <- lapply(seq_along(discovery_spec$lcc_capacity_bands_relative), function(b) {
     discover_lccs_single_band(
       parcel_graph            = pg,
       constraints             = constraints,
       band_idx                = b,
-      capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
-      samples_per_band        = LCC_BAND_SAMPLES_PER_BAND,
-      max_attempts_per_band   = LCC_BAND_MAX_ATTEMPTS,
+      capacity_bands_relative = discovery_spec$lcc_capacity_bands_relative,
+      samples_per_band        = discovery_spec$lcc_band_samples_per_band,
+      max_attempts_per_band   = discovery_spec$lcc_band_max_attempts,
       forbidden_parcels       = NULL,
       existing_keys           = existing_keys,
       verbose                 = FALSE
@@ -132,8 +133,8 @@ run_once <- function() {
     combined$discovered_blocks,
     pg,
     constraints      = constraints,
-    max_library_size = LCC_LIBRARY_MAX_SIZE,
-    bfs_reservation  = BFS_RESERVATION_LCC
+    max_library_size = discovery_spec$lcc_library_max_size,
+    bfs_reservation  = discovery_spec$bfs_reservation_lcc
   )
 }
 

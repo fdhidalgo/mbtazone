@@ -825,6 +825,8 @@ count_boundary_crossings <- function(block_parcels, parcel_graph) {
 #' @param tree_discovered_lccs Output from discover_lccs_from_trees()
 #' @param parcel_graph igraph object with capacity/area attributes
 #' @param constraints MBTA constraints list
+#' @param discovery_capacity_multiplier Upper bound (relative to min_capacity)
+#'   for capacity-similar exploration targets
 #' @param n_samples Total BFS explorations to perform (default 100)
 #' @param n_seeds Number of seed LCCs to select from tree discoveries (default 10)
 #' @param forbidden_parcels Character vector of parcel IDs to exclude (default NULL)
@@ -840,6 +842,7 @@ run_bfs_lcc_supplement <- function(
     tree_discovered_lccs,
     parcel_graph,
     constraints,
+    discovery_capacity_multiplier,
     n_samples = 100L,
     n_seeds = 10L,
     forbidden_parcels = NULL,
@@ -987,9 +990,9 @@ run_bfs_lcc_supplement <- function(
       start_parcel <- boundary_parcels[sample.int(length(boundary_parcels), 1)]
 
       # Target capacity similar to seed LCC (with some variation)
-      # Use DISCOVERY_CAPACITY_MULTIPLIER as upper bound for exploration
+      # Use discovery_capacity_multiplier as upper bound for exploration
       seed_capacity <- seed_lcc$capacity
-      max_target <- constraints$min_capacity * DISCOVERY_CAPACITY_MULTIPLIER
+      max_target <- constraints$min_capacity * discovery_capacity_multiplier
       target_capacity <- runif(1, min_lcc_capacity, max_target)
 
       # BFS grow toward target capacity (using eligible parcels to exclude forbidden)
@@ -2181,7 +2184,7 @@ build_secondary_library_from_discovery <- function(
 #' @param neighbor_cache Optional precomputed neighbor cache for speed
 #' @return List with updated lcc_library and added (logical)
 add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
-                               max_online = ONLINE_MAX_ENTRIES,
+                               max_online,
                                neighbor_cache = NULL,
                                lcc_indices = NULL) {
   all_parcels <- lcc_library$parcel_names
@@ -2652,6 +2655,8 @@ station_constraint_flags <- function(constraints) {
 #' @return An initialised parcel MCMC state, or NULL if none was found.
 #' @keywords internal
 construct_feasible_seed <- function(parcel_graph, constraints, libraries,
+                                    discovery_capacity_multiplier,
+                                    k_prior_lambda,
                                     max_restarts = 90L) {
   vtx <- igraph::V(parcel_graph)
   all_parcels <- vtx$name
@@ -2669,7 +2674,7 @@ construct_feasible_seed <- function(parcel_graph, constraints, libraries,
 
   min_cap  <- constraints$min_capacity
   min_area <- constraints$min_area
-  max_cap  <- min_cap * DISCOVERY_CAPACITY_MULTIPLIER
+  max_cap  <- min_cap * discovery_capacity_multiplier
   bfs_ctx  <- bfs_build_context(parcel_graph, cap_lookup, eligible_pool = NULL)
 
   for (attempt in seq_len(max_restarts)) {
@@ -2691,10 +2696,11 @@ construct_feasible_seed <- function(parcel_graph, constraints, libraries,
           (is.na(min_area) || area >= min_area))) next
 
     secondary_block_ids <- select_initial_secondary_blocks(
-      lcc_parcels  = lcc,
-      library      = libraries$secondary_library,
-      parcel_graph = parcel_graph,
-      constraints  = constraints
+      lcc_parcels    = lcc,
+      library        = libraries$secondary_library,
+      parcel_graph   = parcel_graph,
+      constraints    = constraints,
+      k_prior_lambda = k_prior_lambda
     )
     sec_parcels <- library_blocks_parcels(libraries$secondary_library,
                                           secondary_block_ids)
@@ -2734,7 +2740,11 @@ construct_feasible_seed <- function(parcel_graph, constraints, libraries,
 #' @param lcc_library LCC library from build_lcc_library_from_tree_discovery()
 #' @param libraries Full libraries list (needs secondary_library)
 #' @param parcel_graph igraph object
-#' @param constraints MBTA constraints list
+#' @param target_spec Target spec from `parcel_target_spec()` (hard
+#'   constraints + k_prior_lambda, used for the geometric-prior secondary
+#'   draw during seeding)
+#' @param discovery_spec Discovery spec from `parcel_discovery_spec()` (only
+#'   `discovery_capacity_multiplier` is used, by the constructive fallback)
 #' @param n_chains Number of chains to initialise (default 4)
 #' @return List of length n_chains, each an initialised parcel MCMC state
 #' @export
@@ -2742,10 +2752,14 @@ generate_initial_states_from_lccs <- function(
     lcc_library,
     libraries,
     parcel_graph,
-    constraints,
+    target_spec,
+    discovery_spec,
     n_chains = 4L
 ) {
   cli::cli_h2("Generating Initial MCMC States from LCC Library")
+
+  constraints <- target_spec$constraints
+  k_prior_lambda <- target_spec$priors$k_prior_lambda
 
   # Structural feasibility gate. If a hard constraint's town-wide ceiling falls
   # short, no seed exists; abort now rather than scanning the library for hours
@@ -2888,6 +2902,7 @@ generate_initial_states_from_lccs <- function(
           library            = libraries$secondary_library,
           parcel_graph       = parcel_graph,
           constraints        = constraints,
+          k_prior_lambda     = k_prior_lambda,
           lcc_neighbor_names = lcc_nbr_names
         )
 
@@ -2947,7 +2962,11 @@ generate_initial_states_from_lccs <- function(
       cli::cli_alert_info(
         "Chain {i}: no library seed within {min(lib_attempt_budget, length(ordered_ids))} attempts; attempting constructive seeding"
       )
-      state <- construct_feasible_seed(parcel_graph, constraints, libraries)
+      state <- construct_feasible_seed(
+        parcel_graph, constraints, libraries,
+        discovery_capacity_multiplier = discovery_spec$discovery_capacity_multiplier,
+        k_prior_lambda = k_prior_lambda
+      )
       if (!is.null(state)) {
         initial_states[[i]] <- state
         cli::cli_alert_success(
@@ -3170,6 +3189,8 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
                                                     libraries,
                                                     region_assignments,
                                                     target_region,
+                                                    k_prior_lambda,
+                                                    discovery_capacity_multiplier,
                                                     seed_pool = NULL,
                                                     max_restarts = 100,
                                                     seed_with_secondaries = FALSE) {
@@ -3195,7 +3216,7 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
   min_cap <- constraints$min_capacity
   min_area <- constraints$min_area
   # Use discovery bound to prevent high-cap initial states that cause mode-trapping
-  max_cap <- min_cap * DISCOVERY_CAPACITY_MULTIPLIER
+  max_cap <- min_cap * discovery_capacity_multiplier
 
   # Station constraint thresholds (if specified)
   required_station_cap <- if (!is.null(constraints$station_capacity_pct) &&
@@ -3253,7 +3274,8 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
         lcc_parcels = current_lcc,
         library = libraries$secondary_library,
         parcel_graph = parcel_graph,
-        constraints = constraints
+        constraints = constraints,
+        k_prior_lambda = k_prior_lambda
       )
       sec_parcels <- library_blocks_parcels(libraries$secondary_library, secondary_block_ids)
     } else {
@@ -3301,6 +3323,7 @@ generate_initial_parcel_state_in_region <- function(parcel_graph,
 #' @return Integer vector of selected block IDs
 select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
                                             constraints,
+                                            k_prior_lambda,
                                             lcc_neighbor_names = NULL) {
   if (library$n_blocks == 0) return(integer(0))
 
@@ -3480,18 +3503,18 @@ select_initial_secondary_blocks <- function(lcc_parcels, library, parcel_graph,
   # stacked on top of any station blocks added in phase 1.
   if (!lcc_meets_capacity) {
     remaining <- setdiff(compatible_ids, selected)
-    # K_PRIOR_LAMBDA = 0 (no fragmentation penalty) is a flat, improper prior
+    # k_prior_lambda = 0 (no fragmentation penalty) is a flat, improper prior
     # over k = 0, 1, 2, ... -- the penalty term itself (log_k_ratio =
-    # K_PRIOR_LAMBDA * ...) is fine at 0 in the birth/death kernels, but
-    # rgeom(prob = 1 - exp(-K_PRIOR_LAMBDA)) is not: a geometric distribution
+    # k_prior_lambda * ...) is fine at 0 in the birth/death kernels, but
+    # rgeom(prob = 1 - exp(-k_prior_lambda)) is not: a geometric distribution
     # needs a strictly positive success probability, so prob = 0 returns NA
     # (with a warning) instead of "no preference among any count". Restricted
     # to the finite set of blocks actually available here, "no preference" is
     # uniform over 0..length(remaining).
-    k_target <- if (isTRUE(K_PRIOR_LAMBDA == 0)) {
+    k_target <- if (isTRUE(k_prior_lambda == 0)) {
       sample.int(length(remaining) + 1L, 1L) - 1L
     } else {
-      rgeom(1, prob = 1 - exp(-K_PRIOR_LAMBDA))
+      rgeom(1, prob = 1 - exp(-k_prior_lambda))
     }
     k_target  <- min(k_target, length(remaining))
     if (k_target > 0L) {

@@ -16,6 +16,10 @@ MAX_DIST_FEET <- 120
 # Maximum boundary-to-boundary distance (ft) for any two parcels to be considered
 # for adjacency.
 
+TOUCH_THRESHOLD_FEET <- 2
+# Boundary-to-boundary distance (ft) at or below which two parcels are treated
+# as directly touching (no ROW crossing needed).
+
 MIN_COVERAGE_RATIO <- 0.9
 # Minimum fraction of the nearest-points line that must lie within ROW for a
 # cross-ROW connection to be accepted. At 0.9, 90% of the line must be ROW.

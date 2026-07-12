@@ -42,13 +42,8 @@ config_env <- new.env(parent = globalenv())
 source(find_repo_file("inst/targets/temp_targets_config.R"), local = config_env)
 source(find_repo_file("inst/targets/temp_targets_parcel_config.R"), local = config_env)
 
-CAPACITY_PRIOR_LAMBDA <- config_env$CAPACITY_PRIOR_LAMBDA
-K_PRIOR_LAMBDA <- config_env$K_PRIOR_LAMBDA
 SECONDARY_AREA_THRESHOLD <- config_env$SECONDARY_AREA_THRESHOLD
-DISCOVERY_CAPACITY_MULTIPLIER <- config_env$DISCOVERY_CAPACITY_MULTIPLIER
 MCMC_STEPS_MACRO <- config_env$MCMC_STEPS_MACRO
-MCMC_BURN_IN <- config_env$MCMC_BURN_IN
-SWAP_CAP_TOLERANCE <- config_env$SWAP_CAP_TOLERANCE
 
 # Load targets
 parcel_chain_results <- tar_read(all_parcel_chain_results)
@@ -62,7 +57,18 @@ parcel_separation <- tar_read(parcel_chain_separation)
 parcel_feasibility <- tar_read(parcel_feasibility)
 parcel_feasibility_summary <- tar_read(parcel_feasibility_summary)
 parcel_geographic_coverage <- tar_read(parcel_geographic_coverage)
-constraints <- tar_read(constraints)
+
+# Tuning values actually used by this run (not re-sourced from the raw config
+# files) — read straight from the constructed specs.
+target_spec <- tar_read(target_spec)
+sampler_spec <- tar_read(sampler_spec)
+discovery_spec <- tar_read(discovery_spec)
+constraints <- target_spec$constraints
+MCMC_BURN_IN <- sampler_spec$mcmc_burn_in
+CAPACITY_PRIOR_LAMBDA <- target_spec$priors$capacity_prior_lambda
+K_PRIOR_LAMBDA <- target_spec$priors$k_prior_lambda
+DISCOVERY_CAPACITY_MULTIPLIER <- discovery_spec$discovery_capacity_multiplier
+SWAP_CAP_TOLERANCE <- sampler_spec$swap_cap_tolerance
 
 # Get first valid chain for trajectory data
 valid_chains <- Filter(
