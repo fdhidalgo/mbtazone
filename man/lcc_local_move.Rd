@@ -9,6 +9,7 @@ lcc_local_move(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
   neighbor_cache = NULL,
   neighbor_indices = NULL,
   degrees = NULL,

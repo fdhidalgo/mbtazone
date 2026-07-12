@@ -7,7 +7,7 @@
 run_mcmc_discovery_supplement(
   tree_discovered_lccs,
   parcel_graph_result,
-  constraints,
+  target_spec,
   secondary_library,
   n_chains = 4L,
   n_steps = 2000L,
@@ -19,7 +19,7 @@ run_mcmc_discovery_supplement(
 
 \item{parcel_graph_result}{Result from build_parcel_graph_target()}
 
-\item{constraints}{MBTA constraints}
+\item{target_spec}{Target spec from \code{parcel_target_spec()}}
 
 \item{secondary_library}{Secondary block library (hydrated)}
 

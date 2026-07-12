@@ -12,6 +12,8 @@ discover_lccs_by_capacity_bands(
   max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
   forbidden_parcels = NULL,
   existing_keys = character(0),
+  time_budget_s = 900,
+  stall_attempts = 150L,
   verbose = TRUE
 )
 }
@@ -35,6 +37,12 @@ Default: NULL.}
 
 \item{existing_keys}{Character vector of xxhash64 keys to skip (from prior
 discoveries like tree enumeration). Default: character(0).}
+
+\item{time_budget_s}{Per-band wall-clock budget in seconds (see
+\code{\link{discover_lccs_single_band}}). Default: 900.}
+
+\item{stall_attempts}{Consecutive valid-free attempts before a pass gives up
+(see \code{\link{discover_lccs_single_band}}). Default: 150.}
 
 \item{verbose}{Print progress. Default: TRUE.}
 }

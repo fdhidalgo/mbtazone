@@ -7,8 +7,8 @@
 cluster_parcels_to_units(
   g,
   atomic_parcels,
-  target_area_min = MACRO_TARGET_AREA_MIN,
-  target_area_max = MACRO_TARGET_AREA_MAX,
+  target_area_min,
+  target_area_max,
   seed = 123
 )
 }

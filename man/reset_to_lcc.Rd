@@ -9,7 +9,9 @@ reset_to_lcc(
   library,
   parcel_graph,
   neighbor_idx = NULL,
-  parcel_names = NULL
+  parcel_names = NULL,
+  nbr_from = NULL,
+  nbr_to = NULL
 )
 }
 \arguments{
@@ -22,6 +24,11 @@ reset_to_lcc(
 \item{neighbor_idx}{List of integer neighbor indices (for incremental tracking)}
 
 \item{parcel_names}{Character vector of all parcel names (for incremental tracking)}
+
+\item{nbr_from, nbr_to}{Optional flat integer edge arrays (library-indexed) used
+to compute neighbor-in-LCC counts in a single vectorized \code{tabulate} pass
+instead of a per-parcel \code{vapply}. Both must be supplied together; they are
+derived once from \code{neighbor_idx} (see \code{build_neighbor_edge_arrays()}).}
 }
 \value{
 New state

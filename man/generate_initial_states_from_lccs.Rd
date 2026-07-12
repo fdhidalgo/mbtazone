@@ -8,7 +8,8 @@ generate_initial_states_from_lccs(
   lcc_library,
   libraries,
   parcel_graph,
-  constraints,
+  target_spec,
+  discovery_spec,
   n_chains = 4L
 )
 }
@@ -19,7 +20,12 @@ generate_initial_states_from_lccs(
 
 \item{parcel_graph}{igraph object}
 
-\item{constraints}{MBTA constraints list}
+\item{target_spec}{Target spec from \code{parcel_target_spec()} (hard
+constraints + k_prior_lambda, used for the geometric-prior secondary
+draw during seeding)}
+
+\item{discovery_spec}{Discovery spec from \code{parcel_discovery_spec()} (only
+\code{discovery_capacity_multiplier} is used, by the constructive fallback)}
 
 \item{n_chains}{Number of chains to initialise (default 4)}
 }
@@ -32,6 +38,11 @@ maximally distant LCCs from the library and uses each directly as the
 initial LCC state, then adds compatible secondary blocks.
 }
 \details{
-All constraint satisfaction (capacity, area, density, station proximity)
-is guaranteed by library construction — no BFS expansion needed.
+Runs assess_seeding_feasibility() first: if a hard constraint is town-wide
+infeasible (e.g. a station requirement the parcels cannot meet) it aborts in
+O(n) instead of scanning the whole library. Note that capacity/area/density/
+station coverage are NOT fully guaranteed by library construction for towns
+whose station requirement is <= 50\% (LCC discovery only filters on the
+"excess over 50\%" station bound, expecting secondaries to supply the rest),
+so per-candidate feasibility is still re-checked below.
 }

@@ -4,12 +4,15 @@
 \alias{compute_multichain_parcel_metrics}
 \title{Compute multi-chain parcel mixing metrics}
 \usage{
-compute_multichain_parcel_metrics(chain_results, parcel_graph)
+compute_multichain_parcel_metrics(chain_results, parcel_graph, mcmc_burn_in)
 }
 \arguments{
 \item{chain_results}{Named list of chain results from run_parcel_chain_from_region()}
 
 \item{parcel_graph}{igraph object}
+
+\item{mcmc_burn_in}{Number of leading samples to discard from each chain's
+trajectory before computing ESS/R-hat (typically \code{sampler_spec$mcmc_burn_in})}
 }
 \value{
 List of aggregated metrics

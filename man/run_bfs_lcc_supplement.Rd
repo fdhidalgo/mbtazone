@@ -8,6 +8,7 @@ run_bfs_lcc_supplement(
   tree_discovered_lccs,
   parcel_graph,
   constraints,
+  discovery_capacity_multiplier,
   n_samples = 100L,
   n_seeds = 10L,
   forbidden_parcels = NULL,
@@ -20,6 +21,9 @@ run_bfs_lcc_supplement(
 \item{parcel_graph}{igraph object with capacity/area attributes}
 
 \item{constraints}{MBTA constraints list}
+
+\item{discovery_capacity_multiplier}{Upper bound (relative to min_capacity)
+for capacity-similar exploration targets}
 
 \item{n_samples}{Total BFS explorations to perform (default 100)}
 

@@ -8,8 +8,9 @@ add_lcc_to_library(
   lcc_library,
   lcc_parcels,
   parcel_graph,
-  max_online = ONLINE_MAX_ENTRIES,
-  neighbor_cache = NULL
+  max_online,
+  neighbor_cache = NULL,
+  lcc_indices = NULL
 )
 }
 \arguments{
