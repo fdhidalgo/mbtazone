@@ -5,7 +5,7 @@
 #
 # Two-level hierarchy:
 # - Original parcels (many, small)
-# - Units (fewer, ~0.25-1 acre each when aggregated; 1:1 when MACRO_SCALE=0)
+# - Units (fewer, ~0.25-1 acre each when aggregated; 1:1 when graph_spec$macro_scale=0)
 
 # ============================================================================
 # ATOMIC PARCEL IDENTIFICATION
@@ -20,8 +20,9 @@
 #'
 #' @param g igraph object with area vertex attribute
 #' @param area_threshold Minimum area (acres) for singleton treatment
+#'   (typically `graph_spec$macro_atomic_threshold`)
 #' @return Character vector of parcel IDs (LOC_IDs) to freeze as singletons
-identify_atomic_parcels <- function(g, area_threshold = MACRO_ATOMIC_THRESHOLD) {
+identify_atomic_parcels <- function(g, area_threshold) {
   areas <- igraph::V(g)$area
   names <- igraph::V(g)$name
   names[areas >= area_threshold]
@@ -52,8 +53,8 @@ identify_atomic_parcels <- function(g, area_threshold = MACRO_ATOMIC_THRESHOLD) 
 #' @return data.table with columns: parcel_id, unit_id
 cluster_parcels_to_units <- function(g,
                                        atomic_parcels,
-                                       target_area_min = MACRO_TARGET_AREA_MIN,
-                                       target_area_max = MACRO_TARGET_AREA_MAX,
+                                       target_area_min,
+                                       target_area_max,
                                        seed = 123) {
   set.seed(seed)
 
@@ -220,7 +221,7 @@ cluster_parcels_to_units <- function(g,
 #' @return data.table with unit_id, area, capacity, n_parcels, is_singleton, parcel_ids
 compute_parcel_attributes <- function(g,
                                        parcel_assignments,
-                                       atomic_threshold = MACRO_ATOMIC_THRESHOLD) {
+                                       atomic_threshold) {
   # Get parcel attributes
   parcel_attrs <- data.table::data.table(
     parcel_id = igraph::V(g)$name,
@@ -331,7 +332,7 @@ build_parcel_graph <- function(g, parcel_assignments, parcel_attributes) {
 #' Build identity parcel graph (no aggregation)
 #'
 #' Creates a parcel graph where each parcel is its own unit.
-#' Used when MACRO_SCALE = 0 for raw parcel-level analysis.
+#' Used when graph_spec$macro_scale = 0 for raw parcel-level analysis.
 #'
 #' @param g igraph object (raw parcel graph) with area, capacity vertex attributes
 #' @return List matching build_parcel_graph_target() structure for API compatibility
@@ -372,11 +373,7 @@ build_identity_parcel_graph <- function(g) {
   )
 
   # Build neighbor cache
-  unit_names <- igraph::V(parcel_graph)$name
-  neighbor_cache <- lapply(unit_names, function(m) {
-    igraph::neighbors(parcel_graph, m)$name
-  })
-  names(neighbor_cache) <- unit_names
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
 
   cli::cli_alert_success(
     "Created {n} units from {n} parcels (compression ratio: 1.0x)"
@@ -402,16 +399,19 @@ build_identity_parcel_graph <- function(g) {
 #' Full pipeline to construct parcel representation from raw adjacency graph.
 #'
 #' @param adjacency_graph igraph object (raw parcel graph)
-#' @param target_area_min Minimum unit area (acres)
-#' @param target_area_max Maximum unit area (acres)
+#' @param target_area_min Minimum unit area (acres), typically
+#'   `graph_spec$macro_base_area_min * graph_spec$macro_scale`
+#' @param target_area_max Maximum unit area (acres), typically
+#'   `graph_spec$macro_base_area_max * graph_spec$macro_scale`
 #' @param atomic_threshold Area threshold for singleton preservation
+#'   (typically `graph_spec$macro_atomic_threshold`)
 #' @param seed Random seed
 #' @return List with parcel_graph, parcel_assignments, parcel_attributes, adjacency_graph, neighbor_cache
 #' @export
 build_parcel_graph_target <- function(adjacency_graph,
-                                       target_area_min = MACRO_TARGET_AREA_MIN,
-                                       target_area_max = MACRO_TARGET_AREA_MAX,
-                                       atomic_threshold = MACRO_ATOMIC_THRESHOLD,
+                                       target_area_min,
+                                       target_area_max,
+                                       atomic_threshold,
                                        seed = 123) {
   cli::cli_h2("Building parcel graph")
 
@@ -451,10 +451,8 @@ build_parcel_graph_target <- function(adjacency_graph,
   cli::cli_alert_success("Parcel graph: {n_units} vertices, {n_edges} edges (avg degree: {round(avg_degree, 1)})")
 
   # Step 5: Build neighbor cache for fast lookups during MCMC
-  unit_names <- igraph::V(parcel_graph)$name
-  neighbor_cache <- lapply(unit_names, function(m) igraph::neighbors(parcel_graph, m)$name)
-  names(neighbor_cache) <- unit_names
-  cli::cli_alert_info("Built neighbor cache for {length(unit_names)} units")
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
+  cli::cli_alert_info("Built neighbor cache for {length(neighbor_cache)} units")
 
   list(
     parcel_graph = parcel_graph,

@@ -4,9 +4,11 @@
 #
 # When TRUE, validates state invariants after every accepted move.
 # Catches subtle bugs from state mutations (overlapping blocks, capacity drift).
-# Cost: ~100-500μs per accepted move (~1% overhead for 5000-step runs).
-# Set to FALSE for production runs after debugging is complete.
-DEBUG_INVARIANT_CHECKS <- TRUE
+# Cost: ~100-500μs per accepted move. On large parcel graphs the per-accepted-move
+# validation is O(N) set comparisons + an O(k^2) secondary-adjacency double loop +
+# two full capacity/area resums, which is a large share of per-step time at
+# production step counts (20000) -- so FALSE for production, as intended.
+DEBUG_INVARIANT_CHECKS <- FALSE
 
 # ============================================================================
 # MACRO CONSTRUCTION PARAMETERS
@@ -91,6 +93,15 @@ BFS_LCC_N_SEEDS <- 10L
 # Library size cap
 LCC_LIBRARY_MAX_SIZE <- 5000L
 
+# Cap on the number of UNIQUE LCCs tree enumeration will discover before it stops
+# sampling more trees. The library is downsampled to LCC_LIBRARY_MAX_SIZE anyway, so
+# enumerating millions of configurations (the largest towns hit ~1.1M) only inflates
+# peak memory -- it does not improve the final 5000-block library. At 10x the library
+# cap this is high enough that ordinary towns (which find ~10^3-10^4 uniques) never
+# reach it and are byte-identical; it bounds only the few giant towns. Passed to
+# discover_lccs_from_trees(max_unique_lccs = ...); the engine default is Inf (no cap).
+LCC_DISCOVERY_MAX_UNIQUE <- 50000L
+
 # --- Secondary Discovery ---
 # Tree enumeration: Sample trees, enumerate cuts within area bands
 TREE_SEC_N_TREES <- 200L
@@ -142,6 +153,16 @@ LCC_BAND_SAMPLES_PER_BAND <- 500L
 # Maximum BFS attempts per band before giving up
 LCC_BAND_MAX_ATTEMPTS <- 1000L
 
+# Hard wall-clock budget per band (seconds), shared across both passes. Bounds
+# the pathological case where a band's acceptance rate is ~0 and every attempt
+# grows a huge block (observed: 7.8 hours for one band that found nothing).
+LCC_BAND_TIME_BUDGET_S <- 900
+
+# Consecutive attempts without one constraint-valid candidate before a pass
+# gives up (Pass 1 hands over to the density-aware Pass 2; Pass 2 declares the
+# band unreachable).
+LCC_BAND_STALL_ATTEMPTS <- 150L
+
 # ============================================================================
 # KERNEL PROBABILITIES
 # ============================================================================
@@ -181,25 +202,6 @@ LCC_BAND_MAX_ATTEMPTS <- 1000L
 # Note: Increased from 50 to 150 to reduce acceptance rate (~90% was too local)
 # and encourage larger geographic moves.
 SWAP_CAP_TOLERANCE <- 150
-
-# ============================================================================
-# MULTI-BIRTH / MULTI-DEATH MOVES
-# ============================================================================
-#
-# Multi-move kernels can add/remove 1-3 secondary blocks per step.
-# This enables "tunneling" between states with different numbers of
-# secondary components (k), addressing the observation that k=0 states
-# are feasible but rarely visited with single-block moves.
-
-# Probability distribution for number of blocks to add/remove (r)
-# P(r=1) = 0.90, P(r=2) = 0.08, P(r=3) = 0.02
-# Strongly favor single-block moves; r>1 has near-zero MH acceptance
-# due to combinatorial reverse proposal probability.
-MULTI_MOVE_PROBS <- c(0.90, 0.08, 0.02)
-
-# Maximum blocks to add/remove in a single move (derived from probs length)
-MULTI_MOVE_MAX_R <- length(MULTI_MOVE_PROBS)
-
 
 # ============================================================================
 # BIRTH PROPOSAL TILT (Capacity-Weighted Births)
@@ -249,10 +251,16 @@ ENRICHMENT_BURN_IN <- MCMC_BURN_IN
 # This ensures ~500 states regardless of run length
 SAMPLE_MAX_STORED <- 500L
 
-# Store LCC signatures for discovery deduplication
-# TRUE = store signature at every step (needed for discovery)
-# FALSE = skip signatures (saves memory if not needed)
-STORE_LCC_SIGNATURES <- TRUE
+# Store LCC signatures for discovery deduplication.
+# This becomes the sampler_spec default via parcel_sampler_spec(); the discovery
+# supplement (run_mcmc_discovery_supplement) overrides it to TRUE on its own
+# constructed spec (chain_config$store_lcc_signatures <- TRUE) before calling
+# run_parcel_mcmc(), so it is unaffected by this default. The production sampling
+# path (run_parcel_chain_from_region) never returns lcc_signatures, so storing
+# them there is a per-step digest::digest() that is computed and discarded --
+# hence FALSE. TRUE = store signature at every step; FALSE = skip (saves a
+# per-step hash + alloc).
+STORE_LCC_SIGNATURES <- FALSE
 
 
 # ============================================================================

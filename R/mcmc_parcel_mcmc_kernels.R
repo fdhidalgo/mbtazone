@@ -214,14 +214,9 @@ compute_lcc_capacity_weights <- function(lcc_ids, lcc_library) {
 #'
 #' @param block_ids Integer vector of addable block IDs
 #' @param library Secondary library with $metadata$capacity
-#' @param tilt_lambda Tilt strength (default: BIRTH_TILT_LAMBDA)
+#' @param tilt_lambda Tilt strength (`sampler_spec$birth_tilt_lambda`)
 #' @return List with weights, log_weights, log_sum_w, valid
-compute_birth_tilt_weights <- function(block_ids, library,
-                                       tilt_lambda = NULL) {
-  if (is.null(tilt_lambda)) {
-    tilt_lambda <- BIRTH_TILT_LAMBDA
-  }
-
+compute_birth_tilt_weights <- function(block_ids, library, tilt_lambda) {
   n <- length(block_ids)
   if (n == 0) {
     return(list(
@@ -243,13 +238,24 @@ compute_birth_tilt_weights <- function(block_ids, library,
   }
 
   caps <- library$metadata$capacity[block_ids]
-  # NA capacity (e.g. from rbindlist fill=TRUE in library construction) gets
-  # zero weight rather than propagating NA into the probability vector.
-  caps[is.na(caps)] <- 0
   log_w <- -tilt_lambda * caps
+  # Blocks with missing capacity (e.g. rbindlist fill = TRUE padding rows) are
+  # excluded from the proposal: assign zero weight (-Inf log weight). Substituting
+  # 0 for NA would instead give them the *maximum* weight under positive tilt,
+  # since w_i = exp(-tilt_lambda * capacity_i) is largest at capacity 0.
+  log_w[is.na(log_w)] <- -Inf
 
   # Log-sum-exp for numerical stability
   max_log_w <- max(log_w)
+  if (!is.finite(max_log_w)) {
+    # Every candidate block has missing capacity: no valid birth target.
+    return(list(
+      weights = rep(0, n),
+      log_weights = log_w,
+      log_sum_w = -Inf,
+      valid = FALSE
+    ))
+  }
   log_sum_w <- max_log_w + log(sum(exp(log_w - max_log_w)))
 
   # Normalized weights for sampling
@@ -324,6 +330,7 @@ lcc_local_move <- function(
     library,
     parcel_graph,
     constraints,
+    capacity_prior_lambda,
     neighbor_cache = NULL,
     neighbor_indices = NULL,
     degrees = NULL,
@@ -342,6 +349,11 @@ lcc_local_move <- function(
   )
   B_in <- boundary$B_in
   B_out <- boundary$B_out
+  # Library indices aligned with B_in/B_out (fast-path boundary only). When
+  # present, boundary weights read the maintained lcc_neighbor_counts by index
+  # instead of recounting neighbors via character %in% (count_lcc_neighbours).
+  B_in_idx <- boundary$B_in_idx
+  B_out_idx <- boundary$B_out_idx
 
   n_in <- length(B_in)
   n_out <- length(B_out)
@@ -360,8 +372,14 @@ lcc_local_move <- function(
   # a parcel leaves it forbidden from B_out_new (secondary neighbour rule
   # in get_lcc_boundary), making the reverse add impossible.
   if (length(state$secondary_neighbor_indices) > 0) {
-    forbidden_names <- library$parcel_names[state$secondary_neighbor_indices]
-    B_in <- B_in[!B_in %in% forbidden_names]
+    if (!is.null(B_in_idx)) {
+      keep <- !(B_in_idx %in% state$secondary_neighbor_indices)
+      B_in <- B_in[keep]
+      B_in_idx <- B_in_idx[keep]
+    } else {
+      forbidden_names <- library$parcel_names[state$secondary_neighbor_indices]
+      B_in <- B_in[!B_in %in% forbidden_names]
+    }
     n_in <- length(B_in)
   }
 
@@ -388,8 +406,14 @@ lcc_local_move <- function(
   if (action == "add") {
 
     # Weight B_out by (LCC-neighbour count)^alpha
-    # Every parcel in B_out has >= 1 LCC neighbour, so log is safe
-    fwd_counts  <- count_lcc_neighbours(B_out, lcc_set, neighbor_cache, parcel_graph)
+    # Every parcel in B_out has >= 1 LCC neighbour, so log is safe.
+    # The maintained lcc_neighbor_counts are definitionally the same integers
+    # count_lcc_neighbours() recomputes, read here by library index.
+    fwd_counts  <- if (!is.null(B_out_idx)) {
+      setNames(state$lcc_neighbor_counts[B_out_idx], B_out)
+    } else {
+      count_lcc_neighbours(B_out, lcc_set, neighbor_cache, parcel_graph)
+    }
     fwd_log_w   <- boundary_weight_alpha * log(fwd_counts)
     fwd_log_sum <- log(sum(exp(fwd_log_w - max(fwd_log_w)))) + max(fwd_log_w)
     fwd_probs   <- exp(fwd_log_w - fwd_log_sum)
@@ -455,7 +479,11 @@ lcc_local_move <- function(
     #   Reverse  q(X'→X) = w^-1(selected) / W_in_new
     #   Ratio = (w^-1(selected) / W_in_new) / (w(selected) / W_out)
     new_lcc_set <- new_state$lcc_parcels
-    rev_counts  <- count_lcc_neighbours(B_in_new, new_lcc_set, neighbor_cache, parcel_graph)
+    rev_counts  <- if (!is.null(new_boundary$B_in_idx)) {
+      setNames(new_state$lcc_neighbor_counts[new_boundary$B_in_idx], B_in_new)
+    } else {
+      count_lcc_neighbours(B_in_new, new_lcc_set, neighbor_cache, parcel_graph)
+    }
     rev_log_w   <- -boundary_weight_alpha * log(pmax(rev_counts, 1L))
     rev_log_sum <- log(sum(exp(rev_log_w - max(rev_log_w)))) + max(rev_log_w)
     rev_idx     <- match(selected, B_in_new)
@@ -480,7 +508,11 @@ lcc_local_move <- function(
     # Weight B_in by (LCC-neighbour count)^(-alpha) — prefer tendril tips.
     # Safe: a connected LCC with >= 2 parcels guarantees every parcel has
     # >= 1 in-LCC neighbour, so log(fwd_counts) is always finite here.
-    fwd_counts  <- count_lcc_neighbours(B_in, lcc_set, neighbor_cache, parcel_graph)
+    fwd_counts  <- if (!is.null(B_in_idx)) {
+      setNames(state$lcc_neighbor_counts[B_in_idx], B_in)
+    } else {
+      count_lcc_neighbours(B_in, lcc_set, neighbor_cache, parcel_graph)
+    }
     fwd_log_w   <- -boundary_weight_alpha * log(fwd_counts)
     fwd_log_sum <- log(sum(exp(fwd_log_w - max(fwd_log_w)))) + max(fwd_log_w)
     fwd_probs   <- exp(fwd_log_w - fwd_log_sum)
@@ -488,11 +520,19 @@ lcc_local_move <- function(
     idx      <- sample.int(n_in, 1, prob = fwd_probs)
     selected <- B_in[idx]
 
-    # Check LCC would remain connected
+    # Check LCC would remain connected after removing `selected`. Build the
+    # remaining membership mask by clearing one bit of the maintained
+    # lcc_logical (avoids re-deriving indices for the whole remaining set);
+    # lcc_is_connected() handles the BFS fast path and igraph fallback.
     remaining_lcc <- setdiff(state$lcc_parcels, selected)
     if (length(remaining_lcc) > 0) {
-      sub <- igraph::induced_subgraph(parcel_graph, remaining_lcc)
-      if (!igraph::is_connected(sub)) {
+      rem_logical <- NULL
+      if (!is.null(neighbor_idx) && !is.null(state$lcc_logical)) {
+        rem_logical <- state$lcc_logical
+        sel_idx <- if (!is.null(B_in_idx)) B_in_idx[idx] else match(selected, library$parcel_names)
+        if (!is.na(sel_idx)) rem_logical[sel_idx] <- FALSE
+      }
+      if (!lcc_is_connected(rem_logical, remaining_lcc, neighbor_idx, parcel_graph)) {
         return(list(
           new_state = state,
           accepted = FALSE,
@@ -548,7 +588,11 @@ lcc_local_move <- function(
     #   Reverse  q(X'→X) = w(selected) / W_out_new
     #   Ratio = (w(selected) / W_out_new) / (w^-1(selected) / W_in)
     new_lcc_set <- new_state$lcc_parcels
-    rev_counts  <- count_lcc_neighbours(B_out_new, new_lcc_set, neighbor_cache, parcel_graph)
+    rev_counts  <- if (!is.null(new_boundary$B_out_idx)) {
+      setNames(new_state$lcc_neighbor_counts[new_boundary$B_out_idx], B_out_new)
+    } else {
+      count_lcc_neighbours(B_out_new, new_lcc_set, neighbor_cache, parcel_graph)
+    }
     rev_log_w   <- boundary_weight_alpha * log(pmax(rev_counts, 1L))
     rev_log_sum <- log(sum(exp(rev_log_w - max(rev_log_w)))) + max(rev_log_w)
     rev_idx     <- match(selected, B_out_new)
@@ -603,7 +647,8 @@ lcc_local_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     new_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_accept_ratio <- log_accept_ratio + penalty_diff
 
@@ -649,6 +694,9 @@ symmetric_birth_death_move <- function(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
+  k_prior_lambda,
+  birth_tilt_lambda,
   neighbor_idx = NULL
 ) {
   k_current <- length(state$secondary_blocks)
@@ -680,7 +728,7 @@ symmetric_birth_death_move <- function(
   n_rem <- length(removable)
 
   # Compute capacity-tilted birth weights
-  birth_weights <- compute_birth_tilt_weights(addable, library)
+  birth_weights <- compute_birth_tilt_weights(addable, library, birth_tilt_lambda)
   W_add <- exp(birth_weights$log_sum_w)  # sum of birth weights (= n_add when tilt=0)
 
   # Total universe size: weighted births + uniform deaths
@@ -792,7 +840,7 @@ symmetric_birth_death_move <- function(
   n_add_new <- length(addable_rev)
 
   # Universe size in proposed state (weighted births + uniform deaths)
-  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library)
+  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library, birth_tilt_lambda)
   W_add_new <- exp(rev_birth_weights$log_sum_w)
   Z_new <- W_add_new + n_rem_new
 
@@ -803,7 +851,7 @@ symmetric_birth_death_move <- function(
     log_q_ratio <- log(Z_old) - log(Z_new) - log_w_selected
   } else {
     removed_cap <- library$metadata$capacity[block_id]
-    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_w_removed <- -birth_tilt_lambda * removed_cap
     log_q_ratio <- log_w_removed + log(Z_old) - log(Z_new)
   }
 
@@ -811,14 +859,15 @@ symmetric_birth_death_move <- function(
   log_pi_ratio <- compute_penalty_difference(
     state$total_capacity,
     proposed_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
 
   # K prior penalty difference (linear: penalizes birth, favors death)
   # Birth: k_proposed = k+1, so (k - (k+1)) = -1, log_k_ratio = -lambda
   # Death: k_proposed = k-1, so (k - (k-1)) = +1, log_k_ratio = +lambda
   k_proposed <- length(proposed_state$secondary_blocks)
-  log_k_ratio <- K_PRIOR_LAMBDA * (k_current - k_proposed)
+  log_k_ratio <- k_prior_lambda * (k_current - k_proposed)
 
   # Reference measure correction: cancel combinatorial volume C(n_pool, k)
   # so the marginal on k matches the intended geometric prior
@@ -902,6 +951,9 @@ lifted_birth_death_move <- function(
     library,
     parcel_graph,
     constraints,
+    capacity_prior_lambda,
+    k_prior_lambda,
+    birth_tilt_lambda,
     neighbor_idx = NULL
 ) {
   k <- length(state$secondary_blocks)
@@ -971,7 +1023,7 @@ lifted_birth_death_move <- function(
   # Propose move in current direction only
   if (direction == "birth") {
     # Capacity-tilted birth proposal
-    birth_weights <- compute_birth_tilt_weights(addable, library)
+    birth_weights <- compute_birth_tilt_weights(addable, library, birth_tilt_lambda)
     idx <- sample.int(n_add, 1, prob = birth_weights$weights)
     block_id <- addable[idx]
     log_w_selected <- birth_weights$log_weights[idx]
@@ -1064,9 +1116,9 @@ lifted_birth_death_move <- function(
     # Forward: q(y|x) = 1 / n_rem                      [uniform death]
     # Reverse: q(x|y) = w_removed / W(addable_new)      [weighted birth]
     # log(q(x|y)/q(y|x)) = log(w_removed) - log(W(addable_new)) + log(n_rem)
-    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library)
+    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library, birth_tilt_lambda)
     removed_cap <- library$metadata$capacity[block_id]
-    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_w_removed <- -birth_tilt_lambda * removed_cap
     log_W_addable_new <- rev_birth_weights$log_sum_w
     log_q_ratio <- log_w_removed - log_W_addable_new + log(n_rem)
   }
@@ -1103,12 +1155,13 @@ lifted_birth_death_move <- function(
   # Compute MH acceptance
   # Capacity prior penalty difference
   log_cap_ratio <- compute_penalty_difference(
-    state$total_capacity, proposed_state$total_capacity, constraints
+    state$total_capacity, proposed_state$total_capacity, constraints,
+    capacity_prior_lambda
   )
 
   # K prior penalty difference
   k_new <- length(proposed_state$secondary_blocks)
-  log_k_ratio <- K_PRIOR_LAMBDA * (k - k_new)
+  log_k_ratio <- k_prior_lambda * (k - k_new)
 
   # Reference measure correction: cancel combinatorial volume C(n_pool, k)
   n_pool <- library$n_blocks
@@ -1195,6 +1248,7 @@ secondary_swap_move <- function(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
   cap_tolerance = 50,
   neighbor_idx = NULL
 ) {
@@ -1322,7 +1376,8 @@ secondary_swap_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     proposed_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_accept <- log_accept + penalty_diff
   accept_prob <- min(1, exp(log_accept))
@@ -1422,6 +1477,20 @@ filter_compatible_lccs <- function(
     length(secondary_neighbor_indices) > 0
 
   if (use_union) {
+    # Two masks over the parcel universe replace three per-candidate %in% calls
+    # (each of which rebuilt a hash table over the secondary index sets).
+    # Conditions checked per candidate, value-identical to the %in% version:
+    #   1. LCC overlaps a secondary            -> any(sec_mask[lcc_indices])
+    #   2. a secondary neighbor is in the LCC  -> any(nbr_mask[lcc_indices])
+    #      (non-empty intersection is symmetric)
+    #   3. an LCC neighbor is in a secondary   -> any(sec_mask[lcc_nbr_indices])
+    # na.rm = TRUE reproduces %in%'s NA-never-matches semantics.
+    n_universe <- length(secondary_library$parcel_names)
+    sec_mask <- logical(n_universe)
+    sec_mask[secondary_union_indices] <- TRUE
+    bad_mask <- sec_mask
+    bad_mask[secondary_neighbor_indices] <- TRUE
+
     compatible_mask <- vapply(
       lcc_ids,
       function(lcc_id) {
@@ -1437,19 +1506,8 @@ filter_compatible_lccs <- function(
           return(FALSE)
         }
 
-        # Check disjoint with all secondaries
-        if (any(lcc_indices %in% secondary_union_indices)) {
-          return(FALSE)
-        }
-        # Check secondary neighbors don't overlap LCC
-        if (any(secondary_neighbor_indices %in% lcc_indices)) {
-          return(FALSE)
-        }
-        # Check LCC neighbors don't overlap secondaries
-        if (any(lcc_nbr_indices %in% secondary_union_indices)) {
-          return(FALSE)
-        }
-        TRUE
+        !any(bad_mask[lcc_indices], na.rm = TRUE) &&
+          !any(sec_mask[lcc_nbr_indices], na.rm = TRUE)
       },
       logical(1)
     )
@@ -1555,8 +1613,13 @@ replace_lcc_move <- function(
   secondary_library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
+  debug_invariant_checks = FALSE,
   neighbor_idx = NULL,
-  parcel_names = NULL
+  parcel_names = NULL,
+  nbr_from = NULL,
+  nbr_to = NULL,
+  lcc_state_cache = NULL
 ) {
   n_candidates <- lcc_library$n_blocks
 
@@ -1623,8 +1686,22 @@ replace_lcc_move <- function(
   # This gives ~1700x speedup for consecutive replace_lcc moves
   all_active_ids <- which(active_mask)
   if (!is.null(state$compatible_lccs_cache)) {
-    # Use cached compatible set (very fast)
+    # Use cached compatible set (very fast). The cache is kept exact: carried
+    # through LCC-local moves (secondaries unchanged), appended on library
+    # enrichment (runner tests each new entry), dropped whenever secondaries
+    # change. It may retain evicted ids — harmless, every consumer intersects
+    # with active-derived sets.
     all_compatible_lccs <- state$compatible_lccs_cache
+    if (isTRUE(debug_invariant_checks) && k_current > 0) {
+      fresh_compatible <- filter_compatible_lccs(
+        all_active_ids, lcc_library, secondary_library, current_secondary_ids,
+        secondary_union_indices = state$secondary_union_indices,
+        secondary_neighbor_indices = state$secondary_neighbor_indices
+      )
+      if (!setequal(intersect(all_compatible_lccs, all_active_ids), fresh_compatible)) {
+        stop("BUG: compatible_lccs_cache diverged from fresh filter_compatible_lccs computation")
+      }
+    }
   } else if (k_current > 0) {
     # Compute fresh - this is the expensive operation (~900ms)
     all_compatible_lccs <- filter_compatible_lccs(
@@ -1762,23 +1839,29 @@ replace_lcc_move <- function(
   }
 
   # Step 4: Build new state (keep ALL secondaries)
-  # Note: Compatibility already verified by prefiltering similar_ids above
-  new_state <- reset_to_lcc(
+  # Note: Compatibility already verified by prefiltering similar_ids above.
+  # The secondary-free LCC-only state is invariant per library LCC id, so it is
+  # cached and reused across proposals (see get_or_build_lcc_state()).
+  new_state <- get_or_build_lcc_state(
+    new_lcc_id,
     new_lcc_parcels,
     secondary_library,
     parcel_graph,
     neighbor_idx,
-    parcel_names
+    parcel_names,
+    nbr_from,
+    nbr_to,
+    lcc_state_cache
   )
-  for (bid in current_secondary_ids) {
-    new_state <- add_secondary_block(
-      new_state,
-      bid,
-      secondary_library,
-      parcel_graph,
-      neighbor_idx = neighbor_idx
-    )
-  }
+  # One-pass rebuild of all retained secondaries (field-identical to folding
+  # add_secondary_block, which copied every length-n tracking vector per block).
+  new_state <- add_secondary_blocks_bulk(
+    new_state,
+    current_secondary_ids,
+    secondary_library,
+    parcel_graph,
+    neighbor_idx = neighbor_idx
+  )
 
   # Step 5: Check feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(
@@ -1891,7 +1974,8 @@ replace_lcc_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     new_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_q_ratio <- log_q_ratio + penalty_diff
 

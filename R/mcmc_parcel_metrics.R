@@ -99,8 +99,10 @@ get_sticky_parcels <- function(stickiness_dt) {
 #' autocorrelation within chains before pooling.
 #'
 #' @param valid_chains List of valid chain results
+#' @param mcmc_burn_in Number of leading samples to discard from each chain's
+#'   trajectory before computing ESS (typically `sampler_spec$mcmc_burn_in`)
 #' @return Named list of ESS values per metric
-compute_multichain_ess <- function(valid_chains) {
+compute_multichain_ess <- function(valid_chains, mcmc_burn_in) {
   # Trajectory names to process
   traj_map <- list(
     capacity = "capacity_trajectory",
@@ -120,10 +122,10 @@ compute_multichain_ess <- function(valid_chains) {
     chain_trajs <- lapply(valid_chains, function(x) {
       traj <- x$diagnostics[[traj_name]]
       if (is.null(traj)) return(NULL)
-      # Apply burn-in: discard first MCMC_BURN_IN samples
-      if (MCMC_BURN_IN > 0) {
-        if (length(traj) <= MCMC_BURN_IN) return(NULL)  # Not enough samples after burn-in
-        traj <- traj[(MCMC_BURN_IN + 1):length(traj)]
+      # Apply burn-in: discard first mcmc_burn_in samples
+      if (mcmc_burn_in > 0) {
+        if (length(traj) <= mcmc_burn_in) return(NULL)  # Not enough samples after burn-in
+        traj <- traj[(mcmc_burn_in + 1):length(traj)]
       }
       if (length(traj) < 10) return(NULL)
       coda::mcmc(traj)
@@ -290,9 +292,11 @@ aggregate_chain_timing <- function(valid_chains) {
 #'
 #' @param chain_results Named list of chain results from run_parcel_chain_from_region()
 #' @param parcel_graph igraph object
+#' @param mcmc_burn_in Number of leading samples to discard from each chain's
+#'   trajectory before computing ESS/R-hat (typically `sampler_spec$mcmc_burn_in`)
 #' @return List of aggregated metrics
 #' @export
-compute_multichain_parcel_metrics <- function(chain_results, parcel_graph) {
+compute_multichain_parcel_metrics <- function(chain_results, parcel_graph, mcmc_burn_in) {
   # Filter to valid chains
   valid_chains <- Filter(function(x) !isTRUE(x$initialization_failed), chain_results)
 
@@ -306,7 +310,7 @@ compute_multichain_parcel_metrics <- function(chain_results, parcel_graph) {
   }
 
   # ESS via coda::effectiveSize() - handles multi-chain properly
-  ess_results <- compute_multichain_ess(valid_chains)
+  ess_results <- compute_multichain_ess(valid_chains, mcmc_burn_in)
 
   # Within-chain ACF (compute per chain, then average)
   acf_results <- compute_multichain_acf(valid_chains)
@@ -325,7 +329,7 @@ compute_multichain_parcel_metrics <- function(chain_results, parcel_graph) {
   steps_per_chain <- sapply(valid_chains, function(x) x$diagnostics$n_steps)
 
   # R-hat (from existing function in parcel_multichain.R)
-  rhat_table <- compute_parcel_multichain_rhat(chain_results)
+  rhat_table <- compute_parcel_multichain_rhat(chain_results, mcmc_burn_in)
 
   # Per-chain summary
   chain_summary <- data.table::data.table(

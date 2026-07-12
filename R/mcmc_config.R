@@ -3,8 +3,6 @@
 # Defines constants, constraints, and constraint names for the parcel
 # MCMC zoning analysis pipeline.
 
-# WIP: All constants are removed and should be replaced with functions. (or config.yml)
-
 # ============================================================================
 # CONSTRAINTS
 # ============================================================================
@@ -12,34 +10,199 @@
 #' Define constraints from district requirements
 #'
 #' @param district_data List from [load_district_data()]
-#' @param parcel_graph_result List from [build_parcel_graph_target()] or
-#'   [build_identity_parcel_graph()]
 #' @return List of constraints for MCMC
 #' @export
-define_constraints <- function(district_data, parcel_graph_result) {
+define_constraints <- function(district_data) {
   req <- district_data$district_requirements
 
-  # Build unit_id → LOC_ID lookup for GIS density denominator computation.
-  pa <- parcel_graph_result$parcel_assignments
-  unit_to_loc_ids <- split(pa$parcel_id, pa$unit_id)
-
-  # Store geometries as named sfc (not sf data frames) to avoid sf_column
-  # attribute loss during qs serialization in the targets pipeline.
-  dg      <- district_data$district_geometry
+  # Store parcel geometries as named sfc for GIS density denominator.
+  # sfc avoids sf_column attribute loss during qs serialization.
+  dg       <- district_data$district_geometry
   geom_sfc <- sf::st_geometry(dg)
   names(geom_sfc) <- dg$LOC_ID
 
   ded_sfc <- sf::st_geometry(district_data$local_deductions_dissolved)
 
   list(
-    min_capacity     = req$min_units,
-    min_area         = if (is.na(req$min_acres)) 0 else req$min_acres,
-    min_density      = req$min_gross_density,
-    min_lcc_fraction = 0.5,
+    min_capacity         = req$min_units,
+    min_area             = if (is.na(req$min_acres)) 0 else req$min_acres,
+    min_density          = req$min_gross_density,
+    min_lcc_fraction     = 0.5,
     station_capacity_pct = req$station_area_unit_pct,
     station_area_pct     = req$station_area_land_pct,
-    unit_to_loc_ids  = unit_to_loc_ids,
-    geom_sfc         = geom_sfc,
-    ded_sfc          = ded_sfc
+    geom_sfc             = geom_sfc,
+    ded_sfc              = ded_sfc
+  )
+}
+
+# ============================================================================
+# TARGET SPEC (defines the sampled distribution)
+# ============================================================================
+
+#' Define the parcel MCMC target spec
+#'
+#' Composes the hard district constraints with the priors that shape the
+#' sampled distribution. Constraints and priors are kept as separate
+#' sub-fields rather than merged into one flat list: constraints gate
+#' feasibility (hard, checked in `check_hard_constraints_only()`), while
+#' priors reweight among feasible states (soft, applied via the MH ratio).
+#' This is the single object that determines the target distribution
+#' pi(state) — nothing about proposal/kernel tuning belongs here.
+#'
+#' @param district_data List containing district_requirements from data loading
+#' @param capacity_prior_lambda Linear capacity-prior strength (penalizes
+#'   capacity above min_capacity; larger values favor configurations closer
+#'   to the minimum)
+#' @param k_prior_lambda Geometric-prior rate on the number of secondary
+#'   blocks (k); 0 is a flat/improper prior over k
+#' @return List with `constraints` and `priors` sub-lists
+#' @export
+parcel_target_spec <- function(district_data, capacity_prior_lambda, k_prior_lambda) {
+  list(
+    constraints = define_constraints(district_data),
+    priors = list(
+      capacity_prior_lambda = capacity_prior_lambda,
+      k_prior_lambda        = k_prior_lambda
+    )
+  )
+}
+
+# ============================================================================
+# DISCOVERY SPEC (library construction / discovery tuning)
+# ============================================================================
+
+#' Define the parcel MCMC discovery spec
+#'
+#' Bundles the tuning parameters for LCC and secondary library discovery
+#' (tree enumeration + BFS supplement). None of these fields affect the
+#' target distribution pi(state) — they only control how thoroughly the
+#' candidate-block libraries are explored before MCMC begins. Defaults
+#' mirror the values previously hardcoded in
+#' `inst/targets/temp_targets_parcel_config.R`.
+#'
+#' @param discovery_capacity_multiplier Discovery-only capacity bound
+#'   (multiplier of min_capacity); LCCs above this are skipped during tree
+#'   enumeration purely for speed, not because they're infeasible
+#' @param tree_lcc_n_trees Number of spanning trees to sample for LCC
+#'   tree-cut enumeration
+#' @param bfs_lcc_n_samples,bfs_lcc_n_seeds BFS-supplement sample/seed counts
+#'   for LCC discovery
+#' @param lcc_capacity_bands_relative List of `c(low, high)` capacity bands
+#'   (relative to min_capacity) for capacity-stratified BFS discovery
+#' @param lcc_band_samples_per_band Target number of LCC samples per capacity
+#'   band
+#' @param lcc_band_max_attempts Maximum BFS attempts per band before giving up
+#' @param lcc_band_time_budget_s Wall-clock budget per band (seconds)
+#' @param lcc_band_stall_attempts Consecutive attempts without a valid
+#'   candidate before a discovery pass gives up on a band
+#' @param lcc_discovery_max_unique Cap on unique LCCs tree enumeration will
+#'   discover before it stops sampling more trees
+#' @param lcc_library_max_size Final LCC library size cap
+#' @param bfs_reservation_lcc Reserved LCC-library slots for BFS discoveries
+#' @param sec_size_bands List of `c(min_acres, max_acres)` bands for secondary
+#'   block discovery
+#' @param library_density_threshold Minimum density (units/acre) for library
+#'   blocks
+#' @param tree_sec_n_trees Number of spanning trees to sample for secondary
+#'   tree-cut enumeration
+#' @param bfs_sec_quota_per_band BFS-supplement quota per secondary size band
+#' @param sec_library_max_size Final secondary library size cap
+#' @param bfs_reservation_sec Reserved secondary-library slots for BFS
+#'   discoveries
+#' @return Named list of discovery tuning parameters
+#' @export
+parcel_discovery_spec <- function(discovery_capacity_multiplier = 2.5,
+                                   tree_lcc_n_trees = 500L,
+                                   bfs_lcc_n_samples = 100L,
+                                   bfs_lcc_n_seeds = 10L,
+                                   lcc_capacity_bands_relative = list(
+                                     c(0.5,  0.75),
+                                     c(0.75, 1.0),
+                                     c(1.0,  1.25),
+                                     c(1.25, 1.5),
+                                     c(1.5,  2.0)
+                                   ),
+                                   lcc_band_samples_per_band = 500L,
+                                   lcc_band_max_attempts = 1000L,
+                                   lcc_band_time_budget_s = 900,
+                                   lcc_band_stall_attempts = 150L,
+                                   lcc_discovery_max_unique = 50000L,
+                                   lcc_library_max_size = 5000L,
+                                   bfs_reservation_lcc = 500L,
+                                   sec_size_bands = list(
+                                     c(5, 8),
+                                     c(8, 12),
+                                     c(12, 20)
+                                   ),
+                                   library_density_threshold = 15,
+                                   tree_sec_n_trees = 200L,
+                                   bfs_sec_quota_per_band = 25L,
+                                   sec_library_max_size = 500L,
+                                   bfs_reservation_sec = 100L) {
+  list(
+    discovery_capacity_multiplier = discovery_capacity_multiplier,
+    tree_lcc_n_trees              = tree_lcc_n_trees,
+    bfs_lcc_n_samples              = bfs_lcc_n_samples,
+    bfs_lcc_n_seeds                = bfs_lcc_n_seeds,
+    lcc_capacity_bands_relative    = lcc_capacity_bands_relative,
+    lcc_band_samples_per_band      = lcc_band_samples_per_band,
+    lcc_band_max_attempts          = lcc_band_max_attempts,
+    lcc_band_time_budget_s         = lcc_band_time_budget_s,
+    lcc_band_stall_attempts        = lcc_band_stall_attempts,
+    lcc_discovery_max_unique       = lcc_discovery_max_unique,
+    lcc_library_max_size           = lcc_library_max_size,
+    bfs_reservation_lcc            = bfs_reservation_lcc,
+    sec_size_bands                 = sec_size_bands,
+    library_density_threshold      = library_density_threshold,
+    tree_sec_n_trees               = tree_sec_n_trees,
+    bfs_sec_quota_per_band         = bfs_sec_quota_per_band,
+    sec_library_max_size           = sec_library_max_size,
+    bfs_reservation_sec            = bfs_reservation_sec
+  )
+}
+
+# ============================================================================
+# GRAPH SPEC (Tier-2 parcel graph construction tuning)
+# ============================================================================
+
+#' Define the parcel graph construction spec
+#'
+#' Bundles the tuning parameters for Tier-2 parcel graph construction
+#' (adjacency detection and optional macro-parcel aggregation). None of these
+#' fields affect the target distribution pi(state), proposal tuning, or
+#' library discovery — this runs before any of those exist. Defaults mirror
+#' the values previously hardcoded in `build_adjacency_graph()` and
+#' `inst/targets/temp_targets_config.R`/`temp_targets_parcel_config.R`.
+#'
+#' @param max_dist_ft Maximum boundary-to-boundary distance (ft) for two
+#'   parcels to be considered for adjacency
+#' @param touch_threshold_ft Boundary-to-boundary distance (ft) at or below
+#'   which two parcels are treated as directly touching (no ROW crossing
+#'   needed)
+#' @param min_coverage_ratio Minimum fraction of the nearest-points line that
+#'   must lie within right-of-way for a cross-ROW connection to be accepted
+#' @param macro_scale Parcel aggregation scale factor (0 = raw parcels/no
+#'   aggregation; > 0 = aggregation with scaled area targets)
+#' @param macro_base_area_min,macro_base_area_max Base area target range
+#'   (acres), scaled by `macro_scale`, for macro-parcel aggregation
+#' @param macro_atomic_threshold Parcels at or above this area (acres) are
+#'   preserved as singleton units regardless of `macro_scale`
+#' @return Named list of graph-construction tuning parameters
+#' @export
+parcel_graph_spec <- function(max_dist_ft = 120,
+                               touch_threshold_ft = 2,
+                               min_coverage_ratio = 0.9,
+                               macro_scale = 0,
+                               macro_base_area_min = 0.25,
+                               macro_base_area_max = 1.0,
+                               macro_atomic_threshold = 5.0) {
+  list(
+    max_dist_ft             = max_dist_ft,
+    touch_threshold_ft      = touch_threshold_ft,
+    min_coverage_ratio      = min_coverage_ratio,
+    macro_scale             = macro_scale,
+    macro_base_area_min     = macro_base_area_min,
+    macro_base_area_max     = macro_base_area_max,
+    macro_atomic_threshold  = macro_atomic_threshold
   )
 }

@@ -165,23 +165,73 @@ diagnose_lcc_feasibility <- function(lcc_library, parcel_graph, constraints) {
 #' Common stat-tracking pattern extracted to reduce code duplication.
 #' Updates n_attempted, n_proposed, n_feasible, n_accepted based on result.
 #'
-#' @param stats data.table with move statistics
+#' @param counts Environment of named integer counter vectors (n_attempted,
+#'   n_proposed, n_feasible, n_accepted), each keyed by move_type. Mutating an
+#'   environment field avoids data.table NSE overhead in the per-step hot loop;
+#'   the counts are materialized back into the \code{stats} data.table after the
+#'   loop. This is a pure diagnostic counter (does not affect RNG or samples).
 #' @param mt Character string identifying the move type
 #' @param result List returned by a move kernel
-#' @return Invisibly returns stats (modified by reference)
+#' @return Invisibly returns counts (modified by reference)
 #' @keywords internal
-update_move_stats <- function(stats, mt, result) {
-  stats[move_type == mt, n_attempted := n_attempted + 1L]
+update_move_stats <- function(counts, mt, result) {
+  # Mirror the original `stats[move_type == mt, ...]` semantics: an mt that is
+  # not a known move_type (e.g. lcc_local proposal-failures report "lcc_local",
+  # which has no stats row) is a silent no-op, not a new counter entry.
+  if (is.na(match(mt, names(counts$n_attempted)))) {
+    return(invisible(counts))
+  }
+  counts$n_attempted[mt] <- counts$n_attempted[mt] + 1L
   if (!isTRUE(result$proposal_failed)) {
-    stats[move_type == mt, n_proposed := n_proposed + 1L]
+    counts$n_proposed[mt] <- counts$n_proposed[mt] + 1L
   }
   if (!isTRUE(result$infeasible)) {
-    stats[move_type == mt, n_feasible := n_feasible + 1L]
+    counts$n_feasible[mt] <- counts$n_feasible[mt] + 1L
   }
   if (isTRUE(result$accepted)) {
-    stats[move_type == mt, n_accepted := n_accepted + 1L]
+    counts$n_accepted[mt] <- counts$n_accepted[mt] + 1L
   }
-  invisible(stats)
+  invisible(counts)
+}
+
+# Enrich the online LCC library with the current LCC and keep the replace-LCC
+# compatibility cache exact. Adding the current LCC guarantees the reverse
+# replace-LCC move is always available (100% library coverage). Testing just the
+# new entry (O(k)) and appending it keeps `compatible_lccs_cache` correct without
+# waiting for the next secondary change to rebuild it. Returns the (possibly
+# grown) library, the (possibly updated) state, and whether a new entry was added.
+enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_graph,
+                                         secondary_library, max_online_entries,
+                                         neighbor_cache) {
+  enrich_result <- add_lcc_to_library(
+    lcc_library,
+    current_state$lcc_parcels,
+    parcel_graph,
+    max_online_entries,
+    neighbor_cache = neighbor_cache,  # Use name-based cache, not neighbor_idx
+    lcc_indices = if (!is.null(current_state$lcc_logical)) {
+      which(current_state$lcc_logical)
+    } else {
+      NULL
+    }
+  )
+  lcc_library <- enrich_result$lcc_library
+  if (enrich_result$added && !is.null(current_state$compatible_lccs_cache)) {
+    nid <- enrich_result$new_block_id
+    if (is_lcc_compatible_with_secondaries(
+          lcc_library$blocks[[nid]],
+          lcc_library$neighbor_indices[[nid]],
+          current_state$secondary_blocks,
+          secondary_library)) {
+      current_state$compatible_lccs_cache <-
+        c(current_state$compatible_lccs_cache, nid)
+    }
+  }
+  list(
+    lcc_library = lcc_library,
+    current_state = current_state,
+    added = enrich_result$added
+  )
 }
 
 # ============================================================================
@@ -194,39 +244,43 @@ update_move_stats <- function(stats, mt, result) {
 #'
 #' @param parcel_graph igraph object (parcel graph)
 #' @param initial_state Initial parcel state
-#' @param constraints MBTA constraints
+#' @param target_spec Target spec from `parcel_target_spec()` (hard
+#'   constraints + capacity/k priors)
 #' @param secondary_library Secondary library
 #' @param lcc_library LCC library
-#' @param config Kernel configuration
+#' @param sampler_spec Sampler spec from `parcel_sampler_spec()` (kernel mix,
+#'   proposal tuning, debug flag)
 #' @param parcel_assignments data.table for parcel conversion
 #' @param neighbor_cache Optional named list of precomputed neighbors
-#' @param enable_online_enrichment Enable online LCC library enrichment
-#' @param enrichment_interval Add current LCC to library every N steps
-#' @param max_online_entries Maximum online entries (FIFO eviction)
-#' @param enrichment_burn_in If set, freeze library after this many steps
-#' @param max_stored_samples Max thinned samples to store (adaptive thinning)
-#' @param store_lcc_signatures Store LCC signatures for discovery deduplication
 #' @param verbose Print progress
 #' @return List with parcel_samples (thinned), lcc_signatures, stats, lcc_library, diagnostics
 run_parcel_mcmc <- function(
   parcel_graph,
   initial_state,
-  constraints,
+  target_spec,
   secondary_library,
   lcc_library,
-  config,
+  sampler_spec,
   parcel_assignments,
   neighbor_cache = NULL,
-  enable_online_enrichment = ENABLE_ONLINE_ENRICHMENT,
-  enrichment_interval = ONLINE_ENRICHMENT_INTERVAL,
-  max_online_entries = ONLINE_MAX_ENTRIES,
-  enrichment_burn_in = ENRICHMENT_BURN_IN,
-  max_stored_samples = SAMPLE_MAX_STORED,
-  store_lcc_signatures = STORE_LCC_SIGNATURES,
   verbose = TRUE
 ) {
   # Validate config
+  config <- sampler_spec
   validate_kernel_config(config)
+
+  constraints <- target_spec$constraints
+  capacity_prior_lambda <- target_spec$priors$capacity_prior_lambda
+  k_prior_lambda <- target_spec$priors$k_prior_lambda
+  birth_tilt_lambda <- config$birth_tilt_lambda
+  swap_cap_tolerance <- config$swap_cap_tolerance
+  debug_invariant_checks <- config$debug_invariant_checks
+  enable_online_enrichment <- config$enable_online_enrichment
+  enrichment_interval <- config$enrichment_interval
+  max_online_entries <- config$max_online_entries
+  enrichment_burn_in <- config$enrichment_burn_in
+  max_stored_samples <- config$max_stored_samples
+  store_lcc_signatures <- config$store_lcc_signatures
 
   n_steps <- config$n_steps
   p_lcc_local <- config$p_lcc_local
@@ -250,6 +304,13 @@ run_parcel_mcmc <- function(
   # Graph parcel names (may differ in ordering from library after serialization)
   graph_parcel_names <- igraph::V(parcel_graph)$name
 
+  # The fast boundary path compares library-ordered X_neighbor_counts against
+  # graph-ordered degrees positionally, and kernels index the maintained counts
+  # by library position. Both are silently wrong if the orders diverge.
+  if (!identical(graph_parcel_names, lib_parcel_names)) {
+    stop("run_parcel_mcmc: parcel_graph vertex order does not match secondary_library$parcel_names; positional count/degree comparisons would be incorrect")
+  }
+
   degrees <- igraph::degree(parcel_graph)
   names(degrees) <- graph_parcel_names
 
@@ -265,6 +326,46 @@ run_parcel_mcmc <- function(
     }
   })
   names(neighbor_idx) <- lib_parcel_names
+
+  # Flat integer edge arrays (library-indexed) for the vectorized neighbor-count
+  # path in reset_to_lcc(); invariant for the run, so built once here.
+  nbr_edges <- build_neighbor_edge_arrays(neighbor_idx, n_parcels)
+  nbr_from <- nbr_edges$from
+  nbr_to <- nbr_edges$to
+
+  # Expose the library-indexed parcel adjacency on the library so the LCC
+  # connectivity check (check_hard_constraints_only) can BFS over it instead of
+  # rebuilding an igraph induced subgraph each call.
+  secondary_library$neighbor_idx <- neighbor_idx
+
+  # Flat block-closure arrays for the vectorized addable-block scan (runs twice
+  # per birth/death/swap move); static because the secondary library never
+  # changes during a run.
+  if (is.null(secondary_library$closure_flat_block)) {
+    closure_arrays <- build_block_closure_arrays(secondary_library)
+    secondary_library$closure_flat_block <- closure_arrays$closure_flat_block
+    secondary_library$closure_flat_parcel <- closure_arrays$closure_flat_parcel
+  }
+
+  # Per-id cache of secondary-free LCC-only states for the replace-LCC kernel.
+  # Library block ids are monotonic and never reused, so caching is safe.
+  lcc_state_cache <- new.env(parent = emptyenv(), hash = TRUE, size = 1024L)
+
+  # Precompute per-parcel graph attributes as plain vectors indexed by library
+  # parcel order (== X_indices / blocks indexing). This replaces the many
+  # `igraph::V(parcel_graph)[names]$attr` hash-lookups scattered across the hot
+  # path (get_lcc_capacity, initialize_parcel_state, add/remove_secondary_block,
+  # validate_state_invariants, centroid tracking) with O(1) integer indexing.
+  # Values are bit-identical (same per-parcel attribute, same sums).
+  if (is.null(secondary_library$cap_vec)) {
+    sl_names <- secondary_library$parcel_names
+    secondary_library$cap_vec          <- igraph::V(parcel_graph)[sl_names]$capacity
+    secondary_library$area_vec         <- igraph::V(parcel_graph)[sl_names]$area
+    secondary_library$cap_station_vec  <- igraph::V(parcel_graph)[sl_names]$capacity_in_station
+    secondary_library$area_station_vec <- igraph::V(parcel_graph)[sl_names]$area_in_station
+    secondary_library$centroid_x_vec   <- igraph::V(parcel_graph)[sl_names]$centroid_x
+    secondary_library$centroid_y_vec   <- igraph::V(parcel_graph)[sl_names]$centroid_y
+  }
 
   # Augment initial_state with incremental boundary tracking fields
   # These enable O(d) boundary updates instead of O(N) full scans
@@ -381,10 +482,10 @@ run_parcel_mcmc <- function(
   all_parcel_names <- igraph::V(parcel_graph)$name
   centroid_x_trajectory <- numeric(n_steps)
   centroid_y_trajectory <- numeric(n_steps)
-  parcel_inclusion_count <- setNames(
-    integer(length(all_parcel_names)),
-    all_parcel_names
-  )
+  # Accumulated by library index in the loop (a character-subscript update
+  # rebuilds a hash over all parcel names every step); names are attached once
+  # after the loop. Library order == graph order (asserted at setup).
+  parcel_inclusion_count <- integer(length(all_parcel_names))
 
   # Purge diagnostic (tests if k=0 is feasible)
   purge_diagnostic_interval <- 100L
@@ -429,11 +530,14 @@ run_parcel_mcmc <- function(
     ),
     count = 0L
   )
-  replace_lcc_accept_prob <- numeric(0)
-  replace_lcc_log_q_ratio <- numeric(0)
-  replace_lcc_k_retained <- integer(0)
-  replace_lcc_n_similar_forward <- integer(0)
-  replace_lcc_n_similar_reverse <- integer(0)
+  # Diagnostic accumulators below are preallocated to n_steps (at most one
+  # append per step) and truncated after the loop: repeated `c(x, new)` growth
+  # reallocates the full vector on every append, which showed up as GC churn.
+  replace_lcc_accept_prob <- numeric(n_steps); n_rl_accept_prob <- 0L
+  replace_lcc_log_q_ratio <- numeric(n_steps); n_rl_log_q_ratio <- 0L
+  replace_lcc_k_retained <- integer(n_steps); n_rl_k_retained <- 0L
+  replace_lcc_n_similar_forward <- integer(n_steps); n_rl_sim_fwd <- 0L
+  replace_lcc_n_similar_reverse <- integer(n_steps); n_rl_sim_rev <- 0L
 
   # Cross-region transition tracking (for replace_lcc moves)
   cross_region_transitions <- 0L
@@ -443,27 +547,39 @@ run_parcel_mcmc <- function(
   online_adds <- 0L
 
   # Birth move capacity tracking (for calibration)
-  birth_accepted_caps <- numeric(0)
+  birth_accepted_caps <- numeric(n_steps); n_birth_caps <- 0L
 
   # Symmetric birth/death tracking
   symmetric_bd_births <- 0L
   symmetric_bd_deaths <- 0L
-  symmetric_bd_universe_sizes <- numeric(0)
-  birth_death_attempts <- vector("list", n_steps)
+  symmetric_bd_universe_sizes <- numeric(n_steps); n_bd_universe <- 0L
+
+  # Birth/death attempt log as preallocated typed columns, materialized into one
+  # data.table after the loop. Building a 1-row data.table per attempt allocates
+  # a full table (with data.table's 100-column over-allocation) every time.
+  bd_step <- integer(n_steps)
+  bd_kernel <- character(n_steps)
+  bd_direction <- character(n_steps)
+  bd_new_direction <- character(n_steps)
+  bd_k_before <- integer(n_steps)
+  bd_k_after <- integer(n_steps)
+  bd_n_add <- integer(n_steps)
+  bd_n_rem <- integer(n_steps)
+  bd_n_universe <- integer(n_steps)
+  bd_n_add_new <- integer(n_steps)
+  bd_n_rem_new <- integer(n_steps)
+  bd_n_universe_new <- integer(n_steps)
+  bd_accepted <- logical(n_steps)
+  bd_proposal_failed <- logical(n_steps)
+  bd_infeasible <- logical(n_steps)
+  bd_constraint_failed <- character(n_steps)
+  bd_accept_prob <- numeric(n_steps)
   birth_death_attempt_idx <- 0L
 
-  # Multi-move r-value tracking (legacy birth/death - kept for compatibility)
-  # Use named vectors so report can extract r-values via names()
-  r_names <- as.character(seq_len(MULTI_MOVE_MAX_R))
-  multi_birth_r_counts <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-  multi_death_r_counts <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-  multi_birth_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-  multi_death_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-
   # Swap move tracking (capacity-balanced swap)
-  swap_delta_caps <- numeric(0) # Track capacity change for accepted swaps
-  swap_n_similar_fwd <- integer(0) # Forward similar-capacity set sizes
-  swap_n_similar_rev <- integer(0) # Reverse similar-capacity set sizes
+  swap_delta_caps <- numeric(n_steps); n_swap_deltas <- 0L # Capacity change for accepted swaps
+  swap_n_similar_fwd <- integer(n_steps); n_swap_sim_fwd <- 0L # Forward similar-capacity set sizes
+  swap_n_similar_rev <- integer(n_steps); n_swap_sim_rev <- 0L # Reverse similar-capacity set sizes
 
   # Swap rejection reason tracking
   swap_reasons <- data.table::data.table(
@@ -502,6 +618,21 @@ run_parcel_mcmc <- function(
     ),
     count = 0L
   )
+
+  # Fast per-step diagnostic counters.
+  # The per-step hot loop updates these plain named-integer vectors / env fields
+  # instead of doing data.table NSE filter+`:=` updates (which dominated runtime).
+  # They are materialized back into the data.tables above after the loop. Pure
+  # diagnostics: never read inside the loop, never affect RNG or parcel_samples.
+  move_counts <- new.env(parent = emptyenv())
+  move_counts$n_attempted <- setNames(integer(length(move_types)), move_types)
+  move_counts$n_proposed  <- setNames(integer(length(move_types)), move_types)
+  move_counts$n_feasible  <- setNames(integer(length(move_types)), move_types)
+  move_counts$n_accepted  <- setNames(integer(length(move_types)), move_types)
+  acc_rl_reasons     <- setNames(integer(nrow(replace_lcc_reasons)), replace_lcc_reasons$reason)
+  acc_rl_constraints <- setNames(integer(nrow(replace_lcc_constraints)), replace_lcc_constraints$constraint)
+  acc_swap_reasons     <- setNames(integer(nrow(swap_reasons)), swap_reasons$reason)
+  acc_swap_constraints <- setNames(integer(nrow(swap_constraints)), swap_constraints$constraint)
 
   # Current state
   current_state <- initial_state
@@ -545,16 +676,18 @@ run_parcel_mcmc <- function(
   timing_swap <- 0
   timing_replace_lcc <- 0
 
+  # Kernel selection thresholds (constant across the loop)
+  cumprob <- cumsum(c(
+    p_lcc_local,
+    p_symmetric_birth_death,
+    p_swap,
+    p_replace_lcc
+  ))
+
   # Main loop
   for (step in seq_len(n_steps)) {
     # Select move type (4 kernels: lcc_local, symmetric_birth_death, swap, replace_lcc)
     u <- runif(1)
-    cumprob <- cumsum(c(
-      p_lcc_local,
-      p_symmetric_birth_death,
-      p_swap,
-      p_replace_lcc
-    ))
     if (u < cumprob[1]) {
       move_category <- "lcc_local"
     } else if (u < cumprob[2]) {
@@ -577,13 +710,14 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda,
           neighbor_cache,
           neighbor_indices,
           degrees,
           neighbor_idx
         )
         if (!is.null(r$move_type)) {
-          update_move_stats(stats, r$move_type, r)
+          update_move_stats(move_counts, r$move_type, r)
         }
         r
       },
@@ -593,16 +727,18 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda = capacity_prior_lambda,
+          k_prior_lambda = k_prior_lambda,
+          birth_tilt_lambda = birth_tilt_lambda,
           neighbor_idx = neighbor_idx
         )
-        update_move_stats(stats, "symmetric_birth_death", r)
+        update_move_stats(move_counts, "symmetric_birth_death", r)
 
         # Track capacity of accepted birth moves for calibration
         if (isTRUE(r$accepted) && isTRUE(r$direction == "birth") && !is.null(r$block_id)) {
-          birth_accepted_caps <- c(
-            birth_accepted_caps,
+          n_birth_caps <- n_birth_caps + 1L
+          birth_accepted_caps[n_birth_caps] <-
             secondary_library$metadata$capacity[r$block_id]
-          )
         }
 
         # Track direction-specific counts for diagnostics
@@ -620,31 +756,31 @@ run_parcel_mcmc <- function(
           }
         }
 
-        # Track birth/death attempt-level diagnostics
+        # Track birth/death attempt-level diagnostics (preallocated columns)
         birth_death_attempt_idx <- birth_death_attempt_idx + 1L
-        birth_death_attempts[[birth_death_attempt_idx]] <- data.table::data.table(
-          step = step,
-          kernel = "symmetric_birth_death",
-          direction = if (is.null(r$direction)) NA_character_ else as.character(r$direction),
-          new_direction = NA_character_,
-          k_before = if (is.null(r$k_before)) NA_integer_ else as.integer(r$k_before),
-          k_after = if (is.null(r$k_after)) NA_integer_ else as.integer(r$k_after),
-          n_add = if (is.null(r$n_add)) NA_integer_ else as.integer(r$n_add),
-          n_rem = if (is.null(r$n_rem)) NA_integer_ else as.integer(r$n_rem),
-          n_universe = if (is.null(r$n_universe)) NA_integer_ else as.integer(r$n_universe),
-          n_add_new = if (is.null(r$n_add_new)) NA_integer_ else as.integer(r$n_add_new),
-          n_rem_new = if (is.null(r$n_rem_new)) NA_integer_ else as.integer(r$n_rem_new),
-          n_universe_new = if (is.null(r$n_universe_new)) NA_integer_ else as.integer(r$n_universe_new),
-          accepted = isTRUE(r$accepted),
-          proposal_failed = isTRUE(r$proposal_failed),
-          infeasible = isTRUE(r$infeasible),
-          constraint_failed = if (is.null(r$constraint_failed)) NA_character_ else as.character(r$constraint_failed),
-          accept_prob = if (is.null(r$accept_prob)) NA_real_ else as.numeric(r$accept_prob)
-        )
+        bd_i <- birth_death_attempt_idx
+        bd_step[bd_i] <- step
+        bd_kernel[bd_i] <- "symmetric_birth_death"
+        bd_direction[bd_i] <- if (is.null(r$direction)) NA_character_ else as.character(r$direction)
+        bd_new_direction[bd_i] <- NA_character_
+        bd_k_before[bd_i] <- if (is.null(r$k_before)) NA_integer_ else as.integer(r$k_before)
+        bd_k_after[bd_i] <- if (is.null(r$k_after)) NA_integer_ else as.integer(r$k_after)
+        bd_n_add[bd_i] <- if (is.null(r$n_add)) NA_integer_ else as.integer(r$n_add)
+        bd_n_rem[bd_i] <- if (is.null(r$n_rem)) NA_integer_ else as.integer(r$n_rem)
+        bd_n_universe[bd_i] <- if (is.null(r$n_universe)) NA_integer_ else as.integer(r$n_universe)
+        bd_n_add_new[bd_i] <- if (is.null(r$n_add_new)) NA_integer_ else as.integer(r$n_add_new)
+        bd_n_rem_new[bd_i] <- if (is.null(r$n_rem_new)) NA_integer_ else as.integer(r$n_rem_new)
+        bd_n_universe_new[bd_i] <- if (is.null(r$n_universe_new)) NA_integer_ else as.integer(r$n_universe_new)
+        bd_accepted[bd_i] <- isTRUE(r$accepted)
+        bd_proposal_failed[bd_i] <- isTRUE(r$proposal_failed)
+        bd_infeasible[bd_i] <- isTRUE(r$infeasible)
+        bd_constraint_failed[bd_i] <- if (is.null(r$constraint_failed)) NA_character_ else as.character(r$constraint_failed)
+        bd_accept_prob[bd_i] <- if (is.null(r$accept_prob)) NA_real_ else as.numeric(r$accept_prob)
 
         # Track universe sizes for analysis
         if (!is.null(r$n_universe) && is.finite(r$n_universe)) {
-          symmetric_bd_universe_sizes <- c(symmetric_bd_universe_sizes, r$n_universe)
+          n_bd_universe <- n_bd_universe + 1L
+          symmetric_bd_universe_sizes[n_bd_universe] <- r$n_universe
         }
 
         r
@@ -656,9 +792,12 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda = capacity_prior_lambda,
+          k_prior_lambda = k_prior_lambda,
+          birth_tilt_lambda = birth_tilt_lambda,
           neighbor_idx = neighbor_idx
         )
-        update_move_stats(stats, "lifted_birth_death", r)
+        update_move_stats(move_counts, "lifted_birth_death", r)
 
         # Track direction flip
         if (!is.null(r$new_direction) && r$new_direction != current_direction) {
@@ -675,10 +814,9 @@ run_parcel_mcmc <- function(
 
         # Track capacity of accepted birth moves for calibration
         if (isTRUE(r$accepted) && isTRUE(r$direction == "birth") && !is.null(r$block_id)) {
-          birth_accepted_caps <- c(
-            birth_accepted_caps,
+          n_birth_caps <- n_birth_caps + 1L
+          birth_accepted_caps[n_birth_caps] <-
             secondary_library$metadata$capacity[r$block_id]
-          )
         }
 
         # Track direction-specific counts for diagnostics
@@ -690,27 +828,26 @@ run_parcel_mcmc <- function(
           }
         }
 
-        # Track birth/death attempt-level diagnostics
+        # Track birth/death attempt-level diagnostics (preallocated columns)
         birth_death_attempt_idx <- birth_death_attempt_idx + 1L
-        birth_death_attempts[[birth_death_attempt_idx]] <- data.table::data.table(
-          step = step,
-          kernel = "lifted_birth_death",
-          direction = if (is.null(r$direction)) NA_character_ else as.character(r$direction),
-          new_direction = if (is.null(r$new_direction)) NA_character_ else as.character(r$new_direction),
-          k_before = if (is.null(r$k_before)) NA_integer_ else as.integer(r$k_before),
-          k_after = if (is.null(r$k_after)) NA_integer_ else as.integer(r$k_after),
-          n_add = if (is.null(r$n_add)) NA_integer_ else as.integer(r$n_add),
-          n_rem = if (is.null(r$n_rem)) NA_integer_ else as.integer(r$n_rem),
-          n_universe = if (is.null(r$n_universe)) NA_integer_ else as.integer(r$n_universe),
-          n_add_new = if (is.null(r$n_add_new)) NA_integer_ else as.integer(r$n_add_new),
-          n_rem_new = if (is.null(r$n_rem_new)) NA_integer_ else as.integer(r$n_rem_new),
-          n_universe_new = if (is.null(r$n_universe_new)) NA_integer_ else as.integer(r$n_universe_new),
-          accepted = isTRUE(r$accepted),
-          proposal_failed = isTRUE(r$proposal_failed),
-          infeasible = isTRUE(r$infeasible),
-          constraint_failed = if (is.null(r$constraint_failed)) NA_character_ else as.character(r$constraint_failed),
-          accept_prob = if (is.null(r$accept_prob)) NA_real_ else as.numeric(r$accept_prob)
-        )
+        bd_i <- birth_death_attempt_idx
+        bd_step[bd_i] <- step
+        bd_kernel[bd_i] <- "lifted_birth_death"
+        bd_direction[bd_i] <- if (is.null(r$direction)) NA_character_ else as.character(r$direction)
+        bd_new_direction[bd_i] <- if (is.null(r$new_direction)) NA_character_ else as.character(r$new_direction)
+        bd_k_before[bd_i] <- if (is.null(r$k_before)) NA_integer_ else as.integer(r$k_before)
+        bd_k_after[bd_i] <- if (is.null(r$k_after)) NA_integer_ else as.integer(r$k_after)
+        bd_n_add[bd_i] <- if (is.null(r$n_add)) NA_integer_ else as.integer(r$n_add)
+        bd_n_rem[bd_i] <- if (is.null(r$n_rem)) NA_integer_ else as.integer(r$n_rem)
+        bd_n_universe[bd_i] <- if (is.null(r$n_universe)) NA_integer_ else as.integer(r$n_universe)
+        bd_n_add_new[bd_i] <- if (is.null(r$n_add_new)) NA_integer_ else as.integer(r$n_add_new)
+        bd_n_rem_new[bd_i] <- if (is.null(r$n_rem_new)) NA_integer_ else as.integer(r$n_rem_new)
+        bd_n_universe_new[bd_i] <- if (is.null(r$n_universe_new)) NA_integer_ else as.integer(r$n_universe_new)
+        bd_accepted[bd_i] <- isTRUE(r$accepted)
+        bd_proposal_failed[bd_i] <- isTRUE(r$proposal_failed)
+        bd_infeasible[bd_i] <- isTRUE(r$infeasible)
+        bd_constraint_failed[bd_i] <- if (is.null(r$constraint_failed)) NA_character_ else as.character(r$constraint_failed)
+        bd_accept_prob[bd_i] <- if (is.null(r$accept_prob)) NA_real_ else as.numeric(r$accept_prob)
 
         r
       },
@@ -720,38 +857,39 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
-          cap_tolerance = SWAP_CAP_TOLERANCE,
+          capacity_prior_lambda = capacity_prior_lambda,
+          cap_tolerance = swap_cap_tolerance,
           neighbor_idx = neighbor_idx
         )
-        update_move_stats(stats, "secondary_swap", r)
+        update_move_stats(move_counts, "secondary_swap", r)
 
-        # Track swap rejection reasons
-        swap_reasons[reason == "attempted", count := count + 1L]
+        # Track swap rejection reasons (fast accumulators; materialized post-loop)
+        acc_swap_reasons[["attempted"]] <- acc_swap_reasons[["attempted"]] + 1L
 
         proposed <- !isTRUE(r$proposal_failed)
         feasible <- proposed && !isTRUE(r$infeasible)
 
         if (proposed) {
-          swap_reasons[reason == "proposed", count := count + 1L]
+          acc_swap_reasons[["proposed"]] <- acc_swap_reasons[["proposed"]] + 1L
         }
         if (feasible) {
-          swap_reasons[reason == "feasible", count := count + 1L]
+          acc_swap_reasons[["feasible"]] <- acc_swap_reasons[["feasible"]] + 1L
         }
         if (isTRUE(r$accepted)) {
-          swap_reasons[reason == "accepted", count := count + 1L]
+          acc_swap_reasons[["accepted"]] <- acc_swap_reasons[["accepted"]] + 1L
         }
 
         # Track proposal failure reasons
         if (isTRUE(r$proposal_failed)) {
-          swap_reasons[reason == "proposal_failed", count := count + 1L]
-          if (!is.null(r$reason) && r$reason %in% swap_reasons$reason) {
-            swap_reasons[reason == r$reason, count := count + 1L]
+          acc_swap_reasons[["proposal_failed"]] <- acc_swap_reasons[["proposal_failed"]] + 1L
+          if (!is.null(r$reason) && r$reason %in% names(acc_swap_reasons)) {
+            acc_swap_reasons[[r$reason]] <- acc_swap_reasons[[r$reason]] + 1L
           }
         }
 
         # Track infeasibility and constraint failures
         if (isTRUE(r$infeasible)) {
-          swap_reasons[reason == "infeasible", count := count + 1L]
+          acc_swap_reasons[["infeasible"]] <- acc_swap_reasons[["infeasible"]] + 1L
           constraint_label <- if (
             !is.null(r$constraint_failed) &&
               r$constraint_failed %in% swap_constraints$constraint
@@ -760,25 +898,28 @@ run_parcel_mcmc <- function(
           } else {
             "unknown"
           }
-          swap_constraints[constraint == constraint_label, count := count + 1L]
+          acc_swap_constraints[[constraint_label]] <- acc_swap_constraints[[constraint_label]] + 1L
         }
 
         # Track MH rejections
         if (feasible && !isTRUE(r$accepted)) {
-          swap_reasons[reason == "mh_rejected", count := count + 1L]
+          acc_swap_reasons[["mh_rejected"]] <- acc_swap_reasons[["mh_rejected"]] + 1L
         }
 
         # Track delta_cap for accepted swaps
         if (isTRUE(r$accepted) && !is.null(r$delta_cap)) {
-          swap_delta_caps <- c(swap_delta_caps, r$delta_cap)
+          n_swap_deltas <- n_swap_deltas + 1L
+          swap_delta_caps[n_swap_deltas] <- r$delta_cap
         }
 
         # Track similar-capacity set sizes for all proposals
         if (!is.null(r$n_similar_fwd)) {
-          swap_n_similar_fwd <- c(swap_n_similar_fwd, r$n_similar_fwd)
+          n_swap_sim_fwd <- n_swap_sim_fwd + 1L
+          swap_n_similar_fwd[n_swap_sim_fwd] <- r$n_similar_fwd
         }
         if (!is.null(r$n_similar_rev)) {
-          swap_n_similar_rev <- c(swap_n_similar_rev, r$n_similar_rev)
+          n_swap_sim_rev <- n_swap_sim_rev + 1L
+          swap_n_similar_rev[n_swap_sim_rev] <- r$n_similar_rev
         }
         r
       },
@@ -786,14 +927,12 @@ run_parcel_mcmc <- function(
         # Immediate enrichment: add current LCC to library before attempting Replace-LCC
         # This guarantees the reverse move is always possible (100% library coverage)
         if (enable_online_enrichment) {
-          enrich_result <- add_lcc_to_library(
-            lcc_library,
-            current_state$lcc_parcels,
-            parcel_graph,
-            max_online_entries,
-            neighbor_cache = neighbor_cache  # Use name-based cache, not neighbor_idx
+          enrich_result <- enrich_lcc_library_and_cache(
+            lcc_library, current_state, parcel_graph,
+            secondary_library, max_online_entries, neighbor_cache
           )
           lcc_library <- enrich_result$lcc_library
+          current_state <- enrich_result$current_state
           if (enrich_result$added) online_adds <- online_adds + 1L
         }
 
@@ -803,29 +942,35 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda = capacity_prior_lambda,
+          debug_invariant_checks = debug_invariant_checks,
           neighbor_idx = neighbor_idx,
-          parcel_names = parcel_names
+          parcel_names = parcel_names,
+          nbr_from = nbr_from,
+          nbr_to = nbr_to,
+          lcc_state_cache = lcc_state_cache
         )
 
         # Note: replace_lcc uses stricter feasibility semantics than other moves
         # (only counts as feasible if proposal succeeded AND passed feasibility)
-        stats[move_type == "replace_lcc", n_attempted := n_attempted + 1L]
-        replace_lcc_reasons[reason == "attempted", count := count + 1L]
+        # Fast accumulators (materialized into data.tables after the loop)
+        move_counts$n_attempted[["replace_lcc"]] <- move_counts$n_attempted[["replace_lcc"]] + 1L
+        acc_rl_reasons[["attempted"]] <- acc_rl_reasons[["attempted"]] + 1L
 
         proposed <- !isTRUE(r$proposal_failed)
         feasible <- proposed && !isTRUE(r$infeasible)
 
         if (proposed) {
-          stats[move_type == "replace_lcc", n_proposed := n_proposed + 1L]
-          replace_lcc_reasons[reason == "proposed", count := count + 1L]
+          move_counts$n_proposed[["replace_lcc"]] <- move_counts$n_proposed[["replace_lcc"]] + 1L
+          acc_rl_reasons[["proposed"]] <- acc_rl_reasons[["proposed"]] + 1L
         }
         if (feasible) {
-          stats[move_type == "replace_lcc", n_feasible := n_feasible + 1L]
-          replace_lcc_reasons[reason == "feasible", count := count + 1L]
+          move_counts$n_feasible[["replace_lcc"]] <- move_counts$n_feasible[["replace_lcc"]] + 1L
+          acc_rl_reasons[["feasible"]] <- acc_rl_reasons[["feasible"]] + 1L
         }
         if (isTRUE(r$accepted)) {
-          stats[move_type == "replace_lcc", n_accepted := n_accepted + 1L]
-          replace_lcc_reasons[reason == "accepted", count := count + 1L]
+          move_counts$n_accepted[["replace_lcc"]] <- move_counts$n_accepted[["replace_lcc"]] + 1L
+          acc_rl_reasons[["accepted"]] <- acc_rl_reasons[["accepted"]] + 1L
 
           # Track cross-region transitions (only for accepted moves)
           if (!is.null(r$is_cross_region) && !is.na(r$is_cross_region)) {
@@ -839,10 +984,10 @@ run_parcel_mcmc <- function(
 
         # Track failure reasons
         if (!proposed) {
-          replace_lcc_reasons[reason == "proposal_failed", count := count + 1L]
+          acc_rl_reasons[["proposal_failed"]] <- acc_rl_reasons[["proposal_failed"]] + 1L
         }
         if (isTRUE(r$infeasible)) {
-          replace_lcc_reasons[reason == "infeasible", count := count + 1L]
+          acc_rl_reasons[["infeasible"]] <- acc_rl_reasons[["infeasible"]] + 1L
           constraint_label <- if (
             !is.null(r$constraint_failed) &&
               r$constraint_failed %in% replace_lcc_constraints$constraint
@@ -851,39 +996,35 @@ run_parcel_mcmc <- function(
           } else {
             "unknown"
           }
-          replace_lcc_constraints[
-            constraint == constraint_label,
-            count := count + 1L
-          ]
+          acc_rl_constraints[[constraint_label]] <- acc_rl_constraints[[constraint_label]] + 1L
         }
-        if (!is.null(r$reason) && r$reason %in% replace_lcc_reasons$reason) {
-          replace_lcc_reasons[reason == r$reason, count := count + 1L]
+        if (!is.null(r$reason) && r$reason %in% names(acc_rl_reasons)) {
+          acc_rl_reasons[[r$reason]] <- acc_rl_reasons[[r$reason]] + 1L
         }
         if (feasible && !isTRUE(r$accepted)) {
-          replace_lcc_reasons[reason == "mh_rejected", count := count + 1L]
+          acc_rl_reasons[["mh_rejected"]] <- acc_rl_reasons[["mh_rejected"]] + 1L
         }
 
         # Track MH diagnostics
         if (!is.null(r$accept_prob)) {
-          replace_lcc_accept_prob <- c(replace_lcc_accept_prob, r$accept_prob)
+          n_rl_accept_prob <- n_rl_accept_prob + 1L
+          replace_lcc_accept_prob[n_rl_accept_prob] <- r$accept_prob
         }
         if (!is.null(r$log_q_ratio)) {
-          replace_lcc_log_q_ratio <- c(replace_lcc_log_q_ratio, r$log_q_ratio)
+          n_rl_log_q_ratio <- n_rl_log_q_ratio + 1L
+          replace_lcc_log_q_ratio[n_rl_log_q_ratio] <- r$log_q_ratio
         }
         if (!is.null(r$k_retained)) {
-          replace_lcc_k_retained <- c(replace_lcc_k_retained, r$k_retained)
+          n_rl_k_retained <- n_rl_k_retained + 1L
+          replace_lcc_k_retained[n_rl_k_retained] <- r$k_retained
         }
         if (!is.null(r$n_similar_forward)) {
-          replace_lcc_n_similar_forward <- c(
-            replace_lcc_n_similar_forward,
-            r$n_similar_forward
-          )
+          n_rl_sim_fwd <- n_rl_sim_fwd + 1L
+          replace_lcc_n_similar_forward[n_rl_sim_fwd] <- r$n_similar_forward
         }
         if (!is.null(r$n_similar_reverse)) {
-          replace_lcc_n_similar_reverse <- c(
-            replace_lcc_n_similar_reverse,
-            r$n_similar_reverse
-          )
+          n_rl_sim_rev <- n_rl_sim_rev + 1L
+          replace_lcc_n_similar_reverse[n_rl_sim_rev] <- r$n_similar_reverse
         }
         r
       }
@@ -904,8 +1045,11 @@ run_parcel_mcmc <- function(
     # Update current state
     current_state <- result$new_state
 
-    # DEBUG: Check X_logical consistency after EVERY move
-    if (length(current_state$X_indices) != sum(current_state$X_logical)) {
+    # DEBUG: Check X_logical consistency after EVERY move. Gated behind
+    # debug_invariant_checks and placed first so the O(N) sum(X_logical) is
+    # short-circuited (not computed) in production runs.
+    if (debug_invariant_checks &&
+        length(current_state$X_indices) != sum(current_state$X_logical)) {
       # Compute expected X_logical from lcc and secondary union
       expected_from_components <- sum(current_state$lcc_logical) +
         length(setdiff(current_state$secondary_union_indices, which(current_state$lcc_logical)))
@@ -924,7 +1068,7 @@ run_parcel_mcmc <- function(
     }
 
     # DEBUG: Validate state invariants after accepted moves
-    if (DEBUG_INVARIANT_CHECKS && isTRUE(result$accepted)) {
+    if (debug_invariant_checks && isTRUE(result$accepted)) {
       validate_state_invariants(
         current_state,
         parcel_graph,
@@ -952,14 +1096,12 @@ run_parcel_mcmc <- function(
       step %% enrichment_interval == 0 &&
       (is.null(enrichment_burn_in) || step <= enrichment_burn_in)
     if (should_enrich) {
-      enrich_result <- add_lcc_to_library(
-        lcc_library,
-        current_state$lcc_parcels,
-        parcel_graph,
-        max_online_entries,
-        neighbor_cache = neighbor_cache  # Use name-based cache, not neighbor_idx
+      enrich_result <- enrich_lcc_library_and_cache(
+        lcc_library, current_state, parcel_graph,
+        secondary_library, max_online_entries, neighbor_cache
       )
       lcc_library <- enrich_result$lcc_library
+      current_state <- enrich_result$current_state
       if (enrich_result$added) online_adds <- online_adds + 1L
     }
 
@@ -976,23 +1118,25 @@ run_parcel_mcmc <- function(
     # Capacity prior diagnostics
     penalty_trajectory[step] <- compute_capacity_penalty(
       current_state$total_capacity,
-      constraints$min_capacity
+      constraints$min_capacity,
+      capacity_prior_lambda
     )
 
-    # Centroid tracking for multi-chain analysis
+    # Centroid tracking for multi-chain analysis. Use precomputed integer-indexed
+    # attribute vectors (X_indices) instead of igraph hash lookups; the centroid
+    # is an area-weighted mean and so order-independent (identical value).
     state_parcels <- current_state$X
     if (length(state_parcels) > 0) {
-      areas <- igraph::V(parcel_graph)[state_parcels]$area
-      cx <- igraph::V(parcel_graph)[state_parcels]$centroid_x
-      cy <- igraph::V(parcel_graph)[state_parcels]$centroid_y
+      xi <- current_state$X_indices
+      areas <- secondary_library$area_vec[xi]
+      cx <- secondary_library$centroid_x_vec[xi]
+      cy <- secondary_library$centroid_y_vec[xi]
       total_area <- sum(areas)
       centroid_x_trajectory[step] <- sum(cx * areas) / total_area
       centroid_y_trajectory[step] <- sum(cy * areas) / total_area
-      # Vectorized update (avoids loop overhead at large scale)
-      parcel_inclusion_count[state_parcels] <- parcel_inclusion_count[
-        state_parcels
-      ] +
-        1L
+      # Integer-indexed update: X_indices names the same parcels as X, and the
+      # character subscript rebuilt a hash over all parcel names each step.
+      parcel_inclusion_count[xi] <- parcel_inclusion_count[xi] + 1L
     }
 
     # Periodic purge diagnostic (test if k=0 is feasible from current state)
@@ -1026,10 +1170,36 @@ run_parcel_mcmc <- function(
     }
   }
 
+  # Materialize fast per-step diagnostic counters back into their data.tables.
+  # (Counts accumulated in plain vectors/env during the loop to avoid data.table
+  # NSE overhead; the final data.table contents are identical to per-step `:=`.)
+  stats[, n_attempted := as.integer(move_counts$n_attempted[move_type])]
+  stats[, n_proposed  := as.integer(move_counts$n_proposed[move_type])]
+  stats[, n_feasible  := as.integer(move_counts$n_feasible[move_type])]
+  stats[, n_accepted  := as.integer(move_counts$n_accepted[move_type])]
+  replace_lcc_reasons[, count := as.integer(acc_rl_reasons[reason])]
+  replace_lcc_constraints[, count := as.integer(acc_rl_constraints[constraint])]
+  swap_reasons[, count := as.integer(acc_swap_reasons[reason])]
+  swap_constraints[, count := as.integer(acc_swap_constraints[constraint])]
+
   # Compute timing overhead (total time minus kernel time)
   total_loop_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
   total_kernel_time <- timing_lcc_local + timing_birth_death + timing_swap + timing_replace_lcc
   timing_overhead <- total_loop_time - total_kernel_time
+
+  # Truncate the preallocated diagnostic accumulators to their fill counts and
+  # attach names deferred from the loop (before the verbose summary reads them).
+  birth_accepted_caps <- birth_accepted_caps[seq_len(n_birth_caps)]
+  symmetric_bd_universe_sizes <- symmetric_bd_universe_sizes[seq_len(n_bd_universe)]
+  swap_delta_caps <- swap_delta_caps[seq_len(n_swap_deltas)]
+  swap_n_similar_fwd <- swap_n_similar_fwd[seq_len(n_swap_sim_fwd)]
+  swap_n_similar_rev <- swap_n_similar_rev[seq_len(n_swap_sim_rev)]
+  replace_lcc_accept_prob <- replace_lcc_accept_prob[seq_len(n_rl_accept_prob)]
+  replace_lcc_log_q_ratio <- replace_lcc_log_q_ratio[seq_len(n_rl_log_q_ratio)]
+  replace_lcc_k_retained <- replace_lcc_k_retained[seq_len(n_rl_k_retained)]
+  replace_lcc_n_similar_forward <- replace_lcc_n_similar_forward[seq_len(n_rl_sim_fwd)]
+  replace_lcc_n_similar_reverse <- replace_lcc_n_similar_reverse[seq_len(n_rl_sim_rev)]
+  parcel_inclusion_count <- setNames(parcel_inclusion_count, all_parcel_names)
 
   # Summary statistics
   if (verbose) {
@@ -1075,28 +1245,6 @@ run_parcel_mcmc <- function(
       cli::cli_alert_info("Final library size: {lcc_library$n_blocks}")
     }
 
-    # Multi-move r-distribution summary
-    if (sum(multi_birth_r_counts) > 0 || sum(multi_death_r_counts) > 0) {
-      cli::cli_h3("Multi-Birth r Distribution")
-      for (r_val in seq_along(multi_birth_r_counts)) {
-        att <- multi_birth_r_counts[r_val]
-        acc <- multi_birth_r_accepted[r_val]
-        rate <- if (att > 0) round(100 * acc / att, 1) else 0
-        if (att > 0) {
-          cli::cli_alert_info("r={r_val}: {acc}/{att} accepted ({rate}%)")
-        }
-      }
-      cli::cli_h3("Multi-Death r Distribution")
-      for (r_val in seq_along(multi_death_r_counts)) {
-        att <- multi_death_r_counts[r_val]
-        acc <- multi_death_r_accepted[r_val]
-        rate <- if (att > 0) round(100 * acc / att, 1) else 0
-        if (att > 0) {
-          cli::cli_alert_info("r={r_val}: {acc}/{att} accepted ({rate}%)")
-        }
-      }
-    }
-
     # Swap diagnostics summary
     if (length(swap_delta_caps) > 0) {
       cli::cli_h3("Capacity-Balanced Swap Diagnostics")
@@ -1115,32 +1263,29 @@ run_parcel_mcmc <- function(
     lcc_library$block_hashes <- NULL
   }
 
-  birth_death_attempts <- if (birth_death_attempt_idx > 0L) {
-    data.table::rbindlist(
-      birth_death_attempts[seq_len(birth_death_attempt_idx)],
-      fill = TRUE
-    )
-  } else {
-    data.table::data.table(
-      step = integer(0),
-      kernel = character(0),
-      direction = character(0),
-      new_direction = character(0),
-      k_before = integer(0),
-      k_after = integer(0),
-      n_add = integer(0),
-      n_rem = integer(0),
-      n_universe = integer(0),
-      n_add_new = integer(0),
-      n_rem_new = integer(0),
-      n_universe_new = integer(0),
-      accepted = logical(0),
-      proposal_failed = logical(0),
-      infeasible = logical(0),
-      constraint_failed = character(0),
-      accept_prob = numeric(0)
-    )
-  }
+  # Materialize the birth/death attempt log from the preallocated columns
+  # (identical rows/types to the former rbindlist of per-attempt tables).
+  bd_seq <- seq_len(birth_death_attempt_idx)
+  birth_death_attempts <- data.table::data.table(
+    step = bd_step[bd_seq],
+    kernel = bd_kernel[bd_seq],
+    direction = bd_direction[bd_seq],
+    new_direction = bd_new_direction[bd_seq],
+    k_before = bd_k_before[bd_seq],
+    k_after = bd_k_after[bd_seq],
+    n_add = bd_n_add[bd_seq],
+    n_rem = bd_n_rem[bd_seq],
+    n_universe = bd_n_universe[bd_seq],
+    n_add_new = bd_n_add_new[bd_seq],
+    n_rem_new = bd_n_rem_new[bd_seq],
+    n_universe_new = bd_n_universe_new[bd_seq],
+    accepted = bd_accepted[bd_seq],
+    proposal_failed = bd_proposal_failed[bd_seq],
+    infeasible = bd_infeasible[bd_seq],
+    constraint_failed = bd_constraint_failed[bd_seq],
+    accept_prob = bd_accept_prob[bd_seq]
+  )
+
 
   list(
     # Thinned minimal states (for visualization/metrics)
@@ -1188,11 +1333,6 @@ run_parcel_mcmc <- function(
       direction_trajectory = direction_trajectory,
       direction_flips = direction_flips,
       use_lifted = use_lifted,
-      # Birth/death r-value tracking (legacy asymmetric kernels - kept for compatibility)
-      multi_birth_r_counts = multi_birth_r_counts,
-      multi_death_r_counts = multi_death_r_counts,
-      multi_birth_r_accepted = multi_birth_r_accepted,
-      multi_death_r_accepted = multi_death_r_accepted,
       # Swap move diagnostics (capacity-balanced swap)
       swap_delta_caps = swap_delta_caps,
       swap_n_similar_fwd = swap_n_similar_fwd,
@@ -1232,7 +1372,7 @@ run_parcel_mcmc <- function(
 #'
 #' @param tree_discovered_lccs Output from discover_lccs_from_trees()
 #' @param parcel_graph_result Result from build_parcel_graph_target()
-#' @param constraints MBTA constraints
+#' @param target_spec Target spec from `parcel_target_spec()`
 #' @param secondary_library Secondary block library (hydrated)
 #' @param n_chains Number of MCMC chains (default 4)
 #' @param n_steps Steps per chain (default 2000)
@@ -1247,7 +1387,7 @@ run_parcel_mcmc <- function(
 run_mcmc_discovery_supplement <- function(
     tree_discovered_lccs,
     parcel_graph_result,
-    constraints,
+    target_spec,
     secondary_library,
     n_chains = 4L,
     n_steps = 2000L,
@@ -1259,6 +1399,7 @@ run_mcmc_discovery_supplement <- function(
   # Get tree-discovered LCCs data.table
 
   tree_lccs <- tree_discovered_lccs$discovered_lccs
+  constraints <- target_spec$constraints
 
   if (nrow(tree_lccs) == 0) {
     cli::cli_alert_warning("No tree-discovered LCCs to seed from")
@@ -1295,8 +1436,14 @@ run_mcmc_discovery_supplement <- function(
     cli::cli_alert_info("Steps per chain: {n_steps}")
   }
 
-  # Get discovery config (100% lcc_local)
-  discovery_config <- define_parcel_kernel_configs()[["discovery"]]
+  # Get discovery config (100% lcc_local). swap/birth-tilt tolerances are
+  # inert here (p_swap = p_symmetric_birth_death = p_replace_lcc = 0), so 0
+  # is an honest placeholder rather than a meaningful tuning choice.
+  discovery_config <- parcel_sampler_spec_discovery(
+    swap_cap_tolerance = 0,
+    birth_tilt_lambda = 0,
+    debug_invariant_checks = FALSE
+  )
   discovery_config$n_steps <- n_steps
 
   # Hydrate secondary library if needed
@@ -1343,19 +1490,21 @@ run_mcmc_discovery_supplement <- function(
     # Offset seed for each chain
     chain_config <- discovery_config
     chain_config$seed <- discovery_config$seed + chain_idx * 1000L
+    # This discovery supplement wants enrichment off and LCC signatures on —
+    # the opposite of a production chain's defaults.
+    chain_config$enable_online_enrichment <- FALSE
+    chain_config$store_lcc_signatures <- TRUE
 
     # Run MCMC with lcc_local only
     result <- run_parcel_mcmc(
       parcel_graph = parcel_graph,
       initial_state = initial_state,
-      constraints = constraints,
+      target_spec = target_spec,
       secondary_library = secondary_library,
       lcc_library = dummy_lcc_library,
-      config = chain_config,
+      sampler_spec = chain_config,
       parcel_assignments = parcel_graph_result$parcel_assignments,
       neighbor_cache = parcel_graph_result$neighbor_cache,
-      enable_online_enrichment = FALSE,
-      store_lcc_signatures = TRUE,
       verbose = FALSE
     )
 

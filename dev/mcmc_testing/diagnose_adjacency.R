@@ -40,6 +40,7 @@ if (!exists("district_name")) {
 
 message("Reading pipeline artifacts...")
 district_data <- targets::tar_read(district_data, store = store)
+graph_spec    <- targets::tar_read(graph_spec, store = store)
 
 parcel_sf <- district_data$district_geometry
 row_sf    <- district_data$district_right_of_way
@@ -47,10 +48,12 @@ row_sf    <- district_data$district_right_of_way
 FEET_TO_METERS    <- 0.3048
 ROW_GAP_TOLERANCE_M <- 1
 
-# Parameters — match whatever build_adjacency_graph() is called with
-MAX_DIST_FT        <- 120
-TOUCH_THRESHOLD_FT <- 2
-MIN_COVERAGE_RATIO <- 0.9
+# Parameters — read straight from the graph_spec target actually used by the
+# run, so this diagnostic can never drift from what build_adjacency_graph()
+# was called with.
+MAX_DIST_FT        <- graph_spec$max_dist_ft
+TOUCH_THRESHOLD_FT <- graph_spec$touch_threshold_ft
+MIN_COVERAGE_RATIO <- graph_spec$min_coverage_ratio
 
 max_dist_m        <- MAX_DIST_FT        * FEET_TO_METERS
 touch_threshold_m <- TOUCH_THRESHOLD_FT * FEET_TO_METERS
