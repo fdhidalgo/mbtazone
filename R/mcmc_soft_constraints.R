@@ -24,7 +24,8 @@
 #' @return Numeric scalar: density denominator in acres
 #' @keywords internal
 compute_gis_density_denom <- function(unit_ids, constraints) {
-  geom_subset <- constraints$geom_sfc[intersect(unit_ids, names(constraints$geom_sfc))]
+  loc_ids     <- unique(unlist(constraints$unit_to_loc_ids[unit_ids], use.names = FALSE))
+  geom_subset <- constraints$geom_sfc[intersect(loc_ids, names(constraints$geom_sfc))]
   if (length(geom_subset) == 0) {
     cli::cli_abort("No geometries found for unit_ids: {paste(unit_ids, collapse = ', ')}")
   }

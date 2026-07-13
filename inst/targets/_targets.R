@@ -161,6 +161,7 @@ list(
     target_spec,
     parcel_target_spec(
       district_data,
+      parcel_graph_result,
       capacity_prior_lambda = CAPACITY_PRIOR_LAMBDA,
       k_prior_lambda        = K_PRIOR_LAMBDA
     )

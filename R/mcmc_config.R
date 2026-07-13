@@ -10,13 +10,20 @@
 #' Define constraints from district requirements
 #'
 #' @param district_data List from [load_district_data()]
+#' @param parcel_graph_result List from [build_parcel_graph_target()] or
+#'   [build_identity_parcel_graph()]
 #' @return List of constraints for MCMC
 #' @export
-define_constraints <- function(district_data) {
+define_constraints <- function(district_data, parcel_graph_result) {
   req <- district_data$district_requirements
 
-  # Store parcel geometries as named sfc for GIS density denominator.
-  # sfc avoids sf_column attribute loss during qs serialization.
+  # Maps each parcel graph unit to its constituent parcel LOC_IDs,
+  # used to look up geometries when computing the GIS density denominator.
+  pa <- parcel_graph_result$parcel_assignments
+  unit_to_loc_ids <- split(pa$parcel_id, pa$unit_id)
+
+  # Named sfc keyed by LOC_ID for geometry lookup in the GIS density
+  # denominator. Stored as sfc rather than sf to survive qs serialization.
   dg       <- district_data$district_geometry
   geom_sfc <- sf::st_geometry(dg)
   names(geom_sfc) <- dg$LOC_ID
@@ -30,6 +37,7 @@ define_constraints <- function(district_data) {
     min_lcc_fraction     = 0.5,
     station_capacity_pct = req$station_area_unit_pct,
     station_area_pct     = req$station_area_land_pct,
+    unit_to_loc_ids      = unit_to_loc_ids,
     geom_sfc             = geom_sfc,
     ded_sfc              = ded_sfc
   )
@@ -57,9 +65,10 @@ define_constraints <- function(district_data) {
 #'   blocks (k); 0 is a flat/improper prior over k
 #' @return List with `constraints` and `priors` sub-lists
 #' @export
-parcel_target_spec <- function(district_data, capacity_prior_lambda, k_prior_lambda) {
+parcel_target_spec <- function(district_data, parcel_graph_result,
+                               capacity_prior_lambda, k_prior_lambda) {
   list(
-    constraints = define_constraints(district_data),
+    constraints = define_constraints(district_data, parcel_graph_result),
     priors = list(
       capacity_prior_lambda = capacity_prior_lambda,
       k_prior_lambda        = k_prior_lambda
