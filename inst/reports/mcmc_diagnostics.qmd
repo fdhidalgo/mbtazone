@@ -385,25 +385,27 @@ caption <- paste0(
 )
 
 
-# Create a data table with constraint descriptions
-constraints_dt <- data.table::data.table(
-  Constraint = c("Minimum capacity", "Minimum area", "Minimum density", "LCC fraction", "Station Capacity %", "Station Area %"),
-  Value = constraints,
-  Description = c(
-    "Total housing units the district must support",
-    "Total land area in the overlay district",
-    "Gross density across the district",
-    "At least half of capacity in the largest connected component",
-    "Percentage of total capacity that must be within half mile radius of a station",
-    "Percentage of total area that must be within half mile radius of a station"
-  )
+scalar_constraints <- list(
+  min_capacity         = constraints$min_capacity,
+  min_area             = constraints$min_area,
+  min_density          = constraints$min_density,
+  min_lcc_fraction     = constraints$min_lcc_fraction,
+  station_capacity_pct = constraints$station_capacity_pct,
+  station_area_pct     = constraints$station_area_pct
 )
 
 knitr::kable(
   data.table::data.table(
-    Constraint = names(constraints),
-    Value = constraints_dt$Value,
-    Description = constraints_dt$Description
+    Constraint = c("Minimum capacity", "Minimum area", "Minimum density", "LCC fraction", "Station Capacity %", "Station Area %"),
+    Value = unlist(scalar_constraints),
+    Description = c(
+      "Total housing units the district must support",
+      "Total land area in the overlay district",
+      "Gross density across the district",
+      "At least half of capacity in the largest connected component",
+      "Percentage of total capacity that must be within half mile radius of a station",
+      "Percentage of total area that must be within half mile radius of a station"
+    )
   ),
   caption = caption,
   booktabs = TRUE,
