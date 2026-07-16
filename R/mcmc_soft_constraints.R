@@ -202,7 +202,14 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
   # Area and density use the GIS denominator: st_union of selected parcel
   # geometries minus deductions, giving the true district area including
   # roads and gaps enclosed between parcels.
-  gis_denom <- compute_gis_density_denom(state$X, constraints)
+  # Use precomputed area when available (non-local kernels update
+  # state$total_gis_area via O(1) arithmetic); fall back to st_union for
+  # local moves (which modify individual parcels) and initial seeding.
+  gis_denom <- if (!is.null(state$total_gis_area) && is.finite(state$total_gis_area)) {
+    state$total_gis_area
+  } else {
+    compute_gis_density_denom(state$X, constraints)
+  }
 
   if (!is.finite(gis_denom) || gis_denom <= 0) {
     return(list(feasible = FALSE, constraint_failed = "invalid_area"))
@@ -248,5 +255,39 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
     }
   }
 
-  list(feasible = TRUE, constraint_failed = NULL)
+  list(feasible = TRUE, constraint_failed = NULL, gis_area = gis_denom)
+}
+
+#' Precompute GIS density-denominator area for every block in a library
+#'
+#' Called once before the MCMC loop for both the LCC and secondary libraries.
+#' Non-local kernels (birth/death, swap, replace-LCC) then update
+#' \code{state$total_gis_area} via O(1) arithmetic instead of calling
+#' \code{st_union()} at every proposal. Local moves still call
+#' \code{compute_gis_density_denom()} directly and cache the result on the
+#' accepted state via \code{feasibility$gis_area}.
+#'
+#' Additivity holds for non-overlapping parcel geometries: since parcels across
+#' different blocks are disjoint by construction, the union area is exactly the
+#' sum of individual block GIS areas.
+#'
+#' @param library LCC or secondary library list.
+#' @param constraints Constraints list from \code{\link{define_constraints}}.
+#' @return The library with \code{metadata$gis_area} populated.
+#' @keywords internal
+enrich_library_with_gis_areas <- function(library, constraints) {
+  n <- library$n_blocks
+  if (n == 0L) {
+    library$metadata[, gis_area := numeric(0)]
+    return(library)
+  }
+  gis_areas <- vapply(seq_len(n), function(i) {
+    block_unit_ids <- library$parcel_names[library$blocks[[i]]]
+    tryCatch(
+      compute_gis_density_denom(block_unit_ids, constraints),
+      error = function(e) NA_real_
+    )
+  }, numeric(1))
+  library$metadata[, gis_area := gis_areas]
+  library
 }

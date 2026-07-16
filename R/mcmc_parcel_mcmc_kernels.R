@@ -472,6 +472,9 @@ lcc_local_move <- function(
         move_type = "lcc_local_add"
       ))
     }
+    # Cache the GIS area computed by st_union so the next non-local kernel
+    # can update total_gis_area with O(1) arithmetic rather than calling st_union.
+    new_state$total_gis_area <- feasibility$gis_area
 
     # Compute MH ratio
     # ADD move:
@@ -581,6 +584,7 @@ lcc_local_move <- function(
         move_type = "lcc_local_remove"
       ))
     }
+    new_state$total_gis_area <- feasibility$gis_area
 
     # Compute MH ratio
     # REMOVE move:
@@ -784,6 +788,16 @@ symmetric_birth_death_move <- function(
       neighbor_idx
     )
   }
+
+  # Update total_gis_area with O(1) arithmetic using precomputed block area.
+  # Falls back to NULL (triggering st_union in check_hard_constraints_only) if
+  # either the state or the block lacks a valid precomputed value.
+  block_gis <- library$metadata$gis_area[block_id]
+  proposed_state$total_gis_area <-
+    if (!is.null(state$total_gis_area) && !is.na(block_gis)) {
+      if (is_birth) state$total_gis_area + block_gis
+      else          state$total_gis_area - block_gis
+    } else NULL
 
   # Step 3: Check Feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(
@@ -1032,6 +1046,11 @@ lifted_birth_death_move <- function(
     proposed_state <- add_secondary_block(
       state, block_id, library, parcel_graph, neighbor_idx
     )
+    block_gis <- library$metadata$gis_area[block_id]
+    proposed_state$total_gis_area <-
+      if (!is.null(state$total_gis_area) && !is.na(block_gis)) {
+        state$total_gis_area + block_gis
+      } else NULL
 
     # Compute reverse proposal size
     removable_new <- get_removable_blocks(proposed_state)
@@ -1073,6 +1092,11 @@ lifted_birth_death_move <- function(
     proposed_state <- remove_secondary_block(
       state, block_id, library, parcel_graph, neighbor_idx
     )
+    block_gis <- library$metadata$gis_area[block_id]
+    proposed_state$total_gis_area <-
+      if (!is.null(state$total_gis_area) && !is.na(block_gis)) {
+        state$total_gis_area - block_gis
+      } else NULL
 
     # Compute reverse proposal size
     addable_new <- get_addable_blocks_unconstrained(proposed_state, library)
@@ -1322,6 +1346,12 @@ secondary_swap_move <- function(
     parcel_graph,
     neighbor_idx
   )
+  old_gis <- library$metadata$gis_area[old_id]
+  new_gis <- library$metadata$gis_area[new_id]
+  proposed_state$total_gis_area <-
+    if (!is.null(state$total_gis_area) && !is.na(old_gis) && !is.na(new_gis)) {
+      state$total_gis_area - old_gis + new_gis
+    } else NULL
 
   # Step 8: Check feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(
@@ -1862,6 +1892,20 @@ replace_lcc_move <- function(
     parcel_graph,
     neighbor_idx = neighbor_idx
   )
+
+  # Set total_gis_area from precomputed library values (O(1) vs st_union).
+  # Additivity holds because LCC and secondary parcel sets are disjoint.
+  lcc_gis <- lcc_library$metadata$gis_area[new_lcc_id]
+  if (!is.null(lcc_gis) && !is.na(lcc_gis)) {
+    sec_gis_total <- if (length(current_secondary_ids) > 0) {
+      sec_vals <- secondary_library$metadata$gis_area[current_secondary_ids]
+      if (all(!is.na(sec_vals))) sum(sec_vals) else NA_real_
+    } else 0
+    new_state$total_gis_area <-
+      if (!is.na(sec_gis_total)) lcc_gis + sec_gis_total else NULL
+  } else {
+    new_state$total_gis_area <- NULL
+  }
 
   # Step 5: Check feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(

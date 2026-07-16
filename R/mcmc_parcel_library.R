@@ -1789,7 +1789,8 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
         n_parcels = integer(0), size_band = character(0), density = numeric(0),
         source = character(0), spectral_region = character(0),
         area_in_station = numeric(0), capacity_in_station = numeric(0),
-        centroid_x = numeric(0), centroid_y = numeric(0)
+        centroid_x = numeric(0), centroid_y = numeric(0),
+        gis_area = numeric(0)
       ),
       neighbor_indices = list(),
       n_blocks = 0L,
@@ -2033,7 +2034,7 @@ build_secondary_library_from_discovery <- function(
       metadata = data.table::data.table(
         block_id = integer(0), area = numeric(0), capacity = integer(0),
         n_parcels = integer(0), size_band = character(0), density = numeric(0),
-        source = character(0)
+        source = character(0), gis_area = numeric(0)
       ),
       neighbor_indices = list(),
       n_blocks = 0L,
@@ -2133,7 +2134,8 @@ build_secondary_library_from_discovery <- function(
     n_parcels = vapply(blocks, length, integer(1)),
     size_band = size_bands,
     density = selected$capacity / selected$area,
-    source = block_sources
+    source = block_sources,
+    gis_area = rep(NA_real_, n_blocks)
   )
 
   # Store blocks as integer indices
@@ -2286,6 +2288,9 @@ add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
   if (!"centroid_y" %in% names(lcc_library$metadata)) {
     lcc_library$metadata[, centroid_y := NA_real_]
   }
+  if (!"gis_area" %in% names(lcc_library$metadata)) {
+    lcc_library$metadata[, gis_area := NA_real_]
+  }
 
   lcc_library$metadata <- rbind(lcc_library$metadata, data.table::data.table(
     block_id            = new_id,
@@ -2299,7 +2304,8 @@ add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
     area_in_station     = area_in_station,
     capacity_in_station = capacity_in_station,
     centroid_x          = mean(igraph::V(parcel_graph)[lcc_parcels]$centroid_x, na.rm = TRUE),
-    centroid_y          = mean(igraph::V(parcel_graph)[lcc_parcels]$centroid_y, na.rm = TRUE)
+    centroid_y          = mean(igraph::V(parcel_graph)[lcc_parcels]$centroid_y, na.rm = TRUE),
+    gis_area            = NA_real_
   ))
   neighbors <- get_parcel_set_neighbors(lcc_parcels, parcel_graph, neighbor_cache)
   lcc_library$neighbor_indices[[new_id]] <- parcel_ids_to_indices(neighbors, all_parcels)

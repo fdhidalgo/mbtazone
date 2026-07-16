@@ -202,7 +202,7 @@ update_move_stats <- function(counts, mt, result) {
 # grown) library, the (possibly updated) state, and whether a new entry was added.
 enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_graph,
                                          secondary_library, max_online_entries,
-                                         neighbor_cache) {
+                                         neighbor_cache, constraints = NULL) {
   enrich_result <- add_lcc_to_library(
     lcc_library,
     current_state$lcc_parcels,
@@ -216,15 +216,28 @@ enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_grap
     }
   )
   lcc_library <- enrich_result$lcc_library
-  if (enrich_result$added && !is.null(current_state$compatible_lccs_cache)) {
+  if (enrich_result$added) {
     nid <- enrich_result$new_block_id
-    if (is_lcc_compatible_with_secondaries(
-          lcc_library$blocks[[nid]],
-          lcc_library$neighbor_indices[[nid]],
-          current_state$secondary_blocks,
-          secondary_library)) {
-      current_state$compatible_lccs_cache <-
-        c(current_state$compatible_lccs_cache, nid)
+    # Compute gis_area for the new block so replace-LCC can use O(1) arithmetic
+    if (!is.null(constraints) && "gis_area" %in% names(lcc_library$metadata)) {
+      block_unit_ids <- lcc_library$parcel_names[lcc_library$blocks[[nid]]]
+      gis_area_val <- tryCatch(
+        compute_gis_density_denom(block_unit_ids, constraints),
+        error = function(e) NA_real_
+      )
+      data.table::set(lcc_library$metadata,
+                      which(lcc_library$metadata$block_id == nid),
+                      "gis_area", gis_area_val)
+    }
+    if (!is.null(current_state$compatible_lccs_cache)) {
+      if (is_lcc_compatible_with_secondaries(
+            lcc_library$blocks[[nid]],
+            lcc_library$neighbor_indices[[nid]],
+            current_state$secondary_blocks,
+            secondary_library)) {
+        current_state$compatible_lccs_cache <-
+          c(current_state$compatible_lccs_cache, nid)
+      }
     }
   }
   list(
@@ -367,6 +380,17 @@ run_parcel_mcmc <- function(
     secondary_library$centroid_y_vec   <- igraph::V(parcel_graph)[sl_names]$centroid_y
   }
 
+  # Precompute GIS density-denominator area for every library block (one
+  # st_union per block, amortised over all MCMC proposals). Non-local kernels
+  # (birth/death, swap, replace-LCC) update state$total_gis_area with O(1)
+  # arithmetic; local moves still call compute_gis_density_denom() directly.
+  if (!"gis_area" %in% names(secondary_library$metadata)) {
+    secondary_library <- enrich_library_with_gis_areas(secondary_library, constraints)
+  }
+  if (!"gis_area" %in% names(lcc_library$metadata)) {
+    lcc_library <- enrich_library_with_gis_areas(lcc_library, constraints)
+  }
+
   # Augment initial_state with incremental boundary tracking fields
   # These enable O(d) boundary updates instead of O(N) full scans
   if (is.null(initial_state$secondary_union_indices) ||
@@ -438,6 +462,14 @@ run_parcel_mcmc <- function(
   )
   names(initial_state$X_neighbor_counts) <- parcel_names
 
+  # Seed total_gis_area so the first non-local kernel can update it with O(1)
+  # arithmetic. Local kernels recompute via compute_gis_density_denom anyway.
+  if (is.null(initial_state$total_gis_area)) {
+    initial_state$total_gis_area <- tryCatch(
+      compute_gis_density_denom(initial_state$X, constraints),
+      error = function(e) NULL
+    )
+  }
 
   # Initialize storage with adaptive thinning
 
@@ -929,7 +961,7 @@ run_parcel_mcmc <- function(
         if (enable_online_enrichment) {
           enrich_result <- enrich_lcc_library_and_cache(
             lcc_library, current_state, parcel_graph,
-            secondary_library, max_online_entries, neighbor_cache
+            secondary_library, max_online_entries, neighbor_cache, constraints
           )
           lcc_library <- enrich_result$lcc_library
           current_state <- enrich_result$current_state
@@ -1098,7 +1130,7 @@ run_parcel_mcmc <- function(
     if (should_enrich) {
       enrich_result <- enrich_lcc_library_and_cache(
         lcc_library, current_state, parcel_graph,
-        secondary_library, max_online_entries, neighbor_cache
+        secondary_library, max_online_entries, neighbor_cache, constraints
       )
       lcc_library <- enrich_result$lcc_library
       current_state <- enrich_result$current_state
