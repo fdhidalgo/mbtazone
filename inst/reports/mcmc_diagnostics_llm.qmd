@@ -58,8 +58,7 @@ parcel_feasibility <- tar_read(parcel_feasibility)
 parcel_feasibility_summary <- tar_read(parcel_feasibility_summary)
 parcel_geographic_coverage <- tar_read(parcel_geographic_coverage)
 
-# Tuning values actually used by this run (not re-sourced from the raw config
-# files) — read straight from the constructed specs.
+# Tuning values actually used by this run, read from the constructed specs.
 target_spec <- tar_read(target_spec)
 sampler_spec <- tar_read(sampler_spec)
 discovery_spec <- tar_read(discovery_spec)

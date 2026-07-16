@@ -119,15 +119,11 @@ define_parcel_multichain_configs <- function(base_config,
 #' @param target_spec Target spec from `parcel_target_spec()`
 #' @param secondary_library Secondary block library
 #' @param lcc_library Discovered LCC library (shared across all chains)
-#' @param region_assignments Ignored, currently kept for backward compatibility only.
 #' @param initial_state Pre-generated initial parcel state from
-#'   generate_initial_states_from_lccs(). Replaces region-based BFS seeding.
+#'   generate_initial_states_from_lccs()
 #' @return List with parcel_samples, samples, stats, diagnostics, chain_id,
 #'         initialization_failed, failure_reason
 #' @export
-#' @param initial_state Pre-generated initial parcel state from
-#'   generate_initial_states_from_lccs(). Replaces region-based BFS seeding.
-#' @param region_assignments Ignored, kept for backward compatibility only.
 run_parcel_chain_from_region <- function(config,
                                          parcel_graph_result,
                                          target_spec,
@@ -161,9 +157,8 @@ run_parcel_chain_from_region <- function(config,
     initial_state <- initial_state[[1]]
   }
 
-  # Run parcel MCMC. enable_online_enrichment comes from sampler_spec (config)
-  # itself now — the default/lifted presets default it to TRUE, matching
-  # today's production behavior.
+  # Run parcel MCMC. enable_online_enrichment comes from the sampler_spec
+  # presets, which default it to TRUE.
   result <- run_parcel_mcmc(
     parcel_graph          = parcel_graph,
     initial_state         = initial_state,

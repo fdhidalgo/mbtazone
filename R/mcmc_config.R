@@ -62,11 +62,9 @@ parcel_target_spec <- function(district_data, capacity_prior_lambda, k_prior_lam
 
 #' Define the parcel MCMC discovery spec
 #'
-#' Bundles the tuning parameters for LCC and secondary library discovery
-#' (tree enumeration + BFS supplement). None of these fields affect the
-#' target distribution pi(state) — they only control how thoroughly the
-#' candidate-block libraries are explored before MCMC begins. Defaults
-#' mirror the values previously hardcoded in
+#' Bundles the tuning parameters for building the LCC and secondary block
+#' libraries: tree enumeration (Wilson's algorithm) plus a BFS supplement,
+#' for each library. Defaults mirror the values previously hardcoded in
 #' `inst/targets/temp_targets_parcel_config.R`.
 #'
 #' @param discovery_capacity_multiplier Discovery-only capacity bound
@@ -151,17 +149,15 @@ parcel_discovery_spec <- function(discovery_capacity_multiplier = 2.5,
 }
 
 # ============================================================================
-# GRAPH SPEC (Tier-2 parcel graph construction tuning)
+# GRAPH SPEC (Parcel graph construction tuning)
 # ============================================================================
 
 #' Define the parcel graph construction spec
 #'
-#' Bundles the tuning parameters for Tier-2 parcel graph construction
-#' (adjacency detection and optional macro-parcel aggregation). None of these
-#' fields affect the target distribution pi(state), proposal tuning, or
-#' library discovery — this runs before any of those exist. Defaults mirror
-#' the values previously hardcoded in `build_adjacency_graph()` and
-#' `inst/targets/temp_targets_config.R`/`temp_targets_parcel_config.R`.
+#' Bundles the tuning for parcel graph construction: adjacency
+#' detection (`build_adjacency_graph()`) and optional macro-parcel
+#' aggregation (`build_parcel_graph_target()`). Runs before the parcel graph
+#' or any MCMC objects exist.
 #'
 #' @param max_dist_ft Maximum boundary-to-boundary distance (ft) for two
 #'   parcels to be considered for adjacency
