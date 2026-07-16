@@ -10,7 +10,11 @@ bfs_grow_block_ctx(
   target_min,
   target_max = Inf,
   target_exact = NULL,
-  check_max_before_add = FALSE
+  check_max_before_add = FALSE,
+  density_aware = FALSE,
+  min_density = NULL,
+  beta = 8,
+  doom_min_density = NULL
 )
 }
 \arguments{
@@ -25,16 +29,54 @@ bfs_grow_block_ctx(
 \item{target_exact}{Optional exact target to grow toward}
 
 \item{check_max_before_add}{Logical: if TRUE, reject additions exceeding target_max}
+
+\item{density_aware}{Logical: if TRUE, use the density-preserving frontier
+strategy described above. Requires \code{ctx$metric2_by_id} (area) and
+\code{min_density}. Default FALSE (uniform-random frontier).}
+
+\item{min_density}{Minimum aggregate density to maintain at every step when
+\code{density_aware = TRUE} (capacity per area, e.g. 15 du/acre).}
+
+\item{beta}{Softmax temperature on the per-candidate density surplus when
+\code{density_aware = TRUE}; larger is greedier toward denser additions.}
+
+\item{doom_min_density}{Optional density floor (capacity per area) that the
+finished block must meet. Only used by the random (non-density-aware) path,
+and only when \code{check_max_before_add = TRUE} with a finite
+\code{target_max}: under those conditions the final capacity cannot exceed
+\code{target_max} while area only grows, so the moment
+\code{target_max / current_area} drops below this floor no continuation of
+the attempt can ever satisfy the density requirement — the grow aborts with
+\code{success = FALSE, doomed = TRUE}. The prune is exact: an attempt that
+would have produced a density-passing block is never truncated (its
+intermediate area always satisfies \code{target_max / area >= floor}), and
+such attempts consume the identical RNG sequence. Requires a context built
+with \code{metric2_lookup} (area). Default NULL (no pruning).}
 }
 \value{
-Same list shape as \code{\link{bfs_grow_block}}
+Same list shape as \code{\link{bfs_grow_block}}, plus
+\code{doomed = TRUE} when the grow was abandoned by the
+\code{doom_min_density} prune.
 }
 \description{
 Integer-indexed reimplementation of the \code{bfs_grow_block()} inner loop
-that operates on a precomputed \code{\link{bfs_build_context}} object. It
-reproduces the character-vector implementation exactly — same frontier order,
-same \code{sample.int()} draw sequence, same returned block — but replaces the
-per-step \code{igraph::neighbors()} calls and character \code{setdiff}/
-\code{intersect}/\code{unique} with integer lookups and logical-mask filters.
+that operates on a precomputed \code{\link{bfs_build_context}} object. With the
+default \code{density_aware = FALSE} it reproduces the character-vector
+implementation exactly — same frontier order, same \code{sample.int()} draw
+sequence, same returned block — but replaces the per-step
+\code{igraph::neighbors()} calls and character \code{setdiff}/\code{intersect}/
+\code{unique} with integer lookups and logical-mask filters.
+}
+\details{
+With \code{density_aware = TRUE} the only change is the frontier choice: instead
+of a uniform-random pick, the grower restricts the frontier to neighbors that
+keep the block's aggregate density (capacity / area) at or above
+\code{min_density}, then samples among them with a softmax weight that favors
+the densest additions. Every other step — seeding, the \code{target_max}
+pre-add check, neighbor bookkeeping, the success test — is identical. This
+makes connected blocks that stay dense as they grow, which random growth
+dilutes below \code{min_density} before reaching the capacity target in towns
+where dense parcels are scarce and scattered. It requires a context built with
+\code{metric2_lookup} (area) alongside the capacity \code{metric_lookup}.
 }
 \keyword{internal}

@@ -14,5 +14,5 @@ List matching build_parcel_graph_target() structure for API compatibility
 }
 \description{
 Creates a parcel graph where each parcel is its own unit.
-Used when MACRO_SCALE = 0 for raw parcel-level analysis.
+Used when graph_spec$macro_scale = 0 for raw parcel-level analysis.
 }

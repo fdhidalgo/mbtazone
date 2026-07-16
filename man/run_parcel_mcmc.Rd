@@ -7,18 +7,12 @@
 run_parcel_mcmc(
   parcel_graph,
   initial_state,
-  constraints,
+  target_spec,
   secondary_library,
   lcc_library,
-  config,
+  sampler_spec,
   parcel_assignments,
   neighbor_cache = NULL,
-  enable_online_enrichment = ENABLE_ONLINE_ENRICHMENT,
-  enrichment_interval = ONLINE_ENRICHMENT_INTERVAL,
-  max_online_entries = ONLINE_MAX_ENTRIES,
-  enrichment_burn_in = ENRICHMENT_BURN_IN,
-  max_stored_samples = SAMPLE_MAX_STORED,
-  store_lcc_signatures = STORE_LCC_SIGNATURES,
   verbose = TRUE
 )
 }
@@ -27,29 +21,19 @@ run_parcel_mcmc(
 
 \item{initial_state}{Initial parcel state}
 
-\item{constraints}{MBTA constraints}
+\item{target_spec}{Target spec from \code{parcel_target_spec()} (hard
+constraints + capacity/k priors)}
 
 \item{secondary_library}{Secondary library}
 
 \item{lcc_library}{LCC library}
 
-\item{config}{Kernel configuration}
+\item{sampler_spec}{Sampler spec from \code{parcel_sampler_spec()} (kernel mix,
+proposal tuning, debug flag)}
 
 \item{parcel_assignments}{data.table for parcel conversion}
 
 \item{neighbor_cache}{Optional named list of precomputed neighbors}
-
-\item{enable_online_enrichment}{Enable online LCC library enrichment}
-
-\item{enrichment_interval}{Add current LCC to library every N steps}
-
-\item{max_online_entries}{Maximum online entries (FIFO eviction)}
-
-\item{enrichment_burn_in}{If set, freeze library after this many steps}
-
-\item{max_stored_samples}{Max thinned samples to store (adaptive thinning)}
-
-\item{store_lcc_signatures}{Store LCC signatures for discovery deduplication}
 
 \item{verbose}{Print progress}
 }

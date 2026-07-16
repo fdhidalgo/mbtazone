@@ -4,12 +4,13 @@
 \alias{identify_atomic_parcels}
 \title{Identify parcels to preserve as singleton units}
 \usage{
-identify_atomic_parcels(g, area_threshold = MACRO_ATOMIC_THRESHOLD)
+identify_atomic_parcels(g, area_threshold)
 }
 \arguments{
 \item{g}{igraph object with area vertex attribute}
 
-\item{area_threshold}{Minimum area (acres) for singleton treatment}
+\item{area_threshold}{Minimum area (acres) for singleton treatment
+(typically \code{graph_spec$macro_atomic_threshold})}
 }
 \value{
 Character vector of parcel IDs (LOC_IDs) to freeze as singletons

@@ -7,9 +7,9 @@
 build_adjacency_graph(
   geometry_sf,
   right_of_way_sf = NULL,
-  max_dist_ft = 120,
-  touch_threshold_ft = 2,
-  min_coverage_ratio = 0.9,
+  max_dist_ft,
+  touch_threshold_ft,
+  min_coverage_ratio,
   verbose = TRUE
 )
 }
@@ -19,14 +19,14 @@ build_adjacency_graph(
 \item{right_of_way_sf}{Optional sf with ROW polygons}
 
 \item{max_dist_ft}{Maximum boundary-to-boundary distance (ft) for any
-connection — controls both candidate generation and the nearest-points cap.
-Default 120 ft.}
+connection — controls both candidate generation and the nearest-points
+cap (typically \code{graph_spec$max_dist_ft})}
 
 \item{touch_threshold_ft}{Distance (ft) below which parcels are considered
-directly touching (default 2 ft)}
+directly touching (typically \code{graph_spec$touch_threshold_ft})}
 
 \item{min_coverage_ratio}{Minimum fraction of nearest-points line within ROW
-to accept a cross-ROW connection (default 0.9)}
+to accept a cross-ROW connection (typically \code{graph_spec$min_coverage_ratio})}
 
 \item{verbose}{Print progress messages}
 }

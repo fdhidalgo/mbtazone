@@ -8,7 +8,9 @@ select_initial_secondary_blocks(
   lcc_parcels,
   library,
   parcel_graph,
-  constraints
+  constraints,
+  k_prior_lambda,
+  lcc_neighbor_names = NULL
 )
 }
 \arguments{
@@ -24,6 +26,24 @@ select_initial_secondary_blocks(
 Integer vector of selected block IDs
 }
 \description{
-Greedily selects secondary blocks that are disjoint and non-adjacent to
-both the LCC and each other, targeting approximately 50\% LCC fraction.
+Greedily selects secondary blocks that are disjoint and non-adjacent to both
+the LCC and each other, in two phases:
+\enumerate{
+\item Station phase (only when the LCC alone does not cover the town's station
+capacity/area requirement): add station-dense blocks — ranked by station
+coverage per unit capacity, so the gap closes with the least capacity
+bloat — until the shortfall is covered. This is what lets the seeder
+satisfy the station rule deterministically instead of by luck; it is also
+why a station-deficient high-capacity LCC is \emph{not} short-circuited to zero
+secondaries (see below).
+\item Capacity phase (only when the LCC is below min_capacity): the original
+geometric-prior random fill, adding a handful of blocks to cross the
+capacity threshold.
+}
+}
+\details{
+For a non-station-deficient LCC the station phase is a no-op, so behaviour is
+identical to the pre-station logic: a high-capacity LCC gets zero secondaries
+(the birth/death kernel adds them from a clean low-capacity start), and a
+low-capacity LCC gets the geometric-prior random fill.
 }

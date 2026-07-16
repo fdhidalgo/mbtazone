@@ -6,20 +6,23 @@
 \usage{
 build_parcel_graph_target(
   adjacency_graph,
-  target_area_min = MACRO_TARGET_AREA_MIN,
-  target_area_max = MACRO_TARGET_AREA_MAX,
-  atomic_threshold = MACRO_ATOMIC_THRESHOLD,
+  target_area_min,
+  target_area_max,
+  atomic_threshold,
   seed = 123
 )
 }
 \arguments{
 \item{adjacency_graph}{igraph object (raw parcel graph)}
 
-\item{target_area_min}{Minimum unit area (acres)}
+\item{target_area_min}{Minimum unit area (acres), typically
+\code{graph_spec$macro_base_area_min * graph_spec$macro_scale}}
 
-\item{target_area_max}{Maximum unit area (acres)}
+\item{target_area_max}{Maximum unit area (acres), typically
+\code{graph_spec$macro_base_area_max * graph_spec$macro_scale}}
 
-\item{atomic_threshold}{Area threshold for singleton preservation}
+\item{atomic_threshold}{Area threshold for singleton preservation
+(typically \code{graph_spec$macro_atomic_threshold})}
 
 \item{seed}{Random seed}
 }

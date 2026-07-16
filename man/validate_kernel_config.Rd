@@ -13,6 +13,7 @@ validate_kernel_config(config)
 TRUE if valid, error otherwise
 }
 \description{
-Checks that all 4 kernel probabilities are present, sum to 1, and are non-negative.
+Checks that all 4 kernel probabilities are present, sum to 1, and are
+non-negative, and that the non-kernel-mix tuning fields are present.
 Required kernels: lcc_local, symmetric_birth_death, swap, replace_lcc.
 }
