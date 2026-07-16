@@ -12,7 +12,7 @@ define_parcel_multichain_configs(
 )
 }
 \arguments{
-\item{base_config}{Base kernel configuration (from define_parcel_kernel_configs())}
+\item{base_config}{Base sampler spec (from \code{parcel_sampler_spec()}/presets)}
 
 \item{n_chains}{Number of chains to run (default 4)}
 

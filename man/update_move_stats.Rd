@@ -4,17 +4,21 @@
 \alias{update_move_stats}
 \title{Update move statistics from kernel result}
 \usage{
-update_move_stats(stats, mt, result)
+update_move_stats(counts, mt, result)
 }
 \arguments{
-\item{stats}{data.table with move statistics}
+\item{counts}{Environment of named integer counter vectors (n_attempted,
+n_proposed, n_feasible, n_accepted), each keyed by move_type. Mutating an
+environment field avoids data.table NSE overhead in the per-step hot loop;
+the counts are materialized back into the \code{stats} data.table after the
+loop. This is a pure diagnostic counter (does not affect RNG or samples).}
 
 \item{mt}{Character string identifying the move type}
 
 \item{result}{List returned by a move kernel}
 }
 \value{
-Invisibly returns stats (modified by reference)
+Invisibly returns counts (modified by reference)
 }
 \description{
 Common stat-tracking pattern extracted to reduce code duplication.

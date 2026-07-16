@@ -4,10 +4,13 @@
 \alias{compute_parcel_multichain_rhat}
 \title{Compute multi-chain R-hat for parcel metrics}
 \usage{
-compute_parcel_multichain_rhat(chain_results)
+compute_parcel_multichain_rhat(chain_results, mcmc_burn_in)
 }
 \arguments{
 \item{chain_results}{List of parcel chain results from run_parcel_chain_from_region()}
+
+\item{mcmc_burn_in}{Number of leading samples to discard from each chain's
+trajectory before computing R-hat (typically \code{sampler_spec$mcmc_burn_in})}
 }
 \value{
 data.table with columns: metric, rhat, rhat_upper, n_eff

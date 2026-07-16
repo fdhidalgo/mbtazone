@@ -9,6 +9,7 @@ secondary_swap_move(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
   cap_tolerance = 50,
   neighbor_idx = NULL
 )

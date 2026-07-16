@@ -4,10 +4,13 @@
 \alias{compute_multichain_ess}
 \title{Compute ESS using coda::effectiveSize for mcmc.list}
 \usage{
-compute_multichain_ess(valid_chains)
+compute_multichain_ess(valid_chains, mcmc_burn_in)
 }
 \arguments{
 \item{valid_chains}{List of valid chain results}
+
+\item{mcmc_burn_in}{Number of leading samples to discard from each chain's
+trajectory before computing ESS (typically \code{sampler_spec$mcmc_burn_in})}
 }
 \value{
 Named list of ESS values per metric
