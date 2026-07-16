@@ -13,6 +13,8 @@ discover_lccs_single_band(
   max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
   forbidden_parcels = NULL,
   existing_keys = character(0),
+  time_budget_s = 900,
+  stall_attempts = 150L,
   verbose = TRUE
 )
 }
@@ -37,6 +39,19 @@ Default: LCC_BAND_MAX_ATTEMPTS.}
 
 \item{existing_keys}{Character vector of xxhash64 keys to skip. Default: character(0).}
 
+\item{time_budget_s}{Hard wall-clock budget in seconds for this band, shared
+across both passes. Bands whose acceptance rate is ~0 (high-capacity bands
+in low-density towns) previously ran the full attempt budget at unbounded
+per-attempt cost — observed up to 7.8 hours for a single band that found
+nothing. When the budget is hit the band returns what it has and sets
+\code{band_stats$budget_exhausted}. Default: 900.}
+
+\item{stall_attempts}{Consecutive attempts without a single constraint-valid
+candidate before a pass gives up. Pass 1 hands over to the density-aware
+Pass 2 (the strategy actually suited to sparse towns); if Pass 2 stalls
+with nothing found, the band is declared empirically unreachable
+(\code{band_stats$unreachable}). Default: 150.}
+
 \item{verbose}{Print progress. Default: TRUE.}
 }
 \value{
@@ -45,7 +60,10 @@ List with:
 \item discovered_lccs: data.table with lcc_key, parcel_ids, capacity, area,
 capacity_band, tree_count = 0, source = "bfs_stratified"
 \item band_stats: single-row data.table with band, cap_low, cap_high, attempts,
-valid, unique_found
+valid, unique_found, da_attempts (density-aware fallback attempts),
+da_found (LCCs the fallback added), elapsed_s, doomed_attempts
+(attempts abandoned by the exact density prune), budget_exhausted,
+unreachable
 }
 }
 \description{
@@ -56,4 +74,14 @@ to be called in parallel via targets dynamic branching (one target per band).
 Seeds BFS from high-density parcels (capacity/area >= min_density) to
 dramatically improve hit rate vs random seeding. BFS can still grow through
 any eligible parcel — only the seed selection is filtered.
+
+Runs in two passes. Pass 1 is the historical random, density-blind BFS. If it
+cannot fill the band within \code{max_attempts_per_band} (small towns where
+dense parcels are scarce and scattered, so random growth dilutes density below
+\code{min_density} before reaching the capacity target), Pass 2 retries with
+density-preserving frontier selection (\code{bfs_grow_block(density_aware =
+TRUE)}). Pass 2 is a no-op whenever Pass 1 fills the band, so towns whose
+libraries already saturate draw the identical random sequence and are
+byte-identical; \code{band_stats$da_attempts}/\code{da_found} record when it
+fires.
 }

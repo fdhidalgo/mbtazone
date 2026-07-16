@@ -7,7 +7,7 @@
 run_parcel_chain_from_region(
   config,
   parcel_graph_result,
-  constraints,
+  target_spec,
   secondary_library,
   lcc_library,
   initial_state,
@@ -19,7 +19,7 @@ run_parcel_chain_from_region(
 
 \item{parcel_graph_result}{Result from build_parcel_graph_target()}
 
-\item{constraints}{MBTA constraints}
+\item{target_spec}{Target spec from \code{parcel_target_spec()}}
 
 \item{secondary_library}{Secondary block library}
 

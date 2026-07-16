@@ -10,6 +10,7 @@ discover_lccs_from_trees(
   n_trees = 500L,
   forbidden_parcels = NULL,
   max_discovery_capacity = NULL,
+  max_unique_lccs = Inf,
   verbose = TRUE
 )
 }
@@ -23,7 +24,8 @@ discover_lccs_from_trees(
 \item{forbidden_parcels}{Optional character vector of parcels to exclude from LCCs}
 
 \item{max_discovery_capacity}{Optional upper bound on LCC capacity for discovery.
-LCCs above this are skipped. Default: min_capacity * DISCOVERY_CAPACITY_MULTIPLIER.}
+LCCs above this are skipped. NULL disables the bound. Callers typically pass
+\code{constraints$min_capacity * discovery_spec$discovery_capacity_multiplier}.}
 
 \item{verbose}{Print progress (default TRUE)}
 }

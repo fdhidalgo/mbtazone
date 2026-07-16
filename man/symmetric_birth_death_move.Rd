@@ -9,6 +9,9 @@ symmetric_birth_death_move(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
+  k_prior_lambda,
+  birth_tilt_lambda,
   neighbor_idx = NULL
 )
 }

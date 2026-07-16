@@ -4,11 +4,7 @@
 \alias{compute_parcel_attributes}
 \title{Compute aggregated attributes for each unit}
 \usage{
-compute_parcel_attributes(
-  g,
-  parcel_assignments,
-  atomic_threshold = MACRO_ATOMIC_THRESHOLD
-)
+compute_parcel_attributes(g, parcel_assignments, atomic_threshold)
 }
 \arguments{
 \item{g}{igraph object with area and capacity vertex attributes}

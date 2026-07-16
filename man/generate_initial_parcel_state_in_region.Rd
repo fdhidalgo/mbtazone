@@ -10,6 +10,8 @@ generate_initial_parcel_state_in_region(
   libraries,
   region_assignments,
   target_region,
+  k_prior_lambda,
+  discovery_capacity_multiplier,
   seed_pool = NULL,
   max_restarts = 100,
   seed_with_secondaries = FALSE

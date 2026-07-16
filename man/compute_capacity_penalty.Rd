@@ -4,14 +4,14 @@
 \alias{compute_capacity_penalty}
 \title{Compute capacity prior penalty for a state}
 \usage{
-compute_capacity_penalty(capacity, min_cap, lambda = NULL)
+compute_capacity_penalty(capacity, min_cap, lambda)
 }
 \arguments{
 \item{capacity}{Current total capacity}
 
 \item{min_cap}{Minimum capacity constraint}
 
-\item{lambda}{Penalty strength (default: CAPACITY_PRIOR_LAMBDA from config)}
+\item{lambda}{Penalty strength (\code{target_spec$priors$capacity_prior_lambda})}
 }
 \value{
 Numeric penalty value (>= 0, where 0 means at minimum)

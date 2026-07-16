@@ -7,6 +7,7 @@
 create_parcel_irreducibility_report(
   chain_results,
   parcel_graph,
+  mcmc_burn_in,
   region_assignments = NULL
 )
 }
@@ -14,6 +15,9 @@ create_parcel_irreducibility_report(
 \item{chain_results}{List of parcel chain results}
 
 \item{parcel_graph}{igraph object}
+
+\item{mcmc_burn_in}{Number of leading samples to discard from each chain's
+trajectory before computing R-hat (typically \code{sampler_spec$mcmc_burn_in})}
 
 \item{region_assignments}{Region partition}
 }

@@ -4,14 +4,14 @@
 \alias{compute_birth_tilt_weights}
 \title{Compute capacity-tilted weights for birth proposals}
 \usage{
-compute_birth_tilt_weights(block_ids, library, tilt_lambda = NULL)
+compute_birth_tilt_weights(block_ids, library, tilt_lambda)
 }
 \arguments{
 \item{block_ids}{Integer vector of addable block IDs}
 
 \item{library}{Secondary library with $metadata$capacity}
 
-\item{tilt_lambda}{Tilt strength (default: BIRTH_TILT_LAMBDA)}
+\item{tilt_lambda}{Tilt strength (\code{sampler_spec$birth_tilt_lambda})}
 }
 \value{
 List with weights, log_weights, log_sum_w, valid
