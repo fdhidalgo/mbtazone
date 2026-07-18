@@ -384,10 +384,12 @@ run_parcel_mcmc <- function(
   # st_union per block, amortised over all MCMC proposals). Non-local kernels
   # (birth/death, swap, replace-LCC) update state$total_gis_area with O(1)
   # arithmetic; local moves still call compute_gis_density_denom() directly.
-  if (!"gis_area" %in% names(secondary_library$metadata)) {
+  if (!"gis_area" %in% names(secondary_library$metadata) ||
+      anyNA(secondary_library$metadata$gis_area)) {
     secondary_library <- enrich_library_with_gis_areas(secondary_library, constraints)
   }
-  if (!"gis_area" %in% names(lcc_library$metadata)) {
+  if (!"gis_area" %in% names(lcc_library$metadata) ||
+      anyNA(lcc_library$metadata$gis_area)) {
     lcc_library <- enrich_library_with_gis_areas(lcc_library, constraints)
   }
 
