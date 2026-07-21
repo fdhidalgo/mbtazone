@@ -462,7 +462,10 @@ list(
 
   tar_target(
     parcel_initial_states,
-    parcel_initial_states_k_pos
+    {
+      parcel_feasibility_summary
+      parcel_initial_states_k_pos
+    }
   ),
 
   # Splits the list into branchable elements
