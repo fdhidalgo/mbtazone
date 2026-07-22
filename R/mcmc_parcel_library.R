@@ -2004,7 +2004,8 @@ build_secondary_library_from_discovery <- function(
     combined_discovered,
     parcel_graph,
     max_library_size = 500L,
-    bfs_reservation = 100L
+    bfs_reservation = 100L,
+    constraints = NULL
 ) {
   # Handle both list wrapper and direct data.table input
   if (is.list(combined_discovered) && !data.table::is.data.table(combined_discovered)) {
@@ -2126,6 +2127,21 @@ build_secondary_library_from_discovery <- function(
     size_bands <- rep("discovered", n_blocks)
   }
 
+  # Compute gis_area for each block (blocks still contains parcel ID character vectors here)
+  if (!is.null(constraints)) {
+    cli::cli_alert_info("Computing GIS density denominator for {n_blocks} secondary blocks...")
+    gis_areas <- vapply(blocks, function(parcel_ids) {
+      tryCatch(
+        compute_gis_density_denom(parcel_ids, constraints),
+        error = function(e) NA_real_
+      )
+    }, numeric(1))
+    n_computed <- sum(!is.na(gis_areas))
+    cli::cli_alert_info("  {n_computed}/{n_blocks} secondary blocks have valid gis_area")
+  } else {
+    gis_areas <- rep(NA_real_, n_blocks)
+  }
+
   # Build metadata
   metadata <- data.table::data.table(
     block_id = seq_len(n_blocks),
@@ -2135,7 +2151,7 @@ build_secondary_library_from_discovery <- function(
     size_band = size_bands,
     density = selected$capacity / selected$area,
     source = block_sources,
-    gis_area = rep(NA_real_, n_blocks)
+    gis_area = gis_areas
   )
 
   # Store blocks as integer indices

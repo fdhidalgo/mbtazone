@@ -403,7 +403,8 @@ list(
       combined_discovered = combined_discovered_secondaries,
       parcel_graph = parcel_graph_result$parcel_graph,
       max_library_size = discovery_spec$sec_library_max_size,
-      bfs_reservation = discovery_spec$bfs_reservation_sec
+      bfs_reservation = discovery_spec$bfs_reservation_sec,
+      constraints = target_spec$constraints
     )
   ),
 

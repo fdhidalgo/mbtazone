@@ -1923,6 +1923,11 @@ replace_lcc_move <- function(
       constraint_failed = feasibility$constraint_failed
     ))
   }
+  # If total_gis_area is NULL (e.g. a secondary block has NA gis_area in the
+  # library), recover the value  computed in check_hard_constraints_only
+  if (is.null(new_state$total_gis_area) && !is.null(feasibility$gis_area)) {
+    new_state$total_gis_area <- feasibility$gis_area
+  }
 
   # Step 6: Compute MH ratio
   # Reverse candidate set mirrors forward: all active LCCs, same pre-filters.
