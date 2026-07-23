@@ -1932,6 +1932,17 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
   centroid_y <- vapply(blocks_idx, function(ix)
     mean(centroid_y_v[ix]), numeric(1))
 
+  cli::cli_alert_info("Computing GIS density denominator for {n_blocks} LCC blocks...")
+  gis_area <- vapply(blocks, function(parcel_ids) {
+    tryCatch(
+      compute_gis_density_denom(parcel_ids, constraints),
+      error = function(e) NA_real_
+    )
+  }, numeric(1))
+  cli::cli_alert_info(
+    "  {sum(!is.na(gis_area))}/{n_blocks} LCC blocks have valid gis_area"
+  )
+
   metadata <- data.table::data.table(
     block_id            = seq_len(n_blocks),
     area                = selected$area,
@@ -1944,7 +1955,8 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     area_in_station     = area_in_station,
     capacity_in_station = capacity_in_station,
     centroid_x          = centroid_x,
-    centroid_y          = centroid_y
+    centroid_y          = centroid_y,
+    gis_area            = gis_area
   )
 
   # Store blocks as integer indices into parcel_names (reuse the map built above)
