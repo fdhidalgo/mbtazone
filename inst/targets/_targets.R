@@ -188,6 +188,7 @@ list(
       n_trees                = TREE_LCC_N_TREES,
       forbidden_parcels      = NULL,
       max_discovery_capacity = constraints$min_capacity * DISCOVERY_CAPACITY_MULTIPLIER,
+      max_unique_lccs        = LCC_DISCOVERY_MAX_UNIQUE,
       verbose                = TRUE
     )
   ),
@@ -240,6 +241,8 @@ list(
       max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
       forbidden_parcels = NULL,
       existing_keys = existing_lcc_keys,
+      time_budget_s = LCC_BAND_TIME_BUDGET_S,
+      stall_attempts = LCC_BAND_STALL_ATTEMPTS,
       verbose = TRUE
     ),
     pattern = map(bfs_band_grid),
@@ -499,17 +502,17 @@ list(
     mcmc_plan_export,
     {
       dt <- export_mcmc_plans(
-        chain_results     = all_parcel_chain_results,
+        chain_results       = all_parcel_chain_results,
         parcel_graph_result = parcel_graph_result,
-        secondary_library = discovered_secondary_library,
-        district_name     = district_name,
-        n_samples         = 100L,
-        seed              = 42L
+        secondary_library   = discovered_secondary_library,
+        district_name       = district_name,
+        burn_in             = 0L,
+        n_samples           = Inf
       )
       out_path <- paste0("ext/exports/",
-                         gsub(" ", "_", district_name), "_plans.csv")
-      data.table::fwrite(dt, out_path)
-      dt  # also store in targets cache for downstream use
+                         gsub(" ", "_", district_name), "_plans.rds")
+      saveRDS(dt, out_path)
+      dt
     }
   ),
 

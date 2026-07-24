@@ -1242,13 +1242,10 @@ evaluate_compliance <- function(municipality,
     }
   }
 
-  # Merge district assignments
-  parcels_with_capacity$district_id <- district_assignments$district_id[
-    match(parcels_with_capacity$LOC_ID, district_assignments$LOC_ID)
-  ]
-  parcels_with_capacity$district_name <- district_assignments$district_name[
-    match(parcels_with_capacity$LOC_ID, district_assignments$LOC_ID)
-  ]
+  # Merge district assignments (match once, reuse for id and name)
+  assignment_idx <- match(parcels_with_capacity$LOC_ID, district_assignments$LOC_ID)
+  parcels_with_capacity$district_id <- district_assignments$district_id[assignment_idx]
+  parcels_with_capacity$district_name <- district_assignments$district_name[assignment_idx]
 
   # Step 3: Calculate district-level metrics
   if (verbose) cli::cli_alert("Calculating district-level metrics...")
@@ -1260,39 +1257,44 @@ evaluate_compliance <- function(municipality,
     )
   }
 
+  # Drop geometry once: the per-district metrics below use only non-geometry
+  # columns. Subsetting the full sf object (with its geometry list-column) inside
+  # the loop forces [.sf to reprocess geometry on every call; a plain data.frame
+  # subset is far cheaper. The non-precomputed gross-density branch still needs
+  # geometry, so it subsets the original sf object via the same logical mask.
+  metrics_df <- sf::st_drop_geometry(parcels_with_capacity)
+
   district_metrics_list <- lapply(unique_districts, function(dist_id) {
-    district_parcels <- parcels_with_capacity[
-      !is.na(parcels_with_capacity$district_id) &
-        parcels_with_capacity$district_id == dist_id,
-    ]
+    in_district <- !is.na(metrics_df$district_id) &
+      metrics_df$district_id == dist_id
+
+    # Pull only the columns the metrics need, masked once. Avoids copying the
+    # full ~30-column data.frame (metrics_df[in_district, ]) just to sum 5 fields.
+    final_capacity <- metrics_df$final_unit_capacity[in_district]
+    acres <- metrics_df$ACRES[in_district]
+    dev_area <- metrics_df$developable_area[in_district]
+    in_sa <- metrics_df$in_station_area[in_district]
 
     # Total metrics
-    total_units <- sum(district_parcels$final_unit_capacity, na.rm = TRUE)
-    total_acres <- sum(district_parcels$ACRES, na.rm = TRUE)
-    developable_acres <- sum(district_parcels$developable_area / 43560, na.rm = TRUE)
+    total_units <- sum(final_capacity, na.rm = TRUE)
+    total_acres <- sum(acres, na.rm = TRUE)
+    developable_acres <- sum(dev_area / 43560, na.rm = TRUE)
 
     # Station area metrics
-    station_area_units <- sum(
-      district_parcels$final_unit_capacity[district_parcels$in_station_area],
-      na.rm = TRUE
-    )
-    station_area_acres <- sum(
-      district_parcels$ACRES[district_parcels$in_station_area],
-      na.rm = TRUE
-    )
-    developable_station_acres <- sum(
-      district_parcels$developable_area[district_parcels$in_station_area] / 43560,
-      na.rm = TRUE
-    )
+    station_area_units <- sum(final_capacity[in_sa], na.rm = TRUE)
+    station_area_acres <- sum(acres[in_sa], na.rm = TRUE)
+    developable_station_acres <- sum(dev_area[in_sa] / 43560, na.rm = TRUE)
 
     # Gross density denominator calculation
-    if (precomputed && "density_deduction_area" %in% names(district_parcels)) {
+    if (precomputed && "density_deduction_area" %in% names(metrics_df)) {
       # Precomputed mode: use per-parcel deduction areas
-      deduction_area_acres <- sum(district_parcels$density_deduction_area / 43560, na.rm = TRUE)
+      deduction_area_acres <- sum(
+        metrics_df$density_deduction_area[in_district] / 43560, na.rm = TRUE
+      )
       gross_density_denominator <- total_acres - deduction_area_acres
     } else if (!is.null(density_deductions)) {
-      # Standard mode: calculate spatial intersection
-      district_geom <- sf::st_union(district_parcels)
+      # Standard mode: calculate spatial intersection (needs geometry)
+      district_geom <- sf::st_union(parcels_with_capacity[in_district, ])
       deductions_in_district <- sf::st_intersection(
         sf::st_make_valid(district_geom),
         sf::st_make_valid(density_deductions)
@@ -1324,7 +1326,7 @@ evaluate_compliance <- function(municipality,
       station_area_units = station_area_units,
       station_area_acres = station_area_acres,
       developable_station_acres = developable_station_acres,
-      n_parcels = nrow(district_parcels)
+      n_parcels = sum(in_district)
     )
   })
 

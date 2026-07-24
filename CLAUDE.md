@@ -6,12 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The `mbtazone` package implements Massachusetts' MBTA Communities Act compliance model in R, providing automated zoning compliance assessment tools. The package replaces manual Excel-based workflows with robust R code featuring comprehensive calculation functions, GIS operations, and validation against Excel model outputs.
 
-**Current Status (May 2026):**
+**Current Status (June 2026):**
 
 - Core compliance calculation engine: ✅ Complete
 - Excel regression testing: ✅ Complete (27 communities validated across all 4 community types)
 - GIS operations: ✅ Complete
 - MCMC parcel-level zoning optimizer: 🔧 Active development (Killian Conyngham, merged to master via PR #4 `mcmc-packaging`) — 17 modules, ~11.5K lines
+- MCMC pipeline data loading: 🔧 Now reads per-municipality GeoPackages from the external `mbta-data-pipeline` (PR #6 `data-pipeline-integration`); single-zone municipalities only (multi-district support pending)
 - `targets` pipeline for multi-district batch runs: 🔧 Active development
 - Quarto diagnostics reports: 🔧 Active development
 - Documentation: ✅ Complete for compliance engine (~75 exported functions total)
@@ -45,7 +46,7 @@ A parcel-level MCMC sampler that searches for zoning district configurations mee
 
 | Module | Purpose |
 |--------|---------|
-| `mcmc_data_loading.R` | `load_district_data()`, `get_district_paths()` — generalized data loading for any district |
+| `mcmc_data_loading.R` | `load_district_data()`, `get_district_paths()` — loads per-municipality GeoPackages (`parcels` + `districts` layers) built by the external `mbta-data-pipeline`; parcels carry pipeline-computed `SQFT`, `Tot_Exclud`, and capacity |
 | `mcmc_config.R` | `define_constraints()` — derives MCMC constraints from community requirements |
 | `mcmc_graph_building.R` | `build_adjacency_graph()` — parcel adjacency from spatial buffers |
 | `mcmc_parcel_construction.R` | `build_parcel_graph_target()` — enriches graph with capacity/area attributes |
@@ -99,9 +100,11 @@ R -e "devtools::check()"
 
 ### Running the MCMC Pipeline (targets)
 
-The MCMC pipeline uses `targets` with per-district target stores in `ext/_targets_{DistrictName}/`.
+The MCMC pipeline uses `targets` with per-district target stores in `ext/_targets_{DistrictName}/`. It loads each district from a pre-built GeoPackage produced by the external `mbta-data-pipeline` (one `.gpkg` per municipality, named `{District_Name}.gpkg`), **not** from the `inst/extdata/parcels/` shapefile ZIPs (those still drive the compliance-engine tests).
 
-**Machine-specific paths:** Before running `inst/targets/_targets.R`, set `MBTAZONE_DATA_ROOT` (MBTA data tree) and `MBTAZONE_RIGHT_OF_WAY` (absolute path to `Excluded_Land_Right_of_Way.shp`). Optionally set `MBTAZONE_PARCELS_SUBDIR` if parcel ZIPs are not under `land_record_shapefiles/basic` (for example `Municipality_Parcel_Data`). Copy [`inst/targets/.Renviron.example`](inst/targets/.Renviron.example) to the package root as `.Renviron` (gitignored) or to `~/.Renviron`. See `?mbtazone_pipeline_paths`. For `run_all_districts.R`, run from the package root or set `MBTAZONE_PACKAGE_ROOT`.
+**Machine-specific paths:** Before running `inst/targets/_targets.R`, set `MBTAZONE_PIPELINE_DATA` (directory of per-municipality `.gpkg` files) and `MBTAZONE_RIGHT_OF_WAY` (absolute path to `Excluded_Land_Right_of_Way.shp`, still required for the adjacency graph). Optionally set `MBTAZONE_PACKAGE_ROOT` for `run_all_districts.R` / `run_all_single_zone.R` when not run from the package root. Copy [`inst/targets/.Renviron.example`](inst/targets/.Renviron.example) to the package root as `.Renviron` (gitignored) or to `~/.Renviron`. See `?mbtazone_pipeline_paths`.
+
+**Single-zone constraint:** The sampler currently supports only municipalities with exactly one zoning district. Multi-district municipalities are skipped pending multi-zone support. Use `check_single_zone_districts.R` to scan `MBTAZONE_PIPELINE_DATA` and write the eligible list, then `run_all_single_zone.R` to batch-run them.
 
 ```r
 # Run a single district (edit district_name/district_type in the script)
@@ -109,6 +112,10 @@ source("inst/targets/run_single_district.R")
 
 # Run all districts from community_info.csv
 source("inst/targets/run_all_districts.R")
+
+# Single-zone workflow: list eligible municipalities, then batch-run them
+source("inst/targets/check_single_zone_districts.R")
+source("inst/targets/run_all_single_zone.R")
 
 # Inspect targets for a district
 library(targets)
@@ -148,8 +155,11 @@ mbtazone/
 │   │   ├── .Renviron.example    # Template for machine-specific env vars
 │   │   ├── run_all_districts.R  # Batch run all districts
 │   │   ├── run_single_district.R # Run one district
+│   │   ├── check_single_zone_districts.R # Scan .gpkg dir for single-zone municipalities
+│   │   ├── run_all_single_zone.R # Batch run only single-zone municipalities
 │   │   ├── run_benchmark.R      # Benchmark harness for kernel configurations
 │   │   ├── destroy_all_district.R # Wipe all per-district target stores
+│   │   ├── destroy_selected_districts.R # Wipe selected per-district target stores
 │   │   ├── invalidate_all.R     # Invalidate (but keep) all target stores
 │   │   ├── path_resolution.R    # Sourced by _targets.R for path setup
 │   │   └── temp_targets_*.R     # Config files sourced by _targets.R

@@ -41,6 +41,5 @@ produced by the mbta-data-pipeline.
 For in-district parcels, capacity comes directly from the pipeline's
 pre-computed \code{final_lot_multi_family_unit_capacity}. For out-of-district
 parcels (where that field is NA), capacity is estimated by running
-\code{calculate_district_capacity()} under the most permissive district's zoning
-parameters (the district with the highest DU/AC — units per geometry acre).
+\code{calculate_district_capacity()} under the first district's zoning parameters.
 }

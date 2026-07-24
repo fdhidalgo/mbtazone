@@ -372,11 +372,7 @@ build_identity_parcel_graph <- function(g) {
   )
 
   # Build neighbor cache
-  unit_names <- igraph::V(parcel_graph)$name
-  neighbor_cache <- lapply(unit_names, function(m) {
-    igraph::neighbors(parcel_graph, m)$name
-  })
-  names(neighbor_cache) <- unit_names
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
 
   cli::cli_alert_success(
     "Created {n} units from {n} parcels (compression ratio: 1.0x)"
@@ -451,10 +447,8 @@ build_parcel_graph_target <- function(adjacency_graph,
   cli::cli_alert_success("Parcel graph: {n_units} vertices, {n_edges} edges (avg degree: {round(avg_degree, 1)})")
 
   # Step 5: Build neighbor cache for fast lookups during MCMC
-  unit_names <- igraph::V(parcel_graph)$name
-  neighbor_cache <- lapply(unit_names, function(m) igraph::neighbors(parcel_graph, m)$name)
-  names(neighbor_cache) <- unit_names
-  cli::cli_alert_info("Built neighbor cache for {length(unit_names)} units")
+  neighbor_cache <- build_neighbor_cache(parcel_graph)
+  cli::cli_alert_info("Built neighbor cache for {length(neighbor_cache)} units")
 
   list(
     parcel_graph = parcel_graph,

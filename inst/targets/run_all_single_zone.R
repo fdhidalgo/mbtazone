@@ -60,6 +60,14 @@ districts <- community_info[community_name %in% single_zone_names]
 
 skipped <- community_info[!community_name %in% single_zone_names]
 
+# Optional: start after a given community (alphabetical order, exclusive)
+# Set START_AFTER env var, e.g. Sys.setenv(START_AFTER = "Medford")
+start_after <- Sys.getenv("START_AFTER", unset = "")
+if (nzchar(start_after)) {
+  districts <- districts[community_name > start_after]
+  cat(sprintf("Resuming after '%s': %d communities remaining.\n", start_after, nrow(districts)))
+}
+
 cat(sprintf(
   "\nFound %d single-zone communities (skipping %d multi-zone or unmatched).\n\n",
   nrow(districts), nrow(skipped)

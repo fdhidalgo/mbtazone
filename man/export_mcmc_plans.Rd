@@ -9,7 +9,8 @@ export_mcmc_plans(
   parcel_graph_result,
   secondary_library,
   district_name,
-  n_samples = 100L,
+  burn_in = 0L,
+  n_samples = Inf,
   seed = 42L
 )
 }
@@ -22,9 +23,13 @@ export_mcmc_plans(
 
 \item{district_name}{Character district name for ID construction}
 
-\item{n_samples}{Number of plans to sample across all chains (default 100)}
+\item{burn_in}{Steps to treat as burn-in and exclude (default 0). Samples
+whose step index is <= burn_in are dropped before selection.}
 
-\item{seed}{Random seed for reproducibility (default 42)}
+\item{n_samples}{Number of post-burn-in plans to export. Use Inf (default)
+to export all post-burn-in samples.}
+
+\item{seed}{Random seed, used only when n_samples < Inf (default 42)}
 }
 \value{
 data.table with columns:

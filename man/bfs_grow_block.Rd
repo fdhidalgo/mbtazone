@@ -12,7 +12,8 @@ bfs_grow_block(
   target_min,
   target_max = Inf,
   target_exact = NULL,
-  check_max_before_add = FALSE
+  check_max_before_add = FALSE,
+  ctx = NULL
 )
 }
 \arguments{
@@ -31,6 +32,10 @@ bfs_grow_block(
 \item{target_exact}{Optional exact target to grow toward (overrides target_min for termination)}
 
 \item{check_max_before_add}{Logical: if TRUE, reject additions that would exceed target_max}
+
+\item{ctx}{Optional precomputed \code{\link{bfs_build_context}} object. When
+supplied, \code{graph}, \code{metric_lookup} and \code{eligible_pool} are
+ignored (they are baked into the context).}
 }
 \value{
 List with:
@@ -45,5 +50,13 @@ List with:
 Generic BFS region-growing that supports various termination conditions
 and frontier filters. Consolidates multiple BFS patterns used across
 the codebase for block/component generation.
+}
+\details{
+When a precomputed \code{ctx} (from \code{\link{bfs_build_context}}) is
+supplied, the work is delegated to the integer fast path
+\code{\link{bfs_grow_block_ctx}}, which is behavior-identical but avoids the
+per-step igraph neighbor lookups and character set ops. Callers in a tight
+sampling loop should build the context once and pass it on every call. When
+\code{ctx} is NULL the original character-vector implementation runs unchanged.
 }
 \keyword{internal}

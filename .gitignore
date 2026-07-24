@@ -54,3 +54,4 @@ dev/dev_potential/
 .positai/settings.json
 
 local/
+.posit/assistant

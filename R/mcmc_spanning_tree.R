@@ -332,6 +332,7 @@ discover_lccs_from_trees <- function(
     n_trees = 500L,
     forbidden_parcels = NULL,
     max_discovery_capacity = NULL,
+    max_unique_lccs = Inf,
     verbose = TRUE
 ) {
   parcel_names <- igraph::V(parcel_graph)$name
@@ -442,6 +443,7 @@ discover_lccs_from_trees <- function(
   total_cuts_found <- 0L
   n_unique_lccs <- 0L  # Track count directly (avoids O(n) ls() calls)
   trees_processed <- 0L  # For progress bar
+  cap_reached <- FALSE   # set when n_unique_lccs reaches max_unique_lccs (see below)
 
   # Precompute forbidden mask (global)
   if (is.null(forbidden_parcels)) {
@@ -503,6 +505,17 @@ discover_lccs_from_trees <- function(
     # Forbidden mask for this component
     forbidden_mask <- tree_names %in% forbidden_parcels
 
+    # Per-vertex random 31-bit signatures for O(1) cut deduplication. A cut's
+    # signature is the XOR of its members' signatures — a pure function of the
+    # parcel set, so duplicate cuts (the large majority; each unique LCC is
+    # rediscovered ~5x across trees) are recognized without extracting, sorting,
+    # and digesting their parcel vectors. Two independent 31-bit words give
+    # ~2^62 signature space: collision probability at 10^6 cuts is ~1e-7.
+    # The canonical xxhash64 lcc_key is still computed on first occurrence —
+    # cross-source dedup (combine_all_lcc_discoveries) depends on it.
+    sig1_by_vertex <- sample.int(.Machine$integer.max, n_tree, replace = TRUE)
+    sig2_by_vertex <- sample.int(.Machine$integer.max, n_tree, replace = TRUE)
+
     # =========================================================================
     # SAMPLE TREES FOR THIS COMPONENT
     # =========================================================================
@@ -555,41 +568,90 @@ discover_lccs_from_trees <- function(
 
       total_cuts_found <- total_cuts_found + length(valid_cuts)
 
-      # Compute DFS metadata ONCE per tree for O(k) cut extraction
-      dfs_metadata <- compute_tree_dfs_metadata(tree, root)
+      # DFS metadata for O(k) cut extraction — computed lazily on the first
+      # genuinely new cut, since a tree whose cuts are all duplicates never
+      # extracts anything.
+      dfs_metadata <- NULL
 
-      # Extract parcels for each valid cut using O(k) array slicing
+      # Bottom-up XOR fold of the per-vertex signatures (same traversal as
+      # compute_subtree_aggregates): sub_sig[v] is the XOR over v's subtree,
+      # so a cut's signature is O(1) — subtree side directly, complement side
+      # via XOR with the root total.
+      sub_sig1 <- sig1_by_vertex
+      sub_sig2 <- sig2_by_vertex
+      bfs_order <- aggregates$bfs_order
+      parent <- aggregates$parent
+      for (v in rev(bfs_order)) {
+        if (v != root) {
+          p <- parent[v]
+          sub_sig1[p] <- bitwXor(sub_sig1[p], sub_sig1[v])
+          sub_sig2[p] <- bitwXor(sub_sig2[p], sub_sig2[v])
+        }
+      }
+      total_sig1 <- sub_sig1[root]
+      total_sig2 <- sub_sig2[root]
+
+      # Dedup each valid cut by signature; extract + sort + digest only on the
+      # first occurrence of a parcel set.
       for (cut in valid_cuts) {
-        lcc_parcels <- extract_cut_parcels(
-          tree_names = tree_names,
-          cut_vertex = cut$vertex,
-          cut_side = cut$side,
-          dfs_metadata = dfs_metadata
-        )
-
-        # Create signature key using hash (full parcel string can exceed R's 10000 byte limit)
-        sorted_parcels <- sort(lcc_parcels)
-        lcc_key <- digest::digest(sorted_parcels, algo = "xxhash64")
+        v <- cut$vertex
+        if (cut$side == "subtree") {
+          s1 <- sub_sig1[v]; s2 <- sub_sig2[v]
+        } else {
+          s1 <- bitwXor(total_sig1, sub_sig1[v])
+          s2 <- bitwXor(total_sig2, sub_sig2[v])
+        }
+        sig_key <- paste0(comp_id, "|", s1, "|", s2)
 
         # Add to hash if new, or increment tree count
-        if (!exists(lcc_key, envir = lcc_hash, inherits = FALSE)) {
-          assign(lcc_key, list(
+        if (!exists(sig_key, envir = lcc_hash, inherits = FALSE)) {
+          if (is.null(dfs_metadata)) {
+            dfs_metadata <- compute_tree_dfs_metadata(tree, root)
+          }
+          lcc_parcels <- extract_cut_parcels(
+            tree_names = tree_names,
+            cut_vertex = v,
+            cut_side = cut$side,
+            dfs_metadata = dfs_metadata
+          )
+          # Canonical key (full parcel string can exceed R's 10000 byte limit)
+          lcc_key <- digest::digest(sort(lcc_parcels), algo = "xxhash64")
+          assign(sig_key, list(
+            lcc_key = lcc_key,
             parcel_ids = lcc_parcels,
             capacity = as.integer(cut$capacity),
             area = cut$area
           ), envir = lcc_hash)
-          assign(lcc_key, 1L, envir = lcc_tree_counts)
+          assign(sig_key, 1L, envir = lcc_tree_counts)
           n_unique_lccs <- n_unique_lccs + 1L
         } else {
           # Increment tree count (LCC found in multiple trees)
-          current_count <- get(lcc_key, envir = lcc_tree_counts)
-          assign(lcc_key, current_count + 1L, envir = lcc_tree_counts)
+          current_count <- get(sig_key, envir = lcc_tree_counts)
+          assign(sig_key, current_count + 1L, envir = lcc_tree_counts)
         }
       }
+
+      # Stop once the unique-LCC budget is reached. The current tree's cuts are
+      # fully processed above before we break, so the hash stays consistent. The
+      # library is downsampled to LCC_LIBRARY_MAX_SIZE regardless, so this only
+      # bounds peak memory on very large graphs; when n_unique_lccs stays below
+      # the cap the discovered set is unchanged. Default max_unique_lccs = Inf.
+      if (n_unique_lccs >= max_unique_lccs) {
+        cap_reached <- TRUE
+        break
+      }
     }
+
+    if (cap_reached) break
   }  # End component loop
 
   if (verbose) cli::cli_progress_done()
+
+  if (cap_reached && verbose) {
+    cli::cli_alert_warning(
+      "Unique-LCC cap reached ({n_unique_lccs} >= {max_unique_lccs}); stopped sampling further trees"
+    )
+  }
 
   # Convert hash to data.table
   lcc_keys <- ls(lcc_hash)
@@ -611,18 +673,17 @@ discover_lccs_from_trees <- function(
     ))
   }
 
-  # Build data.table from hash
-  discovered_lccs <- data.table::rbindlist(lapply(lcc_keys, function(key) {
-    lcc_data <- get(key, envir = lcc_hash)
-    tree_count <- get(key, envir = lcc_tree_counts)
-    data.table::data.table(
-      lcc_key = key,
-      parcel_ids = list(lcc_data$parcel_ids),
-      capacity = lcc_data$capacity,
-      area = lcc_data$area,
-      tree_count = tree_count
-    )
-  }))
+  # Build data.table from hash column-wise. The former rbindlist over one
+  # 1-row data.table per key was the documented 75-minute wall at ~1M uniques
+  # (and still sluggish at the 50k cap); this is a single allocation.
+  lcc_vals <- mget(lcc_keys, envir = lcc_hash)
+  discovered_lccs <- data.table::data.table(
+    lcc_key = vapply(lcc_vals, `[[`, character(1), "lcc_key"),
+    parcel_ids = unname(lapply(lcc_vals, `[[`, "parcel_ids")),
+    capacity = vapply(lcc_vals, `[[`, integer(1), "capacity"),
+    area = vapply(lcc_vals, `[[`, numeric(1), "area"),
+    tree_count = unlist(mget(lcc_keys, envir = lcc_tree_counts), use.names = FALSE)
+  )
 
   # Sort by tree_count (most frequently found first)
   data.table::setorder(discovered_lccs, -tree_count)
@@ -645,6 +706,28 @@ discover_lccs_from_trees <- function(
 # ============================================================================
 # SECONDARY BLOCK DISCOVERY VIA SPANNING TREE ENUMERATION
 # ============================================================================
+
+#' Structure-only copy of a graph (all vertex and edge attributes removed)
+#'
+#' Returns \code{graph} with every vertex and edge attribute deleted, preserving
+#' vertex/edge identity and ordering. Used to build a topology-only graph for
+#' traversal: \code{igraph::subgraph_from_edges()} on a bare graph skips copying
+#' per-vertex attributes, and \code{igraph::bfs()}/\code{dfs()} results no longer
+#' carry vertex names (avoiding per-call name pasting). Because only the topology
+#' is touched, the traversal order and parent vectors are bit-identical to those
+#' produced from the attributed graph, so callers that read node data from
+#' separate aligned vectors (not from the graph) are unaffected.
+#'
+#' @param graph igraph object
+#' @return The same graph with no vertex or edge attributes
+#' @keywords internal
+strip_graph_attributes <- function(graph) {
+  for (nm in igraph::vertex_attr_names(graph))
+    graph <- igraph::delete_vertex_attr(graph, nm)
+  for (nm in igraph::edge_attr_names(graph))
+    graph <- igraph::delete_edge_attr(graph, nm)
+  graph
+}
 
 #' Find all valid secondary block cuts of a spanning tree
 #'
@@ -672,75 +755,81 @@ find_valid_secondary_cuts <- function(
     density_threshold
 ) {
   n <- igraph::vcount(tree)
-  valid_cuts <- list()
 
   # Total values from root
-
   total_capacity <- aggregates$total_capacity
   total_area <- aggregates$total_area
 
   # Compute global area bounds for early filtering
-  area_min_global <- min(vapply(size_bands, `[`, numeric(1), 1))
-  area_max_global <- max(vapply(size_bands, `[`, numeric(1), 2))
+  band_mins <- vapply(size_bands, `[`, numeric(1), 1)
+  band_maxs <- vapply(size_bands, `[`, numeric(1), 2)
+  area_min_global <- min(band_mins)
+  area_max_global <- max(band_maxs)
 
-  # For each non-root vertex, check both sides of the cut
-  for (v in seq_len(n)) {
-    if (v == root) next
+  # Vectorized over all non-root vertices. This reproduces the original
+  # per-vertex double loop exactly: same per-side range + density + size-band
+  # checks, same "first matching band" assignment, same as.integer() capacity,
+  # and the same emission order (vertices ascending, subtree side before
+  # complement side). Only the scalar R loop over every vertex is replaced by
+  # vectorized arithmetic; every emitted cut's values are bit-identical.
+  not_root <- seq_len(n) != root
 
-    # Subtree side
-    sub_cap <- aggregates$subtree_capacity[v]
-    sub_area <- aggregates$subtree_area[v]
+  # Subtree side
+  sub_cap  <- aggregates$subtree_capacity
+  sub_area <- aggregates$subtree_area
+  # Complement side
+  comp_cap  <- total_capacity - sub_cap
+  comp_area <- total_area - sub_area
 
-    # Complement side
-    comp_cap <- total_capacity - sub_cap
-    comp_area <- total_area - sub_area
-
-    # Early skip if neither side can satisfy any band
-    if (sub_area < area_min_global && comp_area < area_min_global) next
-    if (sub_area > area_max_global && comp_area > area_max_global) next
-
-    # Check subtree side against each size band
-    if (sub_area >= area_min_global && sub_area <= area_max_global) {
-      sub_density <- if (sub_area > 0) sub_cap / sub_area else 0
-      if (sub_density >= density_threshold) {
-        for (band_idx in seq_along(size_bands)) {
-          band <- size_bands[[band_idx]]
-          if (sub_area >= band[1] && sub_area <= band[2]) {
-            valid_cuts[[length(valid_cuts) + 1L]] <- list(
-              vertex = v,
-              side = "subtree",
-              capacity = as.integer(sub_cap),
-              area = sub_area,
-              size_band = band_idx
-            )
-            break # Only count in first matching band
-          }
-        }
-      }
+  # "First matching band" per area (NA if no band contains it), mirroring the
+  # break-on-first-match inner loop for arbitrary (possibly overlapping) bands.
+  first_band <- function(areas) {
+    out <- rep(NA_integer_, length(areas))
+    for (bi in seq_along(size_bands)) {
+      hit <- is.na(out) & areas >= band_mins[bi] & areas <= band_maxs[bi]
+      out[hit] <- bi
     }
-
-    # Check complement side against each size band
-    if (comp_area >= area_min_global && comp_area <= area_max_global) {
-      comp_density <- if (comp_area > 0) comp_cap / comp_area else 0
-      if (comp_density >= density_threshold) {
-        for (band_idx in seq_along(size_bands)) {
-          band <- size_bands[[band_idx]]
-          if (comp_area >= band[1] && comp_area <= band[2]) {
-            valid_cuts[[length(valid_cuts) + 1L]] <- list(
-              vertex = v,
-              side = "complement",
-              capacity = as.integer(comp_cap),
-              area = comp_area,
-              size_band = band_idx
-            )
-            break # Only count in first matching band
-          }
-        }
-      }
-    }
+    out
   }
 
-  valid_cuts
+  sub_density  <- ifelse(sub_area > 0, sub_cap / sub_area, 0)
+  comp_density <- ifelse(comp_area > 0, comp_cap / comp_area, 0)
+  sub_band  <- first_band(sub_area)
+  comp_band <- first_band(comp_area)
+
+  sub_ok <- not_root &
+    sub_area >= area_min_global & sub_area <= area_max_global &
+    sub_density >= density_threshold & !is.na(sub_band)
+  comp_ok <- not_root &
+    comp_area >= area_min_global & comp_area <= area_max_global &
+    comp_density >= density_threshold & !is.na(comp_band)
+
+  sub_idx  <- which(sub_ok)
+  comp_idx <- which(comp_ok)
+
+  if (length(sub_idx) == 0L && length(comp_idx) == 0L) {
+    return(list())
+  }
+
+  # Interleave so emission order matches the original loop: for each vertex the
+  # subtree cut precedes the complement cut. Keying subtree as 2v-1 and
+  # complement as 2v and sorting yields exactly that order.
+  keys  <- c(2L * sub_idx - 1L, 2L * comp_idx)
+  ord   <- order(keys)
+  verts <- c(sub_idx, comp_idx)[ord]
+  sides <- c(rep.int("subtree", length(sub_idx)),
+             rep.int("complement", length(comp_idx)))[ord]
+  caps  <- c(sub_cap[sub_idx], comp_cap[comp_idx])[ord]
+  areas <- c(sub_area[sub_idx], comp_area[comp_idx])[ord]
+  bands <- c(sub_band[sub_idx], comp_band[comp_idx])[ord]
+
+  lapply(seq_along(verts), function(i) list(
+    vertex = verts[i],
+    side = sides[i],
+    capacity = as.integer(caps[i]),
+    area = areas[i],
+    size_band = bands[i]
+  ))
 }
 
 
@@ -919,6 +1008,15 @@ discover_secondaries_from_trees <- function(
     area_in_station_aligned <- if (!is.null(area_in_station_attr))
       area_in_station_attr[tree_to_parcel] else rep(0, length(tree_to_parcel))
 
+    # Topology-only copy of the component graph for the per-tree subgraph below.
+    # `tree` is used ONLY for its structure (vcount + the bfs/dfs traversals in
+    # compute_subtree_aggregates / compute_tree_dfs_metadata); all capacity/area/
+    # name data comes from the aligned vectors above and from tree_names. Stripping
+    # attributes keeps subgraph_from_edges and bfs/dfs cheap with a bit-identical
+    # traversal order/parent. The random draw is untouched: sample_spanning_tree()
+    # below still runs on the attributed tree_graph.
+    tree_graph_struct <- strip_graph_attributes(tree_graph)
+
     # =========================================================================
     # SAMPLE TREES FOR THIS COMPONENT
     # =========================================================================
@@ -938,7 +1036,7 @@ discover_secondaries_from_trees <- function(
         next
       }
 
-      tree <- igraph::subgraph_from_edges(tree_graph, tree_edges, delete.vertices = FALSE)
+      tree <- igraph::subgraph_from_edges(tree_graph_struct, tree_edges, delete.vertices = FALSE)
       n_trees_sampled <- n_trees_sampled + 1L
 
       root <- sample.int(n_tree, 1L)
