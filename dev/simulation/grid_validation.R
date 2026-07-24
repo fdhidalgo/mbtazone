@@ -117,7 +117,7 @@ scenario_grid <- function(nrow = 4, ncol = 4, capacity = 1L, area = 6.0,
 #  |   |   |   |
 # 13 —14 —15 —16
 
-# g <- scenario_grid(4, 4)
+g <- scenario_grid(4, 4)
 
 # bottlenecked island
 #  1 — 2 — 3   4
@@ -156,10 +156,10 @@ scenario_grid <- function(nrow = 4, ncol = 4, capacity = 1L, area = 6.0,
 #   |   |   |   |
 #  13 —14 —15 —16
 
-station_parcels <- c(1, 2, 5, 6)
-g <- scenario_grid(4, 4)
-V(g)$capacity_in_station[station_parcels] <- V(g)$capacity[station_parcels]
-V(g)$area_in_station[station_parcels]     <- V(g)$area[station_parcels]
+# station_parcels <- c(1, 2, 5, 6)
+# g <- scenario_grid(4, 4)
+# V(g)$capacity_in_station[station_parcels] <- V(g)$capacity[station_parcels]
+# V(g)$area_in_station[station_parcels]     <- V(g)$area[station_parcels]
 
 
 cat("Grid:", vcount(g), "parcels,", ecount(g), "edges\n")
