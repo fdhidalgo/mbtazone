@@ -2685,6 +2685,12 @@ station_constraint_flags <- function(constraints) {
 #' @param libraries Libraries list (needs secondary_library; uses lcc_library if
 #'   present for a seed pool). The secondary_library should already carry the
 #'   precomputed station vectors attached by the caller.
+#' @param discovery_capacity_multiplier Upper bound on the grown LCC's
+#'   capacity, as a multiple of min_capacity (typically
+#'   `discovery_spec$discovery_capacity_multiplier`).
+#' @param k_prior_lambda Geometric-prior rate on the number of secondary
+#'   blocks, used when drawing how many to attach (typically
+#'   `target_spec$priors$k_prior_lambda`).
 #' @param max_restarts Maximum BFS attempts (default 90).
 #' @return An initialised parcel MCMC state, or NULL if none was found.
 #' @keywords internal

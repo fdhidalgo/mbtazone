@@ -6,27 +6,22 @@
 # - MCMC kernel probabilities
 
 # ============================================================================
-# SAMPLER SPEC (proposal/kernel tuning — does not affect the target distribution)
+# SAMPLER SPEC (kernel mix, proposal tuning, and run/diagnostics settings)
 # ============================================================================
 
 #' Define a parcel MCMC sampler spec
 #'
-#' Base constructor for the sampler/proposal tuning spec: kernel mix,
-#' non-reversibility, and the proposal knobs that previously leaked in as
-#' free globals (`swap_cap_tolerance`, `birth_tilt_lambda`,
-#' `debug_invariant_checks`, and the online-enrichment/sample-storage/
-#' burn-in cluster below). None of these fields affect the target
-#' distribution pi(state) — only how the chain proposes moves, what gets
-#' recorded, and how burn-in is applied when diagnostics summarize the
-#' trajectory afterward. `birth_tilt_lambda` defaults to `capacity_prior_lambda`
-#' (pass in `target_spec$priors$capacity_prior_lambda`) to preserve the
-#' "cancel the capacity prior on births" coupling explicitly rather than via
-#' a shared global.
+#' Base constructor for the four-kernel mix (Local Boundary, Birth/Death,
+#' Swap, Replace-LCC) plus the proposal tuning, online-enrichment, and
+#' burn-in settings that go with running a chain. `birth_tilt_lambda`
+#' defaults to `capacity_prior_lambda` (pass in
+#' `target_spec$priors$capacity_prior_lambda`), which makes the tilt's effect
+#' on the acceptance ratio cancel exactly.
 #'
 #' Callers needing a one-off deviation from a preset (e.g. disabling online
-#' enrichment for a discovery-only run) construct the preset and then mutate
-#' the returned list before calling — the same pattern already used for
-#' per-chain `seed`/`n_steps` overrides.
+#' enrichment for a discovery-only run) construct the preset, then mutate the
+#' returned list before calling — the same pattern used for per-chain
+#' `seed`/`n_steps` overrides.
 #'
 #' @param name Human-readable label for the config
 #' @param seed RNG seed for the chain
@@ -231,7 +226,7 @@ validate_kernel_config <- function(config) {
     "p_replace_lcc"
   )
 
-  # Also required: proposal tuning fields that used to be free globals
+  # Also required: proposal/run tuning fields
   required_tuning_fields <- c(
     "swap_cap_tolerance",
     "birth_tilt_lambda",
