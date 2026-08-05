@@ -83,7 +83,7 @@ tar_option_set(
   garbage_collection = TRUE, # Run gc() between targets
   controller = crew_controller_local(
     workers = DEFAULT_CREW_WORKERS, # Auto-detect cores, leave reserve for system
-    seconds_idle = 60, # Shut down idle workers after 60s
+    seconds_idle = 600, # Shut down idle workers after 600s
     options_local = crew_options_local(
       log_directory = "./ext/worker_logs" # Capture worker stdout/stderr for monitoring
     )
