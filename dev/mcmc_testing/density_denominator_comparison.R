@@ -38,18 +38,21 @@
 #   MBTAZONE_PIPELINE_DATA       — directory of per-community .gpkg files
 #   MBTAZONE_DENSITY_DEDUCTIONS  — path to Density_Denominator_Deductions.shp
 #   MBTAZONE_EXCEL_MODELS        — path to mbta_district_models/ directory
+#   MBTAZONE_RIGHT_OF_WAY        — path to Excluded_Land_Right_of_Way.shp
+#                                  (optional; enables ROW-constrained fill)
 
 library(sf)
 library(ggplot2)
 library(data.table)
 
-ROW_FILL_M <- 25  # matches constraints$row_fill_m default in define_constraints()
+ROW_FILL_M <- 50  # matches constraints$row_fill_m default in define_constraints()
 
 # ---- Inputs -----------------------------------------------------------------
 
 pipeline_data_dir <- Sys.getenv("MBTAZONE_PIPELINE_DATA")
 density_ded_path  <- Sys.getenv("MBTAZONE_DENSITY_DEDUCTIONS")
 excel_models_dir  <- Sys.getenv("MBTAZONE_EXCEL_MODELS")
+row_path          <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY")
 
 if (!nzchar(pipeline_data_dir)) stop("MBTAZONE_PIPELINE_DATA env var not set.")
 
@@ -82,6 +85,19 @@ if (nzchar(density_ded_path) && file.exists(density_ded_path)) {
 
 if (!nzchar(excel_models_dir))
   cat("MBTAZONE_EXCEL_MODELS not set — Excel columns will be NA.\n\n")
+
+# ---- Load statewide ROW (optional) ------------------------------------------
+
+row_sf <- NULL
+if (nzchar(row_path) && file.exists(row_path)) {
+  cat("Loading right-of-way shapefile...\n")
+  row_sf <- sf::st_read(row_path, quiet = TRUE)
+  row_sf <- sf::st_transform(row_sf, 26986)
+  row_sf <- sf::st_make_valid(row_sf)
+  cat(sprintf("  %d ROW features — ROW-constrained fill enabled\n\n", nrow(row_sf)))
+} else {
+  cat("MBTAZONE_RIGHT_OF_WAY not set — using unconstrained morphological close.\n\n")
+}
 
 # ---- Helper: read Excel density denominator ---------------------------------
 
@@ -154,12 +170,32 @@ results <- lapply(seq_along(gpkg_files), function(i) {
     union_sf      <- sf::st_sf(geometry = parcel_union)
     union_acres   <- as.numeric(sf::st_area(parcel_union)) / 4047
 
-    # Morphological close: fills road gaps between adjacent parcels.
-    # This is what compute_gis_density_denom() now applies before subtracting
-    # deductions. Gaps narrower than 2 * ROW_FILL_M are filled.
-    pipeline_geom  <- parcel_union |>
-      sf::st_buffer(ROW_FILL_M) |>
-      sf::st_buffer(-ROW_FILL_M)
+    # Morphological close, ROW-constrained when row_sf is available.
+    closed_geom <- parcel_union |>
+      sf::st_buffer(ROW_FILL_M,  endCapStyle = "SQUARE") |>
+      sf::st_buffer(-ROW_FILL_M, endCapStyle = "SQUARE")
+
+    if (!is.null(row_sf)) {
+      comm_bbox <- sf::st_as_sfc(sf::st_bbox(parcels))
+      local_row <- suppressWarnings(
+        sf::st_intersection(row_sf, sf::st_sf(geometry = comm_bbox))
+      )
+      if (nrow(local_row) > 0) {
+        row_in_closed <- suppressWarnings(
+          sf::st_intersection(
+            sf::st_sf(geometry = closed_geom),
+            sf::st_sf(geometry = sf::st_union(sf::st_geometry(local_row)))
+          )
+        )
+        pipeline_geom <- if (nrow(row_in_closed) > 0)
+          sf::st_union(c(parcel_union, sf::st_geometry(row_in_closed)))
+        else parcel_union
+      } else {
+        pipeline_geom <- parcel_union
+      }
+    } else {
+      pipeline_geom <- closed_geom
+    }
     pipeline_sf    <- sf::st_sf(geometry = pipeline_geom)
     pipeline_acres <- as.numeric(sf::st_area(pipeline_geom)) / 4047
 

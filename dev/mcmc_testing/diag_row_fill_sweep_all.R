@@ -34,18 +34,33 @@ SWEEP_M <- sort(unique(c(0, 5, 10, 15, adj_equiv_m, 20, 25, 30, 40, 50, 60)))
 pipeline_data_dir <- Sys.getenv("MBTAZONE_PIPELINE_DATA")
 density_ded_path  <- Sys.getenv("MBTAZONE_DENSITY_DEDUCTIONS")
 excel_models_dir  <- Sys.getenv("MBTAZONE_EXCEL_MODELS")
+row_path          <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY")
 if (!nzchar(pipeline_data_dir)) stop("MBTAZONE_PIPELINE_DATA not set.")
 if (!nzchar(density_ded_path))  stop("MBTAZONE_DENSITY_DEDUCTIONS not set.")
-if (!nzchar(excel_models_dir)) {
+if (!nzchar(excel_models_dir))
   message("MBTAZONE_EXCEL_MODELS not set — will use district denominator only.")
-}
+if (!nzchar(row_path))
+  message("MBTAZONE_RIGHT_OF_WAY not set — using unconstrained morphological close.")
 
 # ---- Load deductions once ---------------------------------------------------
 cat("Loading deductions shapefile (loaded once, clipped per community)...\n")
 deductions_all <- sf::st_make_valid(
   sf::st_transform(sf::st_read(density_ded_path, quiet = TRUE), 26986)
 )
-cat(sprintf("  %d deduction features loaded.\n\n", nrow(deductions_all)))
+cat(sprintf("  %d deduction features loaded.\n", nrow(deductions_all)))
+
+# ---- Load ROW once (optional) -----------------------------------------------
+if (nzchar(row_path) && file.exists(row_path)) {
+  cat("Loading right-of-way shapefile (loaded once, clipped per community)...\n")
+  row_sf <- sf::st_make_valid(
+    sf::st_transform(sf::st_read(row_path, quiet = TRUE), 26986)
+  )
+  cat(sprintf("  %d ROW features loaded — ROW-constrained fill enabled.\n\n",
+              nrow(row_sf)))
+} else {
+  row_sf <- NULL
+  cat("No ROW shapefile — unconstrained morphological close.\n\n")
+}
 
 # ---- Helpers ----------------------------------------------------------------
 extract_excel_denom <- function(community_name, models_dir) {
@@ -90,14 +105,46 @@ clip_deductions <- function(parcels_sf, deductions_sf) {
   )
 }
 
-denom_from_pipeline <- function(parcel_union, d, district_sf, local_ded) {
-  if (d > 0) {
-    pg <- parcel_union |> sf::st_buffer(d) |> sf::st_buffer(-d)
+clip_row <- function(parcels_sf, row_sf) {
+  if (is.null(row_sf)) return(NULL)
+  bbox_sfc <- sf::st_as_sfc(sf::st_bbox(parcels_sf))
+  sf::st_crs(bbox_sfc) <- 26986
+  sf::st_make_valid(
+    suppressWarnings(
+      sf::st_intersection(row_sf, sf::st_sf(geometry = bbox_sfc))
+    )
+  )
+}
+
+denom_from_pipeline <- function(parcel_union, d, district_sf, local_ded,
+                                local_row = NULL) {
+  closed_geom <- if (d > 0) {
+    parcel_union |>
+      sf::st_buffer(d,  endCapStyle = "SQUARE") |>
+      sf::st_buffer(-d, endCapStyle = "SQUARE")
   } else {
-    pg <- parcel_union
+    parcel_union
   }
-  pipe_sf    <- sf::st_sf(geometry = pg)
-  pipe_acres <- as.numeric(sf::st_area(pg)) / 4047
+
+  if (!is.null(local_row) && nrow(local_row) > 0 && d > 0) {
+    # ROW-constrained fill: expand only into actual right-of-way.
+    row_in_closed <- suppressWarnings(
+      sf::st_intersection(
+        sf::st_sf(geometry = closed_geom),
+        sf::st_sf(geometry = sf::st_union(sf::st_geometry(local_row)))
+      )
+    )
+    pg <- if (nrow(row_in_closed) > 0)
+      sf::st_union(c(parcel_union, sf::st_geometry(row_in_closed)))
+    else parcel_union
+  } else {
+    pg <- closed_geom
+  }
+
+  pipe_sf        <- sf::st_sf(geometry = pg)
+  pipe_acres     <- as.numeric(sf::st_area(pg)) / 4047
+  closed_acres   <- as.numeric(sf::st_area(closed_geom)) / 4047
+  rejected_acres <- max(0, closed_acres - pipe_acres)
 
   ded_pipe_acres <- 0
   if (nrow(local_ded) > 0) {
@@ -116,9 +163,10 @@ denom_from_pipeline <- function(parcel_union, d, district_sf, local_ded) {
   }, error = function(e) 0)
 
   list(
-    denom      = pipe_acres - ded_pipe_acres,
-    pipe_acres = pipe_acres,
-    gap_acres  = gap_acres
+    denom          = pipe_acres - ded_pipe_acres,
+    pipe_acres     = pipe_acres,
+    gap_acres      = gap_acres,
+    rejected_acres = rejected_acres
   )
 }
 
@@ -174,6 +222,8 @@ all_results <- rbindlist(lapply(seq_along(single_zone_gpkgs), function(i) {
   # District denominator (reference)
   local_ded <- tryCatch(clip_deductions(parcels, deductions_all),
                         error = function(e) districts[0, ])
+  local_row <- tryCatch(clip_row(parcels, row_sf),
+                        error = function(e) NULL)
   ded_in_dist <- if (nrow(local_ded) > 0)
     suppressWarnings(sf::st_intersection(district_sf, local_ded))
   else local_ded[0, ]
@@ -191,20 +241,21 @@ all_results <- rbindlist(lapply(seq_along(single_zone_gpkgs), function(i) {
   # Sweep buffers
   rbindlist(lapply(SWEEP_M, function(d) {
     r <- tryCatch(
-      denom_from_pipeline(parcel_union, d, district_sf, local_ded),
+      denom_from_pipeline(parcel_union, d, district_sf, local_ded, local_row),
       error = function(e) list(denom = NA_real_, pipe_acres = NA_real_,
-                               gap_acres = NA_real_)
+                               gap_acres = NA_real_, rejected_acres = NA_real_)
     )
     list(
-      community   = cname,
-      fill_m      = d,
-      denom_dist  = denom_dist,
-      denom_xl    = excel_denom,
-      denom_pipe  = r$denom,
-      pipe_acres  = r$pipe_acres,
-      gap_acres   = r$gap_acres,
-      err_vs_dist = r$denom - denom_dist,
-      err_vs_xl   = if (!is.na(excel_denom)) r$denom - excel_denom else NA_real_
+      community      = cname,
+      fill_m         = d,
+      denom_dist     = denom_dist,
+      denom_xl       = excel_denom,
+      denom_pipe     = r$denom,
+      pipe_acres     = r$pipe_acres,
+      gap_acres      = r$gap_acres,
+      rejected_acres = r$rejected_acres,
+      err_vs_dist    = r$denom - denom_dist,
+      err_vs_xl      = if (!is.na(excel_denom)) r$denom - excel_denom else NA_real_
     )
   }))
 }))

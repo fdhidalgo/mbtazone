@@ -8,33 +8,36 @@
 #               (what the Excel model uses)
 #
 # Map layers:
+#   Black   — District boundary outline (the district denominator base).
 #   Blue    — In-district parcel polygons.
-#   Yellow  — Road fill: area added by morphological close (pipeline − raw union).
-#             Should look like road strips between parcels.
-#   Orange  — Remaining gap: inside district boundary but still outside pipeline.
-#             What the pipeline still misses after the close.
+#   Yellow  — Road fill: area the ROW-constrained close accepted (should be roads).
+#   Gray    — Rejected fill: area close wanted to add but ROW constraint blocked
+#             (excluded-parcel voids, non-ROW gaps). Only visible when ROW available.
+#   Orange  — Remaining gap: inside district but still outside pipeline polygon.
 #   Purple  — Overhang: raw parcel union extends beyond district boundary.
 #   Red     — GIS deductions within the pipeline polygon (subtracted by pipeline).
-#   Green   — Pipeline polygon outline (closed union = new MCMC denominator base).
-#   Black   — District boundary outline (the district denominator base).
+#   Green   — Pipeline polygon outline (ROW-constrained MCMC denominator base).
 #
 # Set COMMUNITY before sourcing. Run from the mbtazone package root.
 # Requires env vars: MBTAZONE_PIPELINE_DATA, MBTAZONE_DENSITY_DEDUCTIONS
+# Optional: MBTAZONE_RIGHT_OF_WAY — enables ROW-constrained fill (recommended)
 
 library(sf)
 library(mapgl)
 library(readxl)
 
 if (!exists("COMMUNITY")) COMMUNITY <- "Salem"  # override by setting before source()
-ROW_FILL_M <- 25  # matches constraints$row_fill_m default in define_constraints()
+ROW_FILL_M <- 50  # matches constraints$row_fill_m default in define_constraints()
 
 # ---- Paths ------------------------------------------------------------------
 pipeline_data_dir <- Sys.getenv("MBTAZONE_PIPELINE_DATA")
 density_ded_path  <- Sys.getenv("MBTAZONE_DENSITY_DEDUCTIONS")
 excel_models_dir  <- Sys.getenv("MBTAZONE_EXCEL_MODELS")
+row_path          <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY")
 if (!nzchar(pipeline_data_dir)) stop("MBTAZONE_PIPELINE_DATA not set.")
 if (!nzchar(density_ded_path))  stop("MBTAZONE_DENSITY_DEDUCTIONS not set.")
 if (!nzchar(excel_models_dir))  message("MBTAZONE_EXCEL_MODELS not set — Excel values will be NA.")
+if (!nzchar(row_path))          message("MBTAZONE_RIGHT_OF_WAY not set — using unconstrained morphological close.")
 
 # ---- Extract Excel Summary values for a community ---------------------------
 # Handles two layouts:
@@ -104,14 +107,54 @@ parcel_union <- sf::st_union(in_d)
 union_sf     <- sf::st_sf(geometry = parcel_union)
 union_acres  <- as.numeric(sf::st_area(parcel_union)) / 4047
 
-# Pipeline polygon: morphological close fills road gaps between parcels.
-# Matches compute_gis_density_denom() — gaps narrower than 2*ROW_FILL_M are filled.
-pipeline_geom  <- parcel_union |>
-  sf::st_buffer(ROW_FILL_M) |>
-  sf::st_buffer(-ROW_FILL_M)
+# Bounding box used for clipping both ROW and deductions to the local area.
+bbox_sfc <- sf::st_as_sfc(sf::st_bbox(parcels))
+sf::st_crs(bbox_sfc) <- 26986
+
+# ---- Load ROW (cached across source() calls) --------------------------------
+if (!exists("row_sf") || !inherits(row_sf, "sf")) {
+  if (nzchar(row_path) && file.exists(row_path)) {
+    cat("Loading right-of-way shapefile...\n")
+    row_sf <- sf::st_read(row_path, quiet = TRUE)
+    row_sf <- sf::st_transform(row_sf, 26986)
+    row_sf <- sf::st_make_valid(row_sf)
+    cat(sprintf("  Loaded %d ROW features\n", nrow(row_sf)))
+  } else {
+    row_sf <- NULL
+  }
+} else {
+  cat(sprintf("  Using cached ROW (%d features)\n", nrow(row_sf)))
+}
+
+# Pipeline polygon: morphological close, ROW-constrained when row_sf is available.
+closed_geom <- parcel_union |>
+  sf::st_buffer(ROW_FILL_M,  endCapStyle = "SQUARE") |>
+  sf::st_buffer(-ROW_FILL_M, endCapStyle = "SQUARE")
+closed_sf <- sf::st_sf(geometry = closed_geom)
+
+if (!is.null(row_sf)) {
+  local_row <- suppressWarnings(
+    sf::st_intersection(row_sf, sf::st_sf(geometry = bbox_sfc))
+  )
+  if (nrow(local_row) > 0) {
+    row_in_closed <- suppressWarnings(
+      sf::st_intersection(
+        closed_sf,
+        sf::st_sf(geometry = sf::st_union(sf::st_geometry(local_row)))
+      )
+    )
+    pipeline_geom <- if (nrow(row_in_closed) > 0)
+      sf::st_union(c(parcel_union, sf::st_geometry(row_in_closed)))
+    else parcel_union
+  } else {
+    pipeline_geom <- parcel_union
+  }
+} else {
+  pipeline_geom <- closed_geom
+}
 pipeline_sf    <- sf::st_sf(geometry = pipeline_geom)
 pipeline_acres <- as.numeric(sf::st_area(pipeline_geom)) / 4047
-cat(sprintf("  Parcel union:    %.3f ac\n", union_acres))
+cat(sprintf("  Parcel union:      %.3f ac\n", union_acres))
 cat(sprintf("  Pipeline (closed): %.3f ac  (+%.3f ac from close)\n",
             pipeline_acres, pipeline_acres - union_acres))
 
@@ -140,6 +183,19 @@ overhang_sf <- tryCatch({
 }, error = function(e) { message("Overhang diff: ", e$message); NULL })
 overhang_acres <- if (!is.null(overhang_sf)) as.numeric(sf::st_area(overhang_sf)) / 4047 else 0
 
+# Rejected fill: area the unconstrained close tried to add, but ROW constraint
+# blocked (excluded-parcel voids, non-ROW gaps like parks or water).
+# Only meaningful when row_sf is available and constraining the fill.
+rejected_fill_sf <- if (!is.null(row_sf)) {
+  tryCatch({
+    result <- suppressWarnings(sf::st_difference(closed_sf, pipeline_sf))
+    result <- sf::st_make_valid(result)
+    if (as.numeric(sf::st_area(result)) < 100) NULL else result
+  }, error = function(e) { message("Rejected fill diff: ", e$message); NULL })
+} else NULL
+rejected_fill_acres <- if (!is.null(rejected_fill_sf))
+  as.numeric(sf::st_area(rejected_fill_sf)) / 4047 else 0
+
 # ---- Deductions -------------------------------------------------------------
 if (!exists("deductions") || !inherits(deductions, "sf")) {
   cat("Loading deductions shapefile...\n")
@@ -151,9 +207,7 @@ if (!exists("deductions") || !inherits(deductions, "sf")) {
   cat(sprintf("  Using cached deductions (%d features)\n", nrow(deductions)))
 }
 
-# Clip to bounding box first for speed
-bbox_sfc <- sf::st_as_sfc(sf::st_bbox(parcels))
-sf::st_crs(bbox_sfc) <- 26986
+# Clip to bounding box first for speed (bbox_sfc already created above)
 local_ded <- sf::st_make_valid(sf::st_intersection(deductions, sf::st_sf(geometry = bbox_sfc)))
 cat(sprintf("  Local deduction features: %d\n", nrow(local_ded)))
 
@@ -193,11 +247,16 @@ if (!is.na(EXCEL_DENOM)) {
 }
 
 # ---- Print comparison -------------------------------------------------------
+row_mode <- if (!is.null(row_sf)) "ROW-constrained" else "unconstrained"
 cat(sprintf("\n%-40s %8.3f ac\n", "District boundary polygon:", polygon_acres))
 cat(sprintf("%-40s %8.3f ac\n",   "Raw parcel union:", union_acres))
-cat(sprintf("%-40s %8.3f ac\n",   "Pipeline (morphological close):", pipeline_acres))
-cat(sprintf("  %-38s %8.3f ac  [filled by close — should be roads]\n",
+cat(sprintf("%-40s %8.3f ac  [%s]\n",
+            "Pipeline (morphological close):", pipeline_acres, row_mode))
+cat(sprintf("  %-38s %8.3f ac  [roads/gaps filled via close]\n",
             "Road fill (pipeline − union):", filled_acres))
+if (rejected_fill_acres > 0)
+  cat(sprintf("  %-38s %8.3f ac  [voids/non-ROW blocked by constraint]\n",
+              "Rejected fill (close − ROW):", rejected_fill_acres))
 cat(sprintf("  %-38s %8.3f ac  [pipeline still misses]\n",
             "Remaining gap (district − pipeline):", gap_acres))
 cat(sprintf("  %-38s %8.3f ac  [pipeline overcounts]\n",
@@ -280,6 +339,15 @@ if (!is.null(overhang_sf) && overhang_acres > 0) {
   )
 }
 
+# Rejected fill (ROW constraint blocked these areas from being counted): gray
+# Shows excluded-parcel voids and non-ROW gaps the unconstrained close would have filled.
+if (!is.null(rejected_fill_sf) && rejected_fill_acres > 0) {
+  m <- m |> add_fill_layer(
+    id = "rejected_fill", source = sf::st_transform(rejected_fill_sf, 4326),
+    fill_color = "#969696", fill_opacity = 0.65
+  )
+}
+
 # GIS deductions within pipeline polygon: red
 if (nrow(ded_in_pipeline) > 0) {
   m <- m |> add_fill_layer(
@@ -306,7 +374,7 @@ m <- m |>
                 capacity_total / EXCEL_DENOM)
       else "Excel:    n/a"
       paste0(
-        COMMUNITY, " — density denominator comparison\n",
+        COMMUNITY, " — density denominator comparison  [", row_mode, "]\n",
         sprintf("Pipeline: %6.1f ac → %5.2f du/ac\n", denom_pipeline,
                 capacity_total / denom_pipeline),
         sprintf("District: %6.1f ac → %5.2f du/ac\n", denom_district,
@@ -317,13 +385,15 @@ m <- m |>
     values = c(
       sprintf("District boundary (%.1f ac)", polygon_acres),
       sprintf("In-district parcels  n=%d  cap=%d units", nrow(in_d), capacity_total),
-      sprintf("Road fill (close adds): %.1f ac", filled_acres),
+      sprintf("Road fill (accepted by ROW): %.1f ac", filled_acres),
+      sprintf("Rejected fill (blocked by ROW): %.1f ac", rejected_fill_acres),
       sprintf("Remaining gap (district − pipeline): %.1f ac", gap_acres),
       sprintf("Overhang (union − district): %.1f ac", overhang_acres),
       sprintf("GIS deductions in pipeline: %.1f ac", ded_pipeline_acres),
       sprintf("Pipeline outline (%.1f ac)", pipeline_acres)
     ),
-    colors = c("#000000", "#6baed6", "#fee08b", "#fd8d3c", "#9e2a8f", "#d73027", "#1a9850"),
+    colors = c("#000000", "#6baed6", "#fee08b", "#969696",
+               "#fd8d3c", "#9e2a8f", "#d73027", "#1a9850"),
     type = "categorical"
   ) |>
   add_fullscreen_control(position = "top-left") |>

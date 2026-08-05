@@ -20,9 +20,15 @@
 #' right-of-way gaps between adjacent parcels, then subtracts the pre-dissolved
 #' local density deductions to get the district area in acres.
 #'
-#' The morphological close fills all gaps narrower than `2 * row_fill_m`
-#' (e.g. 25 m fills gaps up to 50 m ≈ 165 ft). Set `row_fill_m = 0` in
-#' [define_constraints()] to disable and revert to the raw parcel union.
+#' When `constraints$row_sfc` is set (by passing `right_of_way_sf` to
+#' [define_constraints()]), the fill is ROW-constrained: only the portion of
+#' the morphological close that overlaps the right-of-way polygon is added to
+#' the parcel union.
+#'
+#' Without `row_sfc`, falls back to an unconstrained morphological close that
+#' fills all gaps narrower than `2 * row_fill_m` (e.g. 25 m fills gaps up to
+#' 50 m ≈ 165 ft). Set `row_fill_m = 0` in [define_constraints()] to disable
+#' filling entirely.
 #'
 #' @param unit_ids Character vector of unit IDs (from parcel graph vertices)
 #' @param constraints Constraints list from [define_constraints()]
@@ -36,11 +42,26 @@ compute_gis_density_denom <- function(unit_ids, constraints) {
   }
   union_geom <- sf::st_union(geom_subset)
 
-  row_fill_m <- constraints$row_fill_m %||% 15
+  row_fill_m <- constraints$row_fill_m %||% 50
   if (row_fill_m > 0) {
-    union_geom <- union_geom |>
-      sf::st_buffer(row_fill_m) |>
-      sf::st_buffer(-row_fill_m)
+    closed_geom <- union_geom |>
+      sf::st_buffer(row_fill_m,  endCapStyle = "SQUARE") |>
+      sf::st_buffer(-row_fill_m, endCapStyle = "SQUARE")
+
+    if (!is.null(constraints$row_sfc) && length(constraints$row_sfc) > 0) {
+      # result = union ∪ (closed ∩ ROW) — only right-of-way fill is kept.
+      row_in_closed <- suppressWarnings(
+        sf::st_intersection(
+          sf::st_sf(geometry = closed_geom),
+          sf::st_sf(geometry = constraints$row_sfc)
+        )
+      )
+      if (nrow(row_in_closed) > 0) {
+        union_geom <- sf::st_union(c(union_geom, sf::st_geometry(row_in_closed)))
+      }
+    } else {
+      union_geom <- closed_geom
+    }
   }
 
   if (length(constraints$ded_sfc) > 0) {
