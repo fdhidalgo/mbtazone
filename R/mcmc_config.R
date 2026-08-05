@@ -12,9 +12,21 @@
 #' @param district_data List from [load_district_data()]
 #' @param parcel_graph_result List from [build_parcel_graph_target()] or
 #'   [build_identity_parcel_graph()]
+#' @param row_fill_m Buffer distance (metres) for the morphological close in
+#'   [compute_gis_density_denom()]; fills road right-of-way gaps narrower than
+#'   `2*d` between adjacent parcels (e.g. 50 m fills gaps up to 100 m ≈ 330 ft).
+#'   Set to 0 to disable.
+#' @param right_of_way_sf Optional sf object of right-of-way polygons (e.g.
+#'   `district_data$district_right_of_way`). When supplied, the morphological
+#'   close in [compute_gis_density_denom()] is ROW-constrained: fill area is
+#'   only kept where it overlaps the ROW polygon, preventing excluded-parcel
+#'   voids and non-ROW gaps from being counted. When `NULL` (default), falls
+#'   back to the unconstrained morphological close.
 #' @return List of constraints for MCMC
 #' @export
-define_constraints <- function(district_data, parcel_graph_result) {
+define_constraints <- function(district_data, parcel_graph_result,
+                               row_fill_m = 50,
+                               right_of_way_sf = NULL) {
   req <- district_data$district_requirements
 
   # Maps each parcel graph unit to its constituent parcel LOC_IDs,
@@ -30,6 +42,19 @@ define_constraints <- function(district_data, parcel_graph_result) {
 
   ded_sfc <- sf::st_geometry(district_data$local_deductions_dissolved)
 
+  # Dissolve ROW geometry clipped to the district bounding box.
+  # Stored as a single sfc for use in ROW-constrained fill.
+  row_sfc <- NULL
+  if (!is.null(right_of_way_sf) && nrow(right_of_way_sf) > 0) {
+    bbox_geom <- sf::st_as_sfc(sf::st_bbox(dg))
+    local_row <- suppressWarnings(
+      sf::st_intersection(right_of_way_sf, sf::st_sf(geometry = bbox_geom))
+    )
+    if (nrow(local_row) > 0) {
+      row_sfc <- sf::st_union(sf::st_geometry(local_row))
+    }
+  }
+
   list(
     min_capacity         = req$min_units,
     min_area             = if (is.na(req$min_acres)) 0 else req$min_acres,
@@ -39,7 +64,9 @@ define_constraints <- function(district_data, parcel_graph_result) {
     station_area_pct     = req$station_area_land_pct,
     unit_to_loc_ids      = unit_to_loc_ids,
     geom_sfc             = geom_sfc,
-    ded_sfc              = ded_sfc
+    ded_sfc              = ded_sfc,
+    row_fill_m           = row_fill_m,
+    row_sfc              = row_sfc
   )
 }
 
@@ -63,12 +90,20 @@ define_constraints <- function(district_data, parcel_graph_result) {
 #'   to the minimum)
 #' @param k_prior_lambda Geometric-prior rate on the number of secondary
 #'   blocks (k); 0 is a flat/improper prior over k
+#' @param right_of_way_sf Optional sf object of right-of-way polygons passed
+#'   through to [define_constraints()] for ROW-constrained fill. Typically
+#'   `district_data$district_right_of_way`.
+#' @param row_fill_m Passed through to [define_constraints()].
 #' @return List with `constraints` and `priors` sub-lists
 #' @export
 parcel_target_spec <- function(district_data, parcel_graph_result,
-                               capacity_prior_lambda, k_prior_lambda) {
+                               capacity_prior_lambda, k_prior_lambda,
+                               right_of_way_sf = NULL,
+                               row_fill_m = 50) {
   list(
-    constraints = define_constraints(district_data, parcel_graph_result),
+    constraints = define_constraints(district_data, parcel_graph_result,
+                                     row_fill_m      = row_fill_m,
+                                     right_of_way_sf = right_of_way_sf),
     priors = list(
       capacity_prior_lambda = capacity_prior_lambda,
       k_prior_lambda        = k_prior_lambda

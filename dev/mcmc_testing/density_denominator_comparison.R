@@ -5,10 +5,11 @@
 #
 # Nomenclature (consistent throughout this file and all dependent scripts):
 #
-#   pipeline  — st_union(in-district parcel polygons) − GIS deductions
-#               This is what compute_gis_density_denom() does in the live MCMC.
-#               Requires only parcel data; works during MCMC search (no district
-#               boundary polygon needed).
+#   pipeline  — morphological_close(st_union(in-district parcel polygons), ROW_FILL_M)
+#               − GIS deductions clipped to that closed polygon.
+#               Matches compute_gis_density_denom() in the live MCMC: fills road
+#               right-of-way gaps (width ≤ 2*ROW_FILL_M) between adjacent parcels.
+#               Requires only parcel data; works during MCMC search.
 #
 #   district  — st_union(adopted district polygons) − GIS deductions clipped to that polygon
 #               Closest to the Excel model calculation. Only available for adopted zones.
@@ -37,16 +38,21 @@
 #   MBTAZONE_PIPELINE_DATA       — directory of per-community .gpkg files
 #   MBTAZONE_DENSITY_DEDUCTIONS  — path to Density_Denominator_Deductions.shp
 #   MBTAZONE_EXCEL_MODELS        — path to mbta_district_models/ directory
+#   MBTAZONE_RIGHT_OF_WAY        — path to Excluded_Land_Right_of_Way.shp
+#                                  (optional; enables ROW-constrained fill)
 
 library(sf)
 library(ggplot2)
 library(data.table)
+
+ROW_FILL_M <- 50  # matches constraints$row_fill_m default in define_constraints()
 
 # ---- Inputs -----------------------------------------------------------------
 
 pipeline_data_dir <- Sys.getenv("MBTAZONE_PIPELINE_DATA")
 density_ded_path  <- Sys.getenv("MBTAZONE_DENSITY_DEDUCTIONS")
 excel_models_dir  <- Sys.getenv("MBTAZONE_EXCEL_MODELS")
+row_path          <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY")
 
 if (!nzchar(pipeline_data_dir)) stop("MBTAZONE_PIPELINE_DATA env var not set.")
 
@@ -79,6 +85,19 @@ if (nzchar(density_ded_path) && file.exists(density_ded_path)) {
 
 if (!nzchar(excel_models_dir))
   cat("MBTAZONE_EXCEL_MODELS not set — Excel columns will be NA.\n\n")
+
+# ---- Load statewide ROW (optional) ------------------------------------------
+
+row_sf <- NULL
+if (nzchar(row_path) && file.exists(row_path)) {
+  cat("Loading right-of-way shapefile...\n")
+  row_sf <- sf::st_read(row_path, quiet = TRUE)
+  row_sf <- sf::st_transform(row_sf, 26986)
+  row_sf <- sf::st_make_valid(row_sf)
+  cat(sprintf("  %d ROW features — ROW-constrained fill enabled\n\n", nrow(row_sf)))
+} else {
+  cat("MBTAZONE_RIGHT_OF_WAY not set — using unconstrained morphological close.\n\n")
+}
 
 # ---- Helper: read Excel density denominator ---------------------------------
 
@@ -146,14 +165,44 @@ results <- lapply(seq_along(gpkg_files), function(i) {
     district_sf   <- sf::st_sf(geometry = district_poly)
     polygon_acres <- as.numeric(sf::st_area(district_poly)) / 4047
 
+    # Raw parcel union — used for gap/overhang diagnostics only.
     parcel_union  <- sf::st_union(in_d)
     union_sf      <- sf::st_sf(geometry = parcel_union)
     union_acres   <- as.numeric(sf::st_area(parcel_union)) / 4047
 
+    # Morphological close, ROW-constrained when row_sf is available.
+    closed_geom <- parcel_union |>
+      sf::st_buffer(ROW_FILL_M,  endCapStyle = "SQUARE") |>
+      sf::st_buffer(-ROW_FILL_M, endCapStyle = "SQUARE")
+
+    if (!is.null(row_sf)) {
+      comm_bbox <- sf::st_as_sfc(sf::st_bbox(parcels))
+      local_row <- suppressWarnings(
+        sf::st_intersection(row_sf, sf::st_sf(geometry = comm_bbox))
+      )
+      if (nrow(local_row) > 0) {
+        row_in_closed <- suppressWarnings(
+          sf::st_intersection(
+            sf::st_sf(geometry = closed_geom),
+            sf::st_sf(geometry = sf::st_union(sf::st_geometry(local_row)))
+          )
+        )
+        pipeline_geom <- if (nrow(row_in_closed) > 0)
+          sf::st_union(c(parcel_union, sf::st_geometry(row_in_closed)))
+        else parcel_union
+      } else {
+        pipeline_geom <- parcel_union
+      }
+    } else {
+      pipeline_geom <- closed_geom
+    }
+    pipeline_sf    <- sf::st_sf(geometry = pipeline_geom)
+    pipeline_acres <- as.numeric(sf::st_area(pipeline_geom)) / 4047
+
     parcel_sum_acres <- sum(in_d$ACRES, na.rm = TRUE)
 
     # Gap: inside district boundary but no parcel polygon covers it.
-    # district method counts this; pipeline method does not (undercount).
+    # district method counts this; raw parcel union does not (undercount).
     gap_sf <- tryCatch(
       sf::st_make_valid(suppressWarnings(sf::st_difference(district_sf, union_sf))),
       error = function(e) NULL
@@ -161,7 +210,7 @@ results <- lapply(seq_along(gpkg_files), function(i) {
     gap_acres <- if (!is.null(gap_sf)) max(0, as.numeric(sf::st_area(gap_sf)) / 4047) else 0
 
     # Overhang: parcel polygon extends beyond district boundary.
-    # pipeline counts this; district method does not (overcount).
+    # raw parcel union counts this; district method does not (overcount).
     overhang_sf <- tryCatch(
       sf::st_make_valid(suppressWarnings(sf::st_difference(union_sf, district_sf))),
       error = function(e) NULL
@@ -186,7 +235,7 @@ results <- lapply(seq_along(gpkg_files), function(i) {
         ded_district_acres <- if (nrow(clipped_district) > 0)
           as.numeric(sf::st_area(sf::st_union(clipped_district))) / 4047 else 0
 
-        clipped_pipeline <- suppressWarnings(sf::st_intersection(union_sf, local_ded))
+        clipped_pipeline <- suppressWarnings(sf::st_intersection(pipeline_sf, local_ded))
         ded_pipeline_acres <- if (nrow(clipped_pipeline) > 0)
           as.numeric(sf::st_area(sf::st_union(clipped_pipeline))) / 4047 else 0
       } else {
@@ -195,7 +244,7 @@ results <- lapply(seq_along(gpkg_files), function(i) {
       }
 
       denom_district <- polygon_acres - ded_district_acres
-      denom_pipeline <- union_acres   - ded_pipeline_acres
+      denom_pipeline <- pipeline_acres - ded_pipeline_acres
     }
 
     # --- Per-parcel deduction fields from .gpkg -------------------------------
@@ -220,11 +269,12 @@ results <- lapply(seq_along(gpkg_files), function(i) {
     data.frame(
       community              = community,
       # Geometry components
-      district_polygon_acres = round(polygon_acres,    3),
-      union_acres            = round(union_acres,      3),
-      parcel_sum_acres       = round(parcel_sum_acres, 3),
-      gap_acres              = round(gap_acres,        3),
-      overhang_acres         = round(overhang_acres,   3),
+      district_polygon_acres = round(polygon_acres,     3),
+      union_acres            = round(union_acres,       3),  # raw parcel union
+      pipeline_acres         = round(pipeline_acres,    3),  # after morphological close
+      parcel_sum_acres       = round(parcel_sum_acres,  3),
+      gap_acres              = round(gap_acres,         3),
+      overhang_acres         = round(overhang_acres,    3),
       ded_district_acres     = round(ded_district_acres,  3),
       ded_pipeline_acres     = round(ded_pipeline_acres,  3),
       per_parcel_dd_acres    = round(per_parcel_dd_acres, 3),

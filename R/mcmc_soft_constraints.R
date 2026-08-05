@@ -15,9 +15,20 @@
 
 #' GIS-based density denominator for a set of MCMC units
 #'
-#' Unions the parcel geometries for the given unit IDs, then subtracts the
-#' pre-dissolved local density deductions to get the true district area in
-#' acres (including roads and gaps enclosed between parcels).
+#' Unions the parcel geometries for the given unit IDs, applies a morphological
+#' close (buffer out then back by `constraints$row_fill_m`) to fill road
+#' right-of-way gaps between adjacent parcels, then subtracts the pre-dissolved
+#' local density deductions to get the district area in acres.
+#'
+#' When `constraints$row_sfc` is set (by passing `right_of_way_sf` to
+#' [define_constraints()]), the fill is ROW-constrained: only the portion of
+#' the morphological close that overlaps the right-of-way polygon is added to
+#' the parcel union.
+#'
+#' Without `row_sfc`, falls back to an unconstrained morphological close that
+#' fills all gaps narrower than `2 * row_fill_m` (e.g. 25 m fills gaps up to
+#' 50 m ≈ 165 ft). Set `row_fill_m = 0` in [define_constraints()] to disable
+#' filling entirely.
 #'
 #' @param unit_ids Character vector of unit IDs (from parcel graph vertices)
 #' @param constraints Constraints list from [define_constraints()]
@@ -30,6 +41,29 @@ compute_gis_density_denom <- function(unit_ids, constraints) {
     cli::cli_abort("No geometries found for unit_ids: {paste(unit_ids, collapse = ', ')}")
   }
   union_geom <- sf::st_union(geom_subset)
+
+  row_fill_m <- constraints$row_fill_m %||% 50
+  if (row_fill_m > 0) {
+    closed_geom <- union_geom |>
+      sf::st_buffer(row_fill_m,  endCapStyle = "SQUARE") |>
+      sf::st_buffer(-row_fill_m, endCapStyle = "SQUARE")
+
+    if (!is.null(constraints$row_sfc) && length(constraints$row_sfc) > 0) {
+      # result = union ∪ (closed ∩ ROW) — only right-of-way fill is kept.
+      row_in_closed <- suppressWarnings(
+        sf::st_intersection(
+          sf::st_sf(geometry = closed_geom),
+          sf::st_sf(geometry = constraints$row_sfc)
+        )
+      )
+      if (nrow(row_in_closed) > 0) {
+        union_geom <- sf::st_union(c(union_geom, sf::st_geometry(row_in_closed)))
+      }
+    } else {
+      union_geom <- closed_geom
+    }
+  }
+
   if (length(constraints$ded_sfc) > 0) {
     remainder <- sf::st_difference(
       sf::st_sf(geometry = union_geom),
