@@ -8,7 +8,8 @@ build_secondary_library_from_discovery(
   combined_discovered,
   parcel_graph,
   max_library_size = 500L,
-  bfs_reservation = 100L
+  bfs_reservation = 100L,
+  constraints = NULL
 )
 }
 \arguments{

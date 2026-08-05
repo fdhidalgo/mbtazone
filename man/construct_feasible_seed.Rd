@@ -23,6 +23,14 @@ area_in_station vertex attributes.}
 present for a seed pool). The secondary_library should already carry the
 precomputed station vectors attached by the caller.}
 
+\item{discovery_capacity_multiplier}{Upper bound on the grown LCC's
+capacity, as a multiple of min_capacity (typically
+\code{discovery_spec$discovery_capacity_multiplier}).}
+
+\item{k_prior_lambda}{Geometric-prior rate on the number of secondary
+blocks, used when drawing how many to attach (typically
+\code{target_spec$priors$k_prior_lambda}).}
+
 \item{max_restarts}{Maximum BFS attempts (default 90).}
 }
 \value{

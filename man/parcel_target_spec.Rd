@@ -8,7 +8,9 @@ parcel_target_spec(
   district_data,
   parcel_graph_result,
   capacity_prior_lambda,
-  k_prior_lambda
+  k_prior_lambda,
+  right_of_way_sf = NULL,
+  row_fill_m = 50
 )
 }
 \arguments{
@@ -20,6 +22,12 @@ to the minimum)}
 
 \item{k_prior_lambda}{Geometric-prior rate on the number of secondary
 blocks (k); 0 is a flat/improper prior over k}
+
+\item{right_of_way_sf}{Optional sf object of right-of-way polygons passed
+through to \code{\link[=define_constraints]{define_constraints()}} for ROW-constrained fill. Typically
+\code{district_data$district_right_of_way}.}
+
+\item{row_fill_m}{Passed through to \code{\link[=define_constraints]{define_constraints()}}.}
 }
 \value{
 List with \code{constraints} and \code{priors} sub-lists

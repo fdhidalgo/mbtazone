@@ -38,10 +38,8 @@ preserved as singleton units regardless of \code{macro_scale}}
 Named list of graph-construction tuning parameters
 }
 \description{
-Bundles the tuning parameters for Tier-2 parcel graph construction
-(adjacency detection and optional macro-parcel aggregation). None of these
-fields affect the target distribution pi(state), proposal tuning, or
-library discovery — this runs before any of those exist. Defaults mirror
-the values previously hardcoded in \code{build_adjacency_graph()} and
-\code{inst/targets/temp_targets_config.R}/\code{temp_targets_parcel_config.R}.
+Bundles the tuning for parcel graph construction: adjacency
+detection (\code{build_adjacency_graph()}) and optional macro-parcel
+aggregation (\code{build_parcel_graph_target()}). Runs before the parcel graph
+or any MCMC objects exist.
 }

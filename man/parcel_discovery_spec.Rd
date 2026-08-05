@@ -77,10 +77,8 @@ discoveries}
 Named list of discovery tuning parameters
 }
 \description{
-Bundles the tuning parameters for LCC and secondary library discovery
-(tree enumeration + BFS supplement). None of these fields affect the
-target distribution pi(state) — they only control how thoroughly the
-candidate-block libraries are explored before MCMC begins. Defaults
-mirror the values previously hardcoded in
+Bundles the tuning parameters for building the LCC and secondary block
+libraries: tree enumeration (Wilson's algorithm) plus a BFS supplement,
+for each library. Defaults mirror the values previously hardcoded in
 \code{inst/targets/temp_targets_parcel_config.R}.
 }

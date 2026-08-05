@@ -15,8 +15,20 @@ compute_gis_density_denom(unit_ids, constraints)
 Numeric scalar: density denominator in acres
 }
 \description{
-Unions the parcel geometries for the given unit IDs, then subtracts the
-pre-dissolved local density deductions to get the true district area in
-acres (including roads and gaps enclosed between parcels).
+Unions the parcel geometries for the given unit IDs, applies a morphological
+close (buffer out then back by \code{constraints$row_fill_m}) to fill road
+right-of-way gaps between adjacent parcels, then subtracts the pre-dissolved
+local density deductions to get the district area in acres.
+}
+\details{
+When \code{constraints$row_sfc} is set (by passing \code{right_of_way_sf} to
+\code{\link[=define_constraints]{define_constraints()}}), the fill is ROW-constrained: only the portion of
+the morphological close that overlaps the right-of-way polygon is added to
+the parcel union.
+
+Without \code{row_sfc}, falls back to an unconstrained morphological close that
+fills all gaps narrower than \code{2 * row_fill_m} (e.g. 25 m fills gaps up to
+50 m ≈ 165 ft). Set \code{row_fill_m = 0} in \code{\link[=define_constraints]{define_constraints()}} to disable
+filling entirely.
 }
 \keyword{internal}

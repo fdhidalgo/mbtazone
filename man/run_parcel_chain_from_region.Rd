@@ -26,9 +26,7 @@ run_parcel_chain_from_region(
 \item{lcc_library}{Discovered LCC library (shared across all chains)}
 
 \item{initial_state}{Pre-generated initial parcel state from
-generate_initial_states_from_lccs(). Replaces region-based BFS seeding.}
-
-\item{region_assignments}{Ignored, kept for backward compatibility only.}
+generate_initial_states_from_lccs()}
 }
 \value{
 List with parcel_samples, samples, stats, diagnostics, chain_id,
