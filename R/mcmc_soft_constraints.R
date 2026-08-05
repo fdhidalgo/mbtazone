@@ -15,9 +15,14 @@
 
 #' GIS-based density denominator for a set of MCMC units
 #'
-#' Unions the parcel geometries for the given unit IDs, then subtracts the
-#' pre-dissolved local density deductions to get the true district area in
-#' acres (including roads and gaps enclosed between parcels).
+#' Unions the parcel geometries for the given unit IDs, applies a morphological
+#' close (buffer out then back by `constraints$row_fill_m`) to fill road
+#' right-of-way gaps between adjacent parcels, then subtracts the pre-dissolved
+#' local density deductions to get the district area in acres.
+#'
+#' The morphological close fills all gaps narrower than `2 * row_fill_m`
+#' (e.g. 25 m fills gaps up to 50 m ≈ 165 ft). Set `row_fill_m = 0` in
+#' [define_constraints()] to disable and revert to the raw parcel union.
 #'
 #' @param unit_ids Character vector of unit IDs (from parcel graph vertices)
 #' @param constraints Constraints list from [define_constraints()]
@@ -30,6 +35,14 @@ compute_gis_density_denom <- function(unit_ids, constraints) {
     cli::cli_abort("No geometries found for unit_ids: {paste(unit_ids, collapse = ', ')}")
   }
   union_geom <- sf::st_union(geom_subset)
+
+  row_fill_m <- constraints$row_fill_m %||% 15
+  if (row_fill_m > 0) {
+    union_geom <- union_geom |>
+      sf::st_buffer(row_fill_m) |>
+      sf::st_buffer(-row_fill_m)
+  }
+
   if (length(constraints$ded_sfc) > 0) {
     remainder <- sf::st_difference(
       sf::st_sf(geometry = union_geom),

@@ -12,9 +12,15 @@
 #' @param district_data List from [load_district_data()]
 #' @param parcel_graph_result List from [build_parcel_graph_target()] or
 #'   [build_identity_parcel_graph()]
+#' @param row_fill_m Buffer distance (metres) for the morphological close
+#'   applied in [compute_gis_density_denom()] to fill road right-of-way gaps
+#'   between adjacent parcels. A value of `d` fills gaps narrower than `2*d`
+#'   (e.g. 25 m fills gaps up to 50 m ≈ 165 ft, covering residential,
+#'   collector, and most arterial streets). Set to 0 to disable.
 #' @return List of constraints for MCMC
 #' @export
-define_constraints <- function(district_data, parcel_graph_result) {
+define_constraints <- function(district_data, parcel_graph_result,
+                               row_fill_m = 25) {
   req <- district_data$district_requirements
 
   # Maps each parcel graph unit to its constituent parcel LOC_IDs,
@@ -39,7 +45,8 @@ define_constraints <- function(district_data, parcel_graph_result) {
     station_area_pct     = req$station_area_land_pct,
     unit_to_loc_ids      = unit_to_loc_ids,
     geom_sfc             = geom_sfc,
-    ded_sfc              = ded_sfc
+    ded_sfc              = ded_sfc,
+    row_fill_m           = row_fill_m
   )
 }
 
