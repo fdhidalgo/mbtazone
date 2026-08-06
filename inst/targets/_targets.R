@@ -164,7 +164,8 @@ list(
       parcel_graph_result,
       capacity_prior_lambda = CAPACITY_PRIOR_LAMBDA,
       k_prior_lambda        = K_PRIOR_LAMBDA,
-      right_of_way_sf       = district_data$district_right_of_way
+      right_of_way_sf       = district_data$district_right_of_way,
+      row_fill_m            = ROW_FILL_M
     )
   ),
 
