@@ -387,7 +387,7 @@ get_addable_blocks_unconstrained <- function(state, library) {
 
 #' Build flat closure arrays for the vectorized addable-block scan
 #'
-#' For each secondary block i, its closure is blocks[[i]] ∪ neighbor_indices[[i]]
+#' For each secondary block i, its closure is `blocks[[i]]` ∪ `neighbor_indices[[i]]`
 #' (the parcels whose membership in X makes the block un-addable). Flattening
 #' all closures into two parallel integer arrays lets
 #' \code{\link{get_addable_blocks_unconstrained}} replace its per-block loop

@@ -25,7 +25,7 @@ data.table of selected blocks
 }
 \description{
 Selects blocks to maximize geographic coverage. Each block is scored by how
-much it improves coverage of under-covered parcels: score = sum(1/(coverage\link{p}+1)).
+much it improves coverage of under-covered parcels: \code{score = sum(1/(coverage[p]+1))}.
 This naturally favors blocks in underrepresented areas.
 }
 \details{

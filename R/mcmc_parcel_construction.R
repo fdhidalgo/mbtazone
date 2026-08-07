@@ -35,7 +35,7 @@ identify_atomic_parcels <- function(g, area_threshold) {
 #' Cluster parcels into units via region-growing
 #'
 #' Uses BFS-based region growing to aggregate small parcels into units
-#' with target area in [area_min, area_max]. Atomic parcels (large parcels)
+#' with target area in `[area_min, area_max]`. Atomic parcels (large parcels)
 #' are excluded from clustering and become singleton units.
 #'
 #' Algorithm:

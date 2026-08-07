@@ -105,9 +105,9 @@ compute_subtree_aggregates <- function(
 #' @param root Integer vertex index to use as root
 #' @return List with:
 #'   - dfs_order: integer vector of vertices in DFS order
-#'   - entry: entry[v] = position in dfs_order where v's subtree starts
-#'   - subtree_size: subtree_size[v] = number of vertices in v's subtree
-#'   - parent: parent[v] = parent vertex (root has parent = root)
+#'   - entry: `entry[v]` = position in dfs_order where v's subtree starts
+#'   - subtree_size: `subtree_size[v]` = number of vertices in v's subtree
+#'   - parent: `parent[v]` = parent vertex (root has parent = root)
 compute_tree_dfs_metadata <- function(tree, root) {
   n <- igraph::vcount(tree)
 
@@ -181,7 +181,7 @@ extract_cut_parcels <- function(tree_names, cut_vertex, cut_side, dfs_metadata) 
 
 #' Find all valid LCC cuts of a spanning tree
 #'
-#' Each non-root vertex v defines a potential cut: removing edge (v, parent[v])
+#' Each non-root vertex v defines a potential cut: removing edge (v, `parent[v]`)
 #' splits the tree into the subtree rooted at v and its complement.
 #' A cut is valid if the resulting component can serve as an LCC candidate
 #' (density >= min_density, and capacity >= min_capacity * min_lcc_fraction).
@@ -728,7 +728,7 @@ strip_graph_attributes <- function(graph) {
 
 #' Find all valid secondary block cuts of a spanning tree
 #'
-#' Each non-root vertex v defines a potential cut: removing edge (v, parent[v])
+#' Each non-root vertex v defines a potential cut: removing edge (v, `parent[v]`)
 #' splits the tree into the subtree rooted at v and its complement.
 #' A cut is valid if the resulting component satisfies secondary block constraints
 #' (area within band, density >= threshold).

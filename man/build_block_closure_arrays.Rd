@@ -14,7 +14,7 @@ List with closure_flat_block (block id per closure member) and
 closure_flat_parcel (parcel index per closure member)
 }
 \description{
-For each secondary block i, its closure is blocks[\link{i}] ∪ neighbor_indices[\link{i}]
+For each secondary block i, its closure is \code{blocks[[i]]} ∪ \code{neighbor_indices[[i]]}
 (the parcels whose membership in X makes the block un-addable). Flattening
 all closures into two parallel integer arrays lets
 \code{\link{get_addable_blocks_unconstrained}} replace its per-block loop

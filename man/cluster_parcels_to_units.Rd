@@ -28,7 +28,7 @@ data.table with columns: parcel_id, unit_id
 }
 \description{
 Uses BFS-based region growing to aggregate small parcels into units
-with target area in \link{area_min, area_max}. Atomic parcels (large parcels)
+with target area in \verb{[area_min, area_max]}. Atomic parcels (large parcels)
 are excluded from clustering and become singleton units.
 }
 \details{

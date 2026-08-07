@@ -52,7 +52,7 @@ parcel_ids_to_indices <- function(parcel_ids, parcel_names) {
 #' Select blocks by coverage-aware greedy algorithm
 #'
 #' Selects blocks to maximize geographic coverage. Each block is scored by how
-#' much it improves coverage of under-covered parcels: score = sum(1/(coverage[p]+1)).
+#' much it improves coverage of under-covered parcels: `score = sum(1/(coverage[p]+1))`.
 #' This naturally favors blocks in underrepresented areas.
 #'
 #' Works with any block type (LCCs, secondaries) as long as the data.table has

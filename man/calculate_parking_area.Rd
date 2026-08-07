@@ -39,7 +39,7 @@ parking spaces per unit:
 \item 0.51-1.0 spaces/unit: 45\% coverage factor (400 sq ft per space)
 \item 1.01-1.25 spaces/unit: 55\% coverage factor (~440 sq ft per space)
 \item 1.26-1.5 spaces/unit: 60\% coverage factor (400 sq ft per space)
-\item 1.5 spaces/unit: 65\% coverage factor (433 sq ft per space)
+\item \>1.5 spaces/unit: 65\% coverage factor (433 sq ft per space)
 }
 
 Formula: parking_area = (lot_area - required_open_space) * parking_factor

@@ -213,6 +213,7 @@ md <- c(
   "|:---|---:|",
   paste0("| MCMC_STEPS_MACRO             | ", cfg_val(cfg, "MCMC_STEPS_MACRO"),             " |"),
   paste0("| MCMC_BURN_IN                 | ", cfg_val(cfg, "MCMC_BURN_IN"),                 " |"),
+  paste0("| ROW_FILL_M                   | ", cfg_val(cfg, "ROW_FILL_M"),                   " |"),
   paste0("| CAPACITY_PRIOR_LAMBDA        | ", cfg_val(cfg, "CAPACITY_PRIOR_LAMBDA"),        " |"),
   paste0("| K_PRIOR_LAMBDA               | ", cfg_val(cfg, "K_PRIOR_LAMBDA"),               " |"),
   paste0("| SWAP_CAP_TOLERANCE           | ", cfg_val(cfg, "SWAP_CAP_TOLERANCE"),           " |"),
