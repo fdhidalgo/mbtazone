@@ -47,6 +47,11 @@ AGENTS.md
 dev/mcmc_testing/compactness/outputs/
 dev/mcmc_testing/plots/
 
+# Generated images and data in testing
+dev/mcmc_testing/**/*.csv
+dev/mcmc_testing/**/*.png
+dev/mcmc_testing/**/*.jpg
+
 ##Development Potential
 dev/dev_potential/
 /.quarto/
