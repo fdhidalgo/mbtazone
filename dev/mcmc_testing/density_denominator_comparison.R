@@ -297,6 +297,8 @@ results <- lapply(seq_along(gpkg_files), function(i) {
       # Diagnostic: difference vs Excel
       pipeline_minus_excel_acres = round(denom_pipeline - denom_excel, 3),
       district_minus_excel_acres = round(denom_district - denom_excel, 3),
+      # Diagnostic: difference vs district boundary calculation
+      pipeline_minus_district_acres = round(denom_pipeline - denom_district, 3),
       per_parcel_fields_corrupted = !is.na(denom_per_parcel) & denom_per_parcel < 0,
       stringsAsFactors = FALSE
     )
@@ -362,50 +364,52 @@ if (nrow(has_excel) > 0) {
 # ---- Plots ------------------------------------------------------------------
 
 LABEL_THRESHOLD <- 2.0
-p1_data <- has_excel[!is.na(gross_density_excel) & !is.na(gross_density_pipeline)]
+has_district <- dt[!is.na(denom_district)]
+p1_data <- has_district[!is.na(gross_density_district) & !is.na(gross_density_pipeline)]
 has_ggrepel <- requireNamespace("ggrepel", quietly = TRUE)
 
-p1 <- ggplot(p1_data, aes(x = gross_density_excel, y = gross_density_pipeline)) +
+p1 <- ggplot(p1_data, aes(x = gross_density_district, y = gross_density_pipeline)) +
   geom_abline(slope = 1, intercept = 0, colour = "grey50", linetype = "dashed",
               linewidth = 0.8) +
-  geom_point(aes(colour = pipeline_minus_excel_acres), size = 2.5, alpha = 0.85) +
+  geom_point(aes(colour = pipeline_minus_district_acres), size = 2.5, alpha = 0.85) +
   (if (has_ggrepel) {
     ggrepel::geom_text_repel(
-      data = p1_data[abs(gross_density_pipeline - gross_density_excel) > LABEL_THRESHOLD],
+      data = p1_data[abs(gross_density_pipeline - gross_density_district) > LABEL_THRESHOLD],
       aes(label = community), size = 2.8, max.overlaps = 30, segment.colour = "grey60"
     )
   } else {
     geom_text(
-      data = p1_data[abs(gross_density_pipeline - gross_density_excel) > LABEL_THRESHOLD],
+      data = p1_data[abs(gross_density_pipeline - gross_density_district) > LABEL_THRESHOLD],
       aes(label = community), size = 2.5, vjust = -0.6
     )
   }) +
   scale_colour_gradient2(
-    name     = "Pipeline − Excel\ndenominator (ac)",
+    name     = "Pipeline − District\ndenominator (ac)",
     low      = "#4575b4", mid = "white", high = "#d73027", midpoint = 0
   ) +
   labs(
-    title    = "Pipeline vs Excel gross density for adopted boundaries",
+    title    = "Pipeline vs district boundary gross density for adopted boundaries",
     subtitle = paste0(
-      "Pipeline = st_union(in-district parcel polygons) − GIS deductions.\n",
-      "Red: pipeline denominator > Excel (parcel overhang); blue: < Excel (gap/water)."
+      "Pipeline = st_union(in-district parcel polygons) → morphological close − GIS deductions.\n",
+      "District = st_union(adopted district polygons) − GIS deductions.\n",
+      "Red: pipeline denominator > district (parcel overhang); blue: < district (gap/water)."
     ),
-    x = "Excel density (du/ac)  [ground truth]",
+    x = "District boundary density (du/ac)",
     y = "Pipeline density (du/ac)"
   ) +
   theme_bw(base_size = 11) +
   theme(legend.position = "right")
 
-ggsave("dev/mcmc_testing/density_accuracy_scatter.png",
+ggsave("dev/mcmc_testing/density_pipeline_vs_district_scatter.png",
        p1, width = 8, height = 7, dpi = 150)
-cat("Saved: dev/mcmc_testing/density_accuracy_scatter.png\n")
+cat("Saved: dev/mcmc_testing/density_pipeline_vs_district_scatter.png\n")
 
-bar_data <- copy(has_excel)[!is.na(pipeline_minus_excel_acres)]
-bar_data <- bar_data[order(pipeline_minus_excel_acres)]
+bar_data <- copy(has_district)[!is.na(pipeline_minus_district_acres)]
+bar_data <- bar_data[order(pipeline_minus_district_acres)]
 bar_data[, community_f := factor(community, levels = community)]
-bar_data[, overcount   := pipeline_minus_excel_acres > 0]
+bar_data[, overcount   := pipeline_minus_district_acres > 0]
 
-p2 <- ggplot(bar_data, aes(x = community_f, y = pipeline_minus_excel_acres,
+p2 <- ggplot(bar_data, aes(x = community_f, y = pipeline_minus_district_acres,
                             fill = overcount)) +
   geom_col(width = 0.75) +
   geom_hline(yintercept = c(-1, 1), colour = "grey70", linetype = "dotted") +
@@ -417,13 +421,13 @@ p2 <- ggplot(bar_data, aes(x = community_f, y = pipeline_minus_excel_acres,
     name = NULL
   ) +
   labs(
-    title    = "Density denominator error: pipeline − Excel (acres)",
+    title    = "Density denominator error: pipeline − district boundary (acres)",
     subtitle = paste0(
       "Positive (red): parcel polygons extend beyond district boundary (overhang).\n",
       "Negative (blue): district boundary includes water/gaps not covered by parcels (gap)."
     ),
     x = NULL,
-    y = "Pipeline − Excel denominator (acres)"
+    y = "Pipeline − district denominator (acres)"
   ) +
   theme_bw(base_size = 10) +
   theme(
@@ -432,9 +436,9 @@ p2 <- ggplot(bar_data, aes(x = community_f, y = pipeline_minus_excel_acres,
     legend.text  = element_text(size = 8)
   )
 
-ggsave("dev/mcmc_testing/density_accuracy_denom_error.png",
+ggsave("dev/mcmc_testing/density_pipeline_vs_district_denom_error.png",
        p2, width = 13, height = 6, dpi = 150)
-cat("Saved: dev/mcmc_testing/density_accuracy_denom_error.png\n")
+cat("Saved: dev/mcmc_testing/density_pipeline_vs_district_denom_error.png\n")
 
 # ---- CSV output -------------------------------------------------------------
 
