@@ -27,8 +27,8 @@ the morphological close that overlaps the right-of-way polygon is added to
 the parcel union.
 
 Without \code{row_sfc}, falls back to an unconstrained morphological close that
-fills all gaps narrower than \code{2 * row_fill_m} (e.g. 25 m fills gaps up to
-50 m ≈ 165 ft). Set \code{row_fill_m = 0} in \code{\link[=define_constraints]{define_constraints()}} to disable
-filling entirely.
+fills all gaps narrower than \code{2 * row_fill_m} (e.g. 18.29 m fills gaps up
+to 36.58 m ≈ 120 ft). Set \code{row_fill_m = 0} in \code{\link[=define_constraints]{define_constraints()}} to
+disable filling entirely.
 }
 \keyword{internal}

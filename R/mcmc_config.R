@@ -14,8 +14,8 @@
 #'   [build_identity_parcel_graph()]
 #' @param row_fill_m Buffer distance (metres) for the morphological close in
 #'   [compute_gis_density_denom()]; fills road right-of-way gaps narrower than
-#'   `2*d` between adjacent parcels (e.g. 50 m fills gaps up to 100 m ≈ 330 ft).
-#'   Set to 0 to disable.
+#'   `2*d` between adjacent parcels (e.g. 18.29 m fills gaps up to
+#'   36.58 m ≈ 120 ft). Set to 0 to disable.
 #' @param right_of_way_sf Optional sf object of right-of-way polygons (e.g.
 #'   `district_data$district_right_of_way`). When supplied, the morphological
 #'   close in [compute_gis_density_denom()] is ROW-constrained: fill area is
@@ -25,7 +25,7 @@
 #' @return List of constraints for MCMC
 #' @export
 define_constraints <- function(district_data, parcel_graph_result,
-                               row_fill_m = 50,
+                               row_fill_m = 18.29,
                                right_of_way_sf = NULL) {
   req <- district_data$district_requirements
 
@@ -99,7 +99,7 @@ define_constraints <- function(district_data, parcel_graph_result,
 parcel_target_spec <- function(district_data, parcel_graph_result,
                                capacity_prior_lambda, k_prior_lambda,
                                right_of_way_sf = NULL,
-                               row_fill_m = 50) {
+                               row_fill_m = 18.29) {
   list(
     constraints = define_constraints(district_data, parcel_graph_result,
                                      row_fill_m      = row_fill_m,

@@ -27,7 +27,7 @@ library(mapgl)
 library(readxl)
 
 if (!exists("COMMUNITY")) COMMUNITY <- "Salem"  # override by setting before source()
-ROW_FILL_M <- 50  # matches constraints$row_fill_m default in define_constraints()
+ROW_FILL_M <- 18.29  # matches constraints$row_fill_m default in define_constraints()
 
 # ---- Paths ------------------------------------------------------------------
 pipeline_data_dir <- Sys.getenv("MBTAZONE_PIPELINE_DATA")

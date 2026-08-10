@@ -7,7 +7,7 @@
 define_constraints(
   district_data,
   parcel_graph_result,
-  row_fill_m = 50,
+  row_fill_m = 18.29,
   right_of_way_sf = NULL
 )
 }
@@ -19,8 +19,8 @@ define_constraints(
 
 \item{row_fill_m}{Buffer distance (metres) for the morphological close in
 \code{\link[=compute_gis_density_denom]{compute_gis_density_denom()}}; fills road right-of-way gaps narrower than
-\code{2*d} between adjacent parcels (e.g. 50 m fills gaps up to 100 m ≈ 330 ft).
-Set to 0 to disable.}
+\code{2*d} between adjacent parcels (e.g. 18.29 m fills gaps up to
+36.58 m ≈ 120 ft). Set to 0 to disable.}
 
 \item{right_of_way_sf}{Optional sf object of right-of-way polygons (e.g.
 \code{district_data$district_right_of_way}). When supplied, the morphological

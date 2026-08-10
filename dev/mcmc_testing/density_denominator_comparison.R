@@ -45,7 +45,7 @@ library(sf)
 library(ggplot2)
 library(data.table)
 
-ROW_FILL_M <- 50  # matches constraints$row_fill_m default in define_constraints()
+ROW_FILL_M <- 18.29  # matches constraints$row_fill_m default in define_constraints()
 
 # ---- Inputs -----------------------------------------------------------------
 

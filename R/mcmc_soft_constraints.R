@@ -26,9 +26,9 @@
 #' the parcel union.
 #'
 #' Without `row_sfc`, falls back to an unconstrained morphological close that
-#' fills all gaps narrower than `2 * row_fill_m` (e.g. 25 m fills gaps up to
-#' 50 m ≈ 165 ft). Set `row_fill_m = 0` in [define_constraints()] to disable
-#' filling entirely.
+#' fills all gaps narrower than `2 * row_fill_m` (e.g. 18.29 m fills gaps up
+#' to 36.58 m ≈ 120 ft). Set `row_fill_m = 0` in [define_constraints()] to
+#' disable filling entirely.
 #'
 #' @param unit_ids Character vector of unit IDs (from parcel graph vertices)
 #' @param constraints Constraints list from [define_constraints()]
@@ -42,7 +42,7 @@ compute_gis_density_denom <- function(unit_ids, constraints) {
   }
   union_geom <- sf::st_union(geom_subset)
 
-  row_fill_m <- constraints$row_fill_m %||% 50
+  row_fill_m <- constraints$row_fill_m %||% 18.29
   if (row_fill_m > 0) {
     closed_geom <- union_geom |>
       sf::st_buffer(row_fill_m,  endCapStyle = "SQUARE") |>

@@ -116,4 +116,4 @@ MCMC_BURN_IN <- 1000L
 # Buffer distance (metres) for the morphological close in
 # compute_gis_density_denom(); fills road right-of-way gaps narrower than
 # 2*d between adjacent parcels. Set to 0 to disable.
-ROW_FILL_M <- 50
+ROW_FILL_M <- 18.29

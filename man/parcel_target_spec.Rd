@@ -10,7 +10,7 @@ parcel_target_spec(
   capacity_prior_lambda,
   k_prior_lambda,
   right_of_way_sf = NULL,
-  row_fill_m = 50
+  row_fill_m = 18.29
 )
 }
 \arguments{
