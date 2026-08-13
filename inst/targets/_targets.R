@@ -425,7 +425,8 @@ list(
       parcel_graph = parcel_graph_result$parcel_graph,
       lcc_library = discovered_lcc_library,
       secondary_library = discovered_secondary_library,
-      constraints = target_spec$constraints
+      constraints = target_spec$constraints,
+      secondary_area_threshold = SECONDARY_AREA_THRESHOLD
     )
   ),
 
@@ -484,10 +485,10 @@ list(
   # Now derived from parcel_initial_states INSTEAD OF parcel_station_regions
   tar_target(
     parcel_multichain_config,
+    # n_steps omitted — sampler_spec is the single source of truth for it
     define_parcel_multichain_configs(
       base_config = sampler_spec,
       n_chains    = length(parcel_initial_states),
-      n_steps     = MCMC_STEPS_MACRO,
       region_ids  = paste0("chain_", seq_along(parcel_initial_states))
     )
   ),
@@ -530,7 +531,8 @@ list(
     compute_multichain_parcel_metrics(
       all_parcel_chain_results,
       parcel_graph_result$parcel_graph,
-      mcmc_burn_in = sampler_spec$mcmc_burn_in
+      mcmc_burn_in = sampler_spec$mcmc_burn_in,
+      rhat_threshold = RHAT_CONVERGENCE_THRESHOLD
     )
   ),
 
@@ -554,7 +556,8 @@ list(
     parcel_chain_separation,
     detect_parcel_chain_separation(
       all_parcel_chain_results,
-      parcel_graph_result$parcel_graph
+      parcel_graph_result$parcel_graph,
+      overlap_threshold = CHAIN_OVERLAP_THRESHOLD
     )
   ),
 
@@ -564,15 +567,17 @@ list(
     create_parcel_irreducibility_report(
       all_parcel_chain_results,
       parcel_graph_result$parcel_graph,
-      mcmc_burn_in = sampler_spec$mcmc_burn_in
+      mcmc_burn_in = sampler_spec$mcmc_burn_in,
       # region_assignments omitted — defaults to NULL
+      rhat_threshold = RHAT_CONVERGENCE_THRESHOLD
     )
   ),
 
   # Plot objects for Quarto report
   tar_target(
     parcel_rhat_plot_obj,
-    plot_parcel_rhat_summary(parcel_rhat_table)
+    plot_parcel_rhat_summary(parcel_rhat_table,
+                             rhat_threshold = RHAT_CONVERGENCE_THRESHOLD)
   ),
 
   # ============================================================================

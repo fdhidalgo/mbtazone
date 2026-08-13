@@ -41,7 +41,7 @@ for (i in seq_len(nrow(districts))) {
   preflight_ok <- tryCatch({
     tar_make(
       names  = c("district_paths", "district_data", "adjacency_graph",
-                   "constraints", "parcel_graph_result"),
+                   "target_spec", "parcel_graph_result"),
       script   = "inst/targets/_targets.R",
       store    = store,
       reporter = "silent"
@@ -76,7 +76,7 @@ for (i in seq_len(nrow(districts))) {
   # Compute checks from stored targets
   tryCatch({
     pg  <- tar_read(parcel_graph_result, store = store)$parcel_graph
-    con <- tar_read(constraints,         store = store)
+    con <- tar_read(target_spec,         store = store)$constraints
 
     cap     <- igraph::V(pg)$capacity
     area    <- igraph::V(pg)$area

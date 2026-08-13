@@ -4,7 +4,12 @@
 \alias{compute_multichain_parcel_metrics}
 \title{Compute multi-chain parcel mixing metrics}
 \usage{
-compute_multichain_parcel_metrics(chain_results, parcel_graph, mcmc_burn_in)
+compute_multichain_parcel_metrics(
+  chain_results,
+  parcel_graph,
+  mcmc_burn_in,
+  rhat_threshold = 1.1
+)
 }
 \arguments{
 \item{chain_results}{Named list of chain results from run_parcel_chain_from_region()}
@@ -13,6 +18,9 @@ compute_multichain_parcel_metrics(chain_results, parcel_graph, mcmc_burn_in)
 
 \item{mcmc_burn_in}{Number of leading samples to discard from each chain's
 trajectory before computing ESS/R-hat (typically \code{sampler_spec$mcmc_burn_in})}
+
+\item{rhat_threshold}{R-hat (upper CI) below which every metric must fall for
+\code{all_converged} to be TRUE (default 1.1)}
 }
 \value{
 List of aggregated metrics

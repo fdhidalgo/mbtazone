@@ -3,13 +3,15 @@
 # Run interactively from the package root with devtools::load_all() active.
 #
 # Set DISTRICT to any community name present in mbta_pipeline_data/.
-# Set PIPELINE_DATA and RIGHT_OF_WAY to your local paths, or let them
-# fall through to the env vars used by the pipeline.
+# Set PIPELINE_DATA, RIGHT_OF_WAY, and DENSITY_DED_PATH to your local paths,
+# or let them fall through to the env vars used by the pipeline
+# (MBTAZONE_PIPELINE_DATA, MBTAZONE_RIGHT_OF_WAY, MBTAZONE_DENSITY_DEDUCTIONS).
 
-DISTRICT      <- "Norwood"
-DISTRICT_TYPE <- "commuter_rail"
-PIPELINE_DATA <- Sys.getenv("MBTAZONE_PIPELINE_DATA")
-RIGHT_OF_WAY  <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY")
+DISTRICT         <- "Norwood"
+DISTRICT_TYPE    <- "commuter_rail"
+PIPELINE_DATA    <- Sys.getenv("MBTAZONE_PIPELINE_DATA")
+RIGHT_OF_WAY     <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY")
+DENSITY_DED_PATH <- Sys.getenv("MBTAZONE_DENSITY_DEDUCTIONS")
 
 # ============================================================================
 # 1. Path resolution
@@ -50,11 +52,21 @@ print(st_drop_geometry(districts_raw)[, c(
 # ============================================================================
 # 3. Full load via load_district_data
 # ============================================================================
+# Cache the statewide deductions across source() calls (slow to load)
+if (!exists("deductions_global") || !inherits(deductions_global, "sf")) {
+  cat("\nLoading density deductions (cached for subsequent source() calls)...\n")
+  deductions_global <- st_make_valid(
+    st_transform(st_read(DENSITY_DED_PATH, quiet = TRUE), 26986)
+  )
+  cat(sprintf("  Loaded %d deduction features\n", nrow(deductions_global)))
+}
+
 district_data <- load_district_data(
-  district_name = DISTRICT,
-  district_type = DISTRICT_TYPE,
-  gpkg          = paths$gpkg,
-  right_of_way  = RIGHT_OF_WAY
+  district_name      = DISTRICT,
+  district_type      = DISTRICT_TYPE,
+  gpkg               = paths$gpkg,
+  right_of_way       = RIGHT_OF_WAY,
+  density_deductions = deductions_global
 )
 
 # ============================================================================

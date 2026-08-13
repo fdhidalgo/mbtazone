@@ -9,7 +9,7 @@ store <- paste0("ext/_targets_", gsub(" ", "_", district_name))
 
 Sys.setenv(DISTRICT_NAME = district_name, DISTRICT_TYPE = district_type)
 
-tar_load(constraints, store = store)
+tar_load(target_spec, store = store)
 tar_load(district_data, store = store)
 tar_load(parcel_graph_result, store = store)
 tar_load(district_paths, store = store)
@@ -37,16 +37,18 @@ adopted_density      <- adopted_cap / adopted_area
 adopted_station_cap  <- sum(igraph::V(pg)[adopted_in_graph]$capacity_in_station)
 adopted_station_area <- sum(igraph::V(pg)[adopted_in_graph]$area_in_station)
 
-required_station_cap  <- (constraints$station_capacity_pct / 100) * constraints$min_capacity
-required_station_area <- (constraints$station_area_pct / 100) * constraints$min_area
+required_station_cap  <- (target_spec$constraints$station_capacity_pct / 100) *
+  target_spec$constraints$min_capacity
+required_station_area <- (target_spec$constraints$station_area_pct / 100) *
+  target_spec$constraints$min_area
 
 cat("Adopted boundary metrics:\n")
-cat("  capacity:", adopted_cap, "vs min_capacity:", constraints$min_capacity,
-    "→", ifelse(adopted_cap >= constraints$min_capacity, "✓", "✗"), "\n")
-cat("  area:", round(adopted_area, 1), "vs min_area:", constraints$min_area,
-    "→", ifelse(adopted_area >= constraints$min_area, "✓", "✗"), "\n")
-cat("  density:", round(adopted_density, 2), "vs min_density:", constraints$min_density,
-    "→", ifelse(adopted_density >= constraints$min_density, "✓", "✗"), "\n")
+cat("  capacity:", adopted_cap, "vs min_capacity:", target_spec$constraints$min_capacity,
+    "→", ifelse(adopted_cap >= target_spec$constraints$min_capacity, "✓", "✗"), "\n")
+cat("  area:", round(adopted_area, 1), "vs min_area:", target_spec$constraints$min_area,
+    "→", ifelse(adopted_area >= target_spec$constraints$min_area, "✓", "✗"), "\n")
+cat("  density:", round(adopted_density, 2), "vs min_density:", target_spec$constraints$min_density,
+    "→", ifelse(adopted_density >= target_spec$constraints$min_density, "✓", "✗"), "\n")
 cat("  station_cap:", round(adopted_station_cap), "vs required:", round(required_station_cap),
     "→", ifelse(adopted_station_cap >= required_station_cap, "✓", "✗"), "\n")
 cat("  station_area:", round(adopted_station_area, 1), "vs required:", round(required_station_area, 1),

@@ -8,7 +8,8 @@ create_parcel_irreducibility_report(
   chain_results,
   parcel_graph,
   mcmc_burn_in,
-  region_assignments = NULL
+  region_assignments = NULL,
+  rhat_threshold = 1.1
 )
 }
 \arguments{
@@ -20,6 +21,9 @@ create_parcel_irreducibility_report(
 trajectory before computing R-hat (typically \code{sampler_spec$mcmc_burn_in})}
 
 \item{region_assignments}{Region partition}
+
+\item{rhat_threshold}{R-hat (upper CI) at or above which a metric is flagged
+as not converged (default 1.1)}
 }
 \value{
 List with all diagnostics and summary

@@ -6,8 +6,8 @@
 \usage{
 define_parcel_multichain_configs(
   base_config,
-  n_chains = DEFAULT_N_CHAINS,
-  n_steps = MCMC_STEPS_MACRO,
+  n_chains = 4L,
+  n_steps = base_config$n_steps,
   region_ids = paste0("chain_", seq_len(n_chains))
 )
 }
@@ -16,7 +16,8 @@ define_parcel_multichain_configs(
 
 \item{n_chains}{Number of chains to run (default 4)}
 
-\item{n_steps}{Number of MCMC steps per chain (default MCMC_STEPS_MACRO)}
+\item{n_steps}{Number of MCMC steps per chain. Defaults to the sampler
+spec's own \code{n_steps}, which is the authoritative step count.}
 
 \item{region_ids}{Character vector of region identifiers for labelling chains.
 Defaults to "chain_1", "chain_2", etc.}

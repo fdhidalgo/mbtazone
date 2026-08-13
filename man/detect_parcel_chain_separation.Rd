@@ -7,7 +7,8 @@
 detect_parcel_chain_separation(
   chain_results,
   parcel_graph,
-  visit_threshold = 0.05
+  visit_threshold = 0.05,
+  overlap_threshold = 0.1
 )
 }
 \arguments{
@@ -16,6 +17,9 @@ detect_parcel_chain_separation(
 \item{parcel_graph}{igraph object}
 
 \item{visit_threshold}{Fraction for "frequently visited" (default 0.05)}
+
+\item{overlap_threshold}{Minimum pairwise Jaccard overlap for chains to count
+as mixing; below it the chains are flagged as separated (default 0.1)}
 }
 \value{
 List with separated, overlap_matrix, min_overlap, centroid_ranges,

@@ -68,7 +68,7 @@ suppressMessages(pkgload::load_all(PKG_ROOT, quiet = TRUE,
 # FROZEN inputs to the measurement, not rebuilt here.
 
 stopifnot("warm store missing" = dir.exists(STORE))
-tar_load(c(parcel_graph_result, discovery_spec), store = STORE)
+tar_load(c(parcel_graph_result, discovery_spec, target_spec), store = STORE)
 
 # --- one full secondary discovery (Tier 3B of inst/targets/_targets.R) -------
 # Reproduces the target chain tree_discovered_secondaries ->
@@ -112,7 +112,8 @@ run_once <- function() {
     combined_discovered = combined,
     parcel_graph        = pg,
     max_library_size    = discovery_spec$sec_library_max_size,
-    bfs_reservation     = discovery_spec$bfs_reservation_sec
+    bfs_reservation     = discovery_spec$bfs_reservation_sec,
+    constraints         = target_spec$constraints
   )
 }
 

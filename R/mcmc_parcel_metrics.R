@@ -294,9 +294,12 @@ aggregate_chain_timing <- function(valid_chains) {
 #' @param parcel_graph igraph object
 #' @param mcmc_burn_in Number of leading samples to discard from each chain's
 #'   trajectory before computing ESS/R-hat (typically `sampler_spec$mcmc_burn_in`)
+#' @param rhat_threshold R-hat (upper CI) below which every metric must fall for
+#'   `all_converged` to be TRUE (default 1.1)
 #' @return List of aggregated metrics
 #' @export
-compute_multichain_parcel_metrics <- function(chain_results, parcel_graph, mcmc_burn_in) {
+compute_multichain_parcel_metrics <- function(chain_results, parcel_graph, mcmc_burn_in,
+                                              rhat_threshold = 1.1) {
   # Filter to valid chains
   valid_chains <- Filter(function(x) !isTRUE(x$initialization_failed), chain_results)
 
@@ -370,7 +373,7 @@ compute_multichain_parcel_metrics <- function(chain_results, parcel_graph, mcmc_
 
     # R-hat convergence (use upper CI for conservative check)
     rhat_table = rhat_table,
-    all_converged = all(rhat_table$rhat_upper < RHAT_CONVERGENCE_THRESHOLD, na.rm = TRUE),
+    all_converged = all(rhat_table$rhat_upper < rhat_threshold, na.rm = TRUE),
     max_rhat = max(rhat_table$rhat, na.rm = TRUE),
     max_rhat_upper = max(rhat_table$rhat_upper, na.rm = TRUE),
 

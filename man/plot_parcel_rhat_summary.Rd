@@ -4,10 +4,13 @@
 \alias{plot_parcel_rhat_summary}
 \title{Plot parcel R-hat convergence summary}
 \usage{
-plot_parcel_rhat_summary(rhat_table)
+plot_parcel_rhat_summary(rhat_table, rhat_threshold = 1.1)
 }
 \arguments{
 \item{rhat_table}{Output from compute_parcel_multichain_rhat()}
+
+\item{rhat_threshold}{R-hat below which a metric counts as converged
+(default 1.1)}
 }
 \value{
 ggplot object
