@@ -958,6 +958,10 @@ remove_secondary_block <- function(state, block_id_to_remove, library, parcel_gr
 #' Adds or removes a single parcel from the LCC. Throws an error if invariants
 #' are violated (adding a parcel already in X, or removing one not in X).
 #'
+#' The returned state carries no GIS denominator: the LCC changed, so both
+#' \code{lcc_gis_area} and \code{total_gis_area} must be refreshed by the caller
+#' via \code{\link{update_lcc_gis_area}} before any feasibility check.
+#'
 #' @param state Current state
 #' @param unit_id Parcel ID to toggle
 #' @param action "add" or "remove"
@@ -1087,6 +1091,32 @@ update_lcc <- function(state, unit_id, action, library, parcel_graph,
     new_state$X_neighbor_counts <- new_X_counts
   }
 
+  new_state
+}
+
+#' Refresh the cached GIS denominator after an LCC-local move
+#'
+#' The denominator is per block by definition: the LCC block closed on its own
+#' plus each secondary block closed on its own, with cross-block road fill
+#' excluded. An LCC-local move changes only the LCC, so the secondary
+#' contribution carries over as (old total - old LCC area) and only the new LCC
+#' block is unioned — never the whole state.
+#'
+#' @param new_state State returned by \code{\link{update_lcc}}.
+#' @param old_state State the move started from; must carry both cached fields.
+#' @param constraints Constraints list from \code{\link{define_constraints}}.
+#' @return \code{new_state} with \code{lcc_gis_area} and \code{total_gis_area} set.
+#' @keywords internal
+update_lcc_gis_area <- function(new_state, old_state, constraints) {
+  stopifnot(
+    is.finite(old_state$total_gis_area),
+    is.finite(old_state$lcc_gis_area)
+  )
+  secondary_gis <- old_state$total_gis_area - old_state$lcc_gis_area
+  new_state$lcc_gis_area <- compute_gis_density_denom(
+    new_state$lcc_parcels, constraints
+  )
+  new_state$total_gis_area <- new_state$lcc_gis_area + secondary_gis
   new_state
 }
 
@@ -1277,6 +1307,7 @@ create_lcc_signature <- function(state) {
 #' 5. X_indices matches X exactly
 #' 6. total_capacity equals sum over X
 #' 7. total_area equals sum over X
+#' 8. total_gis_area equals lcc_gis_area plus the secondaries' library gis_area
 #'
 #' @param state Current parcel MCMC state
 #' @param parcel_graph igraph object with capacity/area attributes
@@ -1400,6 +1431,25 @@ validate_state_invariants <- function(
     stop(sprintf(
       "Invariant violation%s: Area mismatch\n  Stored: %.4f, Actual: %.4f, Diff: %.4f",
       ctx, state$total_area, actual_area, actual_area - state$total_area
+    ))
+  }
+
+  # --- Invariant 8: total_gis_area = lcc_gis_area + secondary block areas ---
+  # The GIS denominator is per block by definition, so it must equal the LCC
+  # block's own closed area plus each secondary's library area. Drift here means
+  # a kernel updated one cached field without the other, which would make the
+  # denominator depend on the path taken to the state rather than the state.
+  expected_gis <- state$lcc_gis_area +
+    sum(secondary_library$metadata$gis_area[state$secondary_blocks])
+  one_finite <- function(x) length(x) == 1L && is.finite(x)
+  gis_ok <- one_finite(state$total_gis_area) && one_finite(expected_gis) &&
+    abs(state$total_gis_area - expected_gis) <= 1e-6
+  if (!gis_ok) {
+    stop(sprintf(
+      "Invariant violation%s: GIS denominator mismatch\n  Stored: %s, LCC + secondaries: %s",
+      ctx,
+      paste(format(state$total_gis_area), collapse = ","),
+      paste(format(expected_gis), collapse = ",")
     ))
   }
 

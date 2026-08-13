@@ -33,5 +33,11 @@ parcels can only lower each sum, so this never reports a seedable town as
 infeasible (no false negatives). Station coverage may be supplied by
 disconnected secondary blocks, so the correct sound ceiling is the town-wide
 sum — not a connected-component bound like find_viable_station_components().
-Thresholds match check_parcel_feasibility() exactly.
+
+Only constraints with a genuine attribute-sum ceiling are screened here:
+capacity, and the two station shares (both judged on attribute sums by
+\code{\link[=check_hard_constraints_only]{check_hard_constraints_only()}} too). min_area and min_density are judged on
+the GIS denominator, which adds road right-of-way to the parcel areas and so
+is not bounded above by the attribute area sum; screening them here could
+reject a solvable town.
 }

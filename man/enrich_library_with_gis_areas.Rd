@@ -16,15 +16,12 @@ The library with \code{metadata$gis_area} populated.
 }
 \description{
 Called once before the MCMC loop for both the LCC and secondary libraries.
-Non-local kernels (birth/death, swap, replace-LCC) then update
-\code{state$total_gis_area} via O(1) arithmetic instead of calling
-\code{st_union()} at every proposal. Local moves still call
-\code{compute_gis_density_denom()} directly and cache the result on the
-accepted state via \code{feasibility$gis_area}.
+Kernels then update \code{state$total_gis_area} via O(1) arithmetic instead of
+calling \code{st_union()} at every proposal.
 }
 \details{
-Additivity holds for non-overlapping parcel geometries: since parcels across
-different blocks are disjoint by construction, the union area is exactly the
-sum of individual block GIS areas.
+The arithmetic is exact because the denominator is defined per block: each
+block is closed independently and cross-block road fill is excluded, so a
+state's denominator is the sum of its blocks' areas.
 }
 \keyword{internal}

@@ -7,9 +7,9 @@
 discover_lccs_by_capacity_bands(
   parcel_graph,
   constraints,
-  capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
-  samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
-  max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
+  capacity_bands_relative,
+  samples_per_band,
+  max_attempts_per_band,
   forbidden_parcels = NULL,
   existing_keys = character(0),
   time_budget_s = 900,
@@ -23,14 +23,14 @@ discover_lccs_by_capacity_bands(
 \item{constraints}{MBTA constraints list (min_capacity, min_area, min_density,
 min_lcc_fraction)}
 
-\item{capacity_bands_relative}{List of c(low_mult, high_mult) tuples.
-Default: LCC_CAPACITY_BANDS_RELATIVE from parcel_config.R.}
+\item{capacity_bands_relative}{List of c(low_mult, high_mult) tuples
+(\code{discovery_spec$lcc_capacity_bands_relative}).}
 
-\item{samples_per_band}{Number of BFS samples per band.
-Default: LCC_BAND_SAMPLES_PER_BAND.}
+\item{samples_per_band}{Number of BFS samples per band
+(\code{discovery_spec$lcc_band_samples_per_band}).}
 
-\item{max_attempts_per_band}{Maximum BFS attempts before moving on.
-Default: LCC_BAND_MAX_ATTEMPTS.}
+\item{max_attempts_per_band}{Maximum BFS attempts before moving on
+(\code{discovery_spec$lcc_band_max_attempts}).}
 
 \item{forbidden_parcels}{Character vector of parcels to exclude from LCCs.
 Default: NULL.}

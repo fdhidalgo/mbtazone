@@ -41,6 +41,7 @@ Invariants checked:
 \item X_indices matches X exactly
 \item total_capacity equals sum over X
 \item total_area equals sum over X
+\item total_gis_area equals lcc_gis_area plus the secondaries' library gis_area
 }
 }
 \keyword{internal}

@@ -9,7 +9,7 @@ build_secondary_library_from_discovery(
   parcel_graph,
   max_library_size = 500L,
   bfs_reservation = 100L,
-  constraints = NULL
+  constraints
 )
 }
 \arguments{
@@ -20,6 +20,10 @@ build_secondary_library_from_discovery(
 \item{max_library_size}{Maximum number of blocks to include (default 500)}
 
 \item{bfs_reservation}{Slots to reserve for BFS-only discoveries (default 100)}
+
+\item{constraints}{Constraints list from \code{\link[=define_constraints]{define_constraints()}}; required
+because every block must carry its GIS denominator, which the kernels read
+to keep \code{state$total_gis_area} exact.}
 }
 \value{
 Block library structure matching build_secondary_library() output

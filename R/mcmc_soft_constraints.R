@@ -30,9 +30,15 @@
 #' to 36.58 m ≈ 120 ft). Set `row_fill_m = 0` in [define_constraints()] to
 #' disable filling entirely.
 #'
+#' Callers apply this ONE BLOCK AT A TIME: an MCMC state's denominator is the
+#' closed area of its LCC block plus the closed area of each secondary block,
+#' each closed independently. Road fill between two different blocks is excluded
+#' by definition, which makes block areas exactly additive.
+#'
 #' @param unit_ids Character vector of unit IDs (from parcel graph vertices)
 #' @param constraints Constraints list from [define_constraints()]
-#' @return Numeric scalar: density denominator in acres
+#' @return Numeric scalar: density denominator in acres (0 when the union lies
+#'   entirely inside the deductions)
 #' @keywords internal
 compute_gis_density_denom <- function(unit_ids, constraints) {
   loc_ids     <- unique(unlist(constraints$unit_to_loc_ids[unit_ids], use.names = FALSE))
@@ -42,7 +48,12 @@ compute_gis_density_denom <- function(unit_ids, constraints) {
   }
   union_geom <- sf::st_union(geom_subset)
 
-  row_fill_m <- constraints$row_fill_m %||% 18.29
+  row_fill_m <- constraints$row_fill_m
+  if (is.null(row_fill_m) || !is.finite(row_fill_m)) {
+    cli::cli_abort(
+      "constraints$row_fill_m must be a finite number; it is set by define_constraints()."
+    )
+  }
   if (row_fill_m > 0) {
     closed_geom <- union_geom |>
       sf::st_buffer(row_fill_m,  endCapStyle = "SQUARE") |>
@@ -69,9 +80,11 @@ compute_gis_density_denom <- function(unit_ids, constraints) {
       sf::st_sf(geometry = union_geom),
       sf::st_sf(geometry = constraints$ded_sfc)
     )
-    return(as.numeric(sf::st_area(remainder)) / 4047)
+    # st_difference returns zero rows when the union lies entirely inside the
+    # deductions; sum() over the empty area vector gives the correct 0 acres.
+    return(sum(as.numeric(sf::st_area(remainder))) / 4047)
   }
-  as.numeric(sf::st_area(union_geom)) / 4047
+  sum(as.numeric(sf::st_area(union_geom))) / 4047
 }
 
 # ============================================================================
@@ -233,19 +246,22 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
     return(list(feasible = FALSE, constraint_failed = "max_capacity"))
   }
 
-  # Area and density use the GIS denominator: st_union of selected parcel
-  # geometries minus deductions, giving the true district area including
-  # roads and gaps enclosed between parcels.
-  # Use precomputed area when available (non-local kernels update
-  # state$total_gis_area via O(1) arithmetic); fall back to st_union for
-  # local moves (which modify individual parcels) and initial seeding.
-  gis_denom <- if (!is.null(state$total_gis_area) && is.finite(state$total_gis_area)) {
-    state$total_gis_area
-  } else {
-    compute_gis_density_denom(state$X, constraints)
+  # Area and density use the GIS denominator, defined per block: the closed area
+  # of the LCC block plus the closed area of each secondary block, each closed
+  # independently. It is therefore a pure function of the state, and every kernel
+  # maintains it exactly (state$total_gis_area = state$lcc_gis_area + sum of the
+  # library gis_area of the current secondaries). Recomputing a whole-state union
+  # here would give a different, kernel-path-dependent number and break detailed
+  # balance, so a missing cache is a caller bug, not something to work around.
+  gis_denom <- state$total_gis_area
+  if (is.null(gis_denom) || !is.finite(gis_denom)) {
+    cli::cli_abort(c(
+      "state$total_gis_area is missing or non-finite.",
+      i = "Every kernel must set total_gis_area (and lcc_gis_area) on the state it proposes."
+    ))
   }
 
-  if (!is.finite(gis_denom) || gis_denom <= 0) {
+  if (gis_denom <= 0) {
     return(list(feasible = FALSE, constraint_failed = "invalid_area"))
   }
   if (gis_denom < constraints$min_area) {
@@ -289,21 +305,18 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
     }
   }
 
-  list(feasible = TRUE, constraint_failed = NULL, gis_area = gis_denom)
+  list(feasible = TRUE, constraint_failed = NULL)
 }
 
 #' Precompute GIS density-denominator area for every block in a library
 #'
 #' Called once before the MCMC loop for both the LCC and secondary libraries.
-#' Non-local kernels (birth/death, swap, replace-LCC) then update
-#' \code{state$total_gis_area} via O(1) arithmetic instead of calling
-#' \code{st_union()} at every proposal. Local moves still call
-#' \code{compute_gis_density_denom()} directly and cache the result on the
-#' accepted state via \code{feasibility$gis_area}.
+#' Kernels then update \code{state$total_gis_area} via O(1) arithmetic instead of
+#' calling \code{st_union()} at every proposal.
 #'
-#' Additivity holds for non-overlapping parcel geometries: since parcels across
-#' different blocks are disjoint by construction, the union area is exactly the
-#' sum of individual block GIS areas.
+#' The arithmetic is exact because the denominator is defined per block: each
+#' block is closed independently and cross-block road fill is excluded, so a
+#' state's denominator is the sum of its blocks' areas.
 #'
 #' @param library LCC or secondary library list.
 #' @param constraints Constraints list from \code{\link{define_constraints}}.
@@ -317,10 +330,7 @@ enrich_library_with_gis_areas <- function(library, constraints) {
   }
   gis_areas <- vapply(seq_len(n), function(i) {
     block_unit_ids <- library$parcel_names[library$blocks[[i]]]
-    tryCatch(
-      compute_gis_density_denom(block_unit_ids, constraints),
-      error = function(e) NA_real_
-    )
+    compute_gis_density_denom(block_unit_ids, constraints)
   }, numeric(1))
   library$metadata[, gis_area := gis_areas]
   library

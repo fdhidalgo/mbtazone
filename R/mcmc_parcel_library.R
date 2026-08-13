@@ -1114,12 +1114,12 @@ run_bfs_lcc_supplement <- function(
 #' @param constraints MBTA constraints list (min_capacity, min_area, min_density,
 #'   min_lcc_fraction)
 #' @param band_idx Integer index (1-based) into capacity_bands_relative
-#' @param capacity_bands_relative List of c(low_mult, high_mult) tuples.
-#'   Default: LCC_CAPACITY_BANDS_RELATIVE from parcel_config.R.
-#' @param samples_per_band Number of BFS samples to find.
-#'   Default: LCC_BAND_SAMPLES_PER_BAND.
-#' @param max_attempts_per_band Maximum BFS attempts before giving up.
-#'   Default: LCC_BAND_MAX_ATTEMPTS.
+#' @param capacity_bands_relative List of c(low_mult, high_mult) tuples
+#'   (`discovery_spec$lcc_capacity_bands_relative`).
+#' @param samples_per_band Number of BFS samples to find
+#'   (`discovery_spec$lcc_band_samples_per_band`).
+#' @param max_attempts_per_band Maximum BFS attempts before giving up
+#'   (`discovery_spec$lcc_band_max_attempts`).
 #' @param forbidden_parcels Character vector of parcels to exclude. Default: NULL.
 #' @param existing_keys Character vector of xxhash64 keys to skip. Default: character(0).
 #' @param time_budget_s Hard wall-clock budget in seconds for this band, shared
@@ -1147,9 +1147,9 @@ discover_lccs_single_band <- function(
     parcel_graph,
     constraints,
     band_idx,
-    capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
-    samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
-    max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
+    capacity_bands_relative,
+    samples_per_band,
+    max_attempts_per_band,
     forbidden_parcels = NULL,
     existing_keys = character(0),
     time_budget_s = 900,
@@ -1471,12 +1471,12 @@ combine_stratified_band_results <- function(band_results) {
 #' @param parcel_graph igraph object with capacity/area attributes
 #' @param constraints MBTA constraints list (min_capacity, min_area, min_density,
 #'   min_lcc_fraction)
-#' @param capacity_bands_relative List of c(low_mult, high_mult) tuples.
-#'   Default: LCC_CAPACITY_BANDS_RELATIVE from parcel_config.R.
-#' @param samples_per_band Number of BFS samples per band.
-#'   Default: LCC_BAND_SAMPLES_PER_BAND.
-#' @param max_attempts_per_band Maximum BFS attempts before moving on.
-#'   Default: LCC_BAND_MAX_ATTEMPTS.
+#' @param capacity_bands_relative List of c(low_mult, high_mult) tuples
+#'   (`discovery_spec$lcc_capacity_bands_relative`).
+#' @param samples_per_band Number of BFS samples per band
+#'   (`discovery_spec$lcc_band_samples_per_band`).
+#' @param max_attempts_per_band Maximum BFS attempts before moving on
+#'   (`discovery_spec$lcc_band_max_attempts`).
 #' @param forbidden_parcels Character vector of parcels to exclude from LCCs.
 #'   Default: NULL.
 #' @param existing_keys Character vector of xxhash64 keys to skip (from prior
@@ -1496,9 +1496,9 @@ combine_stratified_band_results <- function(band_results) {
 discover_lccs_by_capacity_bands <- function(
     parcel_graph,
     constraints,
-    capacity_bands_relative = LCC_CAPACITY_BANDS_RELATIVE,
-    samples_per_band = LCC_BAND_SAMPLES_PER_BAND,
-    max_attempts_per_band = LCC_BAND_MAX_ATTEMPTS,
+    capacity_bands_relative,
+    samples_per_band,
+    max_attempts_per_band,
     forbidden_parcels = NULL,
     existing_keys = character(0),
     time_budget_s = 900,
@@ -1786,7 +1786,8 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
       blocks = list(),
       metadata = data.table::data.table(
         block_id = integer(0), area = numeric(0), capacity = integer(0),
-        n_parcels = integer(0), size_band = character(0), density = numeric(0),
+        n_parcels = integer(0), size_band = character(0),
+        density_attr = numeric(0), density_gis = numeric(0),
         source = character(0), spectral_region = character(0),
         area_in_station = numeric(0), capacity_in_station = numeric(0),
         centroid_x = numeric(0), centroid_y = numeric(0),
@@ -1902,10 +1903,43 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
     )
   }
 
-  n_blocks <- nrow(selected)
-  cli::cli_alert_info("Processing {n_blocks} LCCs (from {nrow(valid_lccs)} valid)")
+  n_selected <- nrow(selected)
+  cli::cli_alert_info("Processing {n_selected} LCCs (from {nrow(valid_lccs)} valid)")
 
-  blocks        <- selected$parcel_ids
+  blocks <- selected$parcel_ids
+
+  cli::cli_alert_info("Computing GIS density denominator for {n_selected} LCC blocks...")
+  gis_area <- vapply(blocks, compute_gis_density_denom, numeric(1),
+                     constraints = constraints)
+
+  # An LCC block is a whole candidate district on its own, so it must clear the
+  # area and density constraints on the GIS denominator — the same basis the
+  # sampler judges states on. Blocks that cannot are dead weight: every kernel
+  # that draws them would immediately reject the proposal.
+  keep <- rep(TRUE, n_selected)
+  if (!is.null(constraints$min_density) && is.finite(constraints$min_density)) {
+    keep <- keep & (selected$capacity / gis_area >= constraints$min_density)
+  }
+  if (!is.null(constraints$min_area) && is.finite(constraints$min_area)) {
+    keep <- keep & (gis_area >= constraints$min_area)
+  }
+  n_dropped <- sum(!keep)
+  if (n_dropped > 0) {
+    cli::cli_alert_info(
+      "Dropped {n_dropped}/{n_selected} LCC blocks failing the GIS-based min_area/min_density constraints"
+    )
+    selected <- selected[keep]
+    blocks   <- blocks[keep]
+    gis_area <- gis_area[keep]
+  }
+  if (nrow(selected) == 0) {
+    cli::cli_abort(c(
+      "Every discovered LCC fails the GIS-based hard constraints.",
+      i = "min_area = {constraints$min_area} acres, min_density = {constraints$min_density} units/acre; all {n_selected} candidate blocks fell short."
+    ))
+  }
+
+  n_blocks      <- nrow(selected)
   block_sources <- if (has_source && "source" %in% names(selected))
     selected$source else rep("tree_discovered", n_blocks)
   spectral_regions <- rep(NA_character_, n_blocks)
@@ -1932,24 +1966,17 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
   centroid_y <- vapply(blocks_idx, function(ix)
     mean(centroid_y_v[ix]), numeric(1))
 
-  cli::cli_alert_info("Computing GIS density denominator for {n_blocks} LCC blocks...")
-  gis_area <- vapply(blocks, function(parcel_ids) {
-    tryCatch(
-      compute_gis_density_denom(parcel_ids, constraints),
-      error = function(e) NA_real_
-    )
-  }, numeric(1))
-  cli::cli_alert_info(
-    "  {sum(!is.na(gis_area))}/{n_blocks} LCC blocks have valid gis_area"
-  )
-
+  # Two density columns, because the two denominators differ: density_attr uses
+  # the summed parcel attribute area, density_gis the GIS density denominator
+  # the compliance rule and the sampler actually apply.
   metadata <- data.table::data.table(
     block_id            = seq_len(n_blocks),
     area                = selected$area,
     capacity            = selected$capacity,
     n_parcels           = vapply(blocks_idx, length, integer(1)),
     size_band           = "tree_discovered",
-    density             = selected$capacity / selected$area,
+    density_attr        = selected$capacity / selected$area,
+    density_gis         = selected$capacity / gis_area,
     source              = block_sources,
     spectral_region     = spectral_regions,
     area_in_station     = area_in_station,
@@ -2010,6 +2037,9 @@ build_lcc_library_from_tree_discovery <- function(discovered_lccs,
 #' @param parcel_graph igraph object
 #' @param max_library_size Maximum number of blocks to include (default 500)
 #' @param bfs_reservation Slots to reserve for BFS-only discoveries (default 100)
+#' @param constraints Constraints list from [define_constraints()]; required
+#'   because every block must carry its GIS denominator, which the kernels read
+#'   to keep `state$total_gis_area` exact.
 #' @return Block library structure matching build_secondary_library() output
 #' @export
 build_secondary_library_from_discovery <- function(
@@ -2017,7 +2047,7 @@ build_secondary_library_from_discovery <- function(
     parcel_graph,
     max_library_size = 500L,
     bfs_reservation = 100L,
-    constraints = NULL
+    constraints
 ) {
   # Handle both list wrapper and direct data.table input
   if (is.list(combined_discovered) && !data.table::is.data.table(combined_discovered)) {
@@ -2046,7 +2076,8 @@ build_secondary_library_from_discovery <- function(
       blocks = list(),
       metadata = data.table::data.table(
         block_id = integer(0), area = numeric(0), capacity = integer(0),
-        n_parcels = integer(0), size_band = character(0), density = numeric(0),
+        n_parcels = integer(0), size_band = character(0),
+        density_attr = numeric(0), density_gis = numeric(0),
         source = character(0), gis_area = numeric(0)
       ),
       neighbor_indices = list(),
@@ -2139,29 +2170,23 @@ build_secondary_library_from_discovery <- function(
     size_bands <- rep("discovered", n_blocks)
   }
 
-  # Compute gis_area for each block (blocks still contains parcel ID character vectors here)
-  if (!is.null(constraints)) {
-    cli::cli_alert_info("Computing GIS density denominator for {n_blocks} secondary blocks...")
-    gis_areas <- vapply(blocks, function(parcel_ids) {
-      tryCatch(
-        compute_gis_density_denom(parcel_ids, constraints),
-        error = function(e) NA_real_
-      )
-    }, numeric(1))
-    n_computed <- sum(!is.na(gis_areas))
-    cli::cli_alert_info("  {n_computed}/{n_blocks} secondary blocks have valid gis_area")
-  } else {
-    gis_areas <- rep(NA_real_, n_blocks)
-  }
+  # Compute gis_area for each block (blocks still contains parcel ID character vectors here).
+  # Secondaries are NOT filtered on min_area/min_density: those are state-level
+  # constraints, and a secondary only ever contributes to a state's totals.
+  cli::cli_alert_info("Computing GIS density denominator for {n_blocks} secondary blocks...")
+  gis_areas <- vapply(blocks, compute_gis_density_denom, numeric(1),
+                      constraints = constraints)
 
-  # Build metadata
+  # Build metadata. density_attr uses the summed parcel attribute area,
+  # density_gis the GIS density denominator the sampler applies.
   metadata <- data.table::data.table(
     block_id = seq_len(n_blocks),
     area = selected$area,
     capacity = selected$capacity,
     n_parcels = vapply(blocks, length, integer(1)),
     size_band = size_bands,
-    density = selected$capacity / selected$area,
+    density_attr = selected$capacity / selected$area,
+    density_gis = selected$capacity / gis_areas,
     source = block_sources,
     gis_area = gis_areas
   )
@@ -2212,11 +2237,16 @@ build_secondary_library_from_discovery <- function(
 #' @param parcel_graph igraph object for neighbor computation
 #' @param max_online Maximum online entries before FIFO eviction
 #' @param neighbor_cache Optional precomputed neighbor cache for speed
+#' @param lcc_indices Optional library indices of the LCC parcels
+#' @param constraints Constraints list from \code{\link{define_constraints}};
+#'   required because every library block must carry its GIS denominator, which
+#'   the replace-LCC kernel reads directly.
 #' @return List with updated lcc_library and added (logical)
 add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
                                max_online,
                                neighbor_cache = NULL,
-                               lcc_indices = NULL) {
+                               lcc_indices = NULL,
+                               constraints) {
   all_parcels <- lcc_library$parcel_names
   # Callers that maintain a membership mask can pass the indices directly and
   # skip this O(n_parcels) character match — it runs before the duplicate check,
@@ -2320,20 +2350,23 @@ add_lcc_to_library <- function(lcc_library, lcc_parcels, parcel_graph,
     lcc_library$metadata[, gis_area := NA_real_]
   }
 
+  gis_area <- compute_gis_density_denom(lcc_parcels, constraints)
+
   lcc_library$metadata <- rbind(lcc_library$metadata, data.table::data.table(
     block_id            = new_id,
     area                = area,
     capacity            = as.integer(capacity),
     n_parcels           = length(lcc_indices),
     size_band           = "online",
-    density             = capacity / area,
+    density_attr        = capacity / area,
+    density_gis         = capacity / gis_area,
     source              = "online",
     spectral_region     = NA_character_,
     area_in_station     = area_in_station,
     capacity_in_station = capacity_in_station,
     centroid_x          = mean(igraph::V(parcel_graph)[lcc_parcels]$centroid_x, na.rm = TRUE),
     centroid_y          = mean(igraph::V(parcel_graph)[lcc_parcels]$centroid_y, na.rm = TRUE),
-    gis_area            = NA_real_
+    gis_area            = gis_area
   ))
   neighbors <- get_parcel_set_neighbors(lcc_parcels, parcel_graph, neighbor_cache)
   lcc_library$neighbor_indices[[new_id]] <- parcel_ids_to_indices(neighbors, all_parcels)
@@ -2573,7 +2606,13 @@ select_seed_lccs <- function(lcc_library, n_chains = 4L) {
 #' infeasible (no false negatives). Station coverage may be supplied by
 #' disconnected secondary blocks, so the correct sound ceiling is the town-wide
 #' sum — not a connected-component bound like find_viable_station_components().
-#' Thresholds match check_parcel_feasibility() exactly.
+#'
+#' Only constraints with a genuine attribute-sum ceiling are screened here:
+#' capacity, and the two station shares (both judged on attribute sums by
+#' [check_hard_constraints_only()] too). min_area and min_density are judged on
+#' the GIS denominator, which adds road right-of-way to the parcel areas and so
+#' is not bounded above by the attribute area sum; screening them here could
+#' reject a solvable town.
 #'
 #' @param parcel_graph igraph with capacity, area, capacity_in_station and
 #'   area_in_station vertex attributes.
@@ -2585,7 +2624,6 @@ select_seed_lccs <- function(lcc_library, n_chains = 4L) {
 assess_seeding_feasibility <- function(parcel_graph, constraints) {
   zero_na <- function(x) { x[is.na(x)] <- 0; x }
   cap     <- zero_na(igraph::V(parcel_graph)$capacity)
-  area    <- zero_na(igraph::V(parcel_graph)$area)
   cap_st  <- zero_na(igraph::V(parcel_graph)$capacity_in_station)
   area_st <- zero_na(igraph::V(parcel_graph)$area_in_station)
 
@@ -2600,11 +2638,6 @@ assess_seeding_feasibility <- function(parcel_graph, constraints) {
 
   has_area_constraint <- !is.null(constraints$min_area) &&
     !is.na(constraints$min_area) && constraints$min_area > 0
-  if (has_area_constraint && sum(area) < constraints$min_area) {
-    failures <- c(failures, sprintf(
-      "min_area: town-wide area %.1f < required %.1f acres",
-      sum(area), constraints$min_area))
-  }
 
   n_station <- sum(cap_st > 0 | area_st > 0)
 
@@ -2701,7 +2734,6 @@ construct_feasible_seed <- function(parcel_graph, constraints, libraries,
   vtx <- igraph::V(parcel_graph)
   all_parcels <- vtx$name
   cap_lookup  <- vtx$capacity; names(cap_lookup)  <- all_parcels
-  area_lookup <- vtx$area;     names(area_lookup) <- all_parcels
   csv <- vtx$capacity_in_station; csv[is.na(csv)] <- 0
   asv <- vtx$area_in_station;     asv[is.na(asv)] <- 0
   station_parcels <- all_parcels[csv > 0 | asv > 0]
@@ -2713,7 +2745,6 @@ construct_feasible_seed <- function(parcel_graph, constraints, libraries,
   }
 
   min_cap  <- constraints$min_capacity
-  min_area <- constraints$min_area
   max_cap  <- min_cap * discovery_capacity_multiplier
   bfs_ctx  <- bfs_build_context(parcel_graph, cap_lookup, eligible_pool = NULL)
 
@@ -2731,9 +2762,10 @@ construct_feasible_seed <- function(parcel_graph, constraints, libraries,
                           target_min = min_cap, target_exact = target_cap)
     lcc  <- res$block
     cap  <- res$metric_total
-    area <- sum(area_lookup[lcc], na.rm = TRUE)
-    if (!(cap >= min_cap && cap <= max_cap &&
-          (is.na(min_area) || area >= min_area))) next
+    # No area pre-filter: min_area is judged on the GIS denominator, which the
+    # attribute area sum understates, so pre-rejecting on it drops valid seeds.
+    # check_parcel_feasibility() below applies the area rule on the right basis.
+    if (!(cap >= min_cap && cap <= max_cap)) next
 
     secondary_block_ids <- select_initial_secondary_blocks(
       lcc_parcels    = lcc,
@@ -2750,6 +2782,11 @@ construct_feasible_seed <- function(parcel_graph, constraints, libraries,
       library             = libraries$secondary_library,
       parcel_graph        = parcel_graph
     )
+    # Per-block denominator: the grown LCC is not a library block, so its closed
+    # area is computed here; the secondaries contribute their library areas.
+    state$lcc_gis_area <- compute_gis_density_denom(lcc, constraints)
+    state$total_gis_area <- state$lcc_gis_area +
+      sum(libraries$secondary_library$metadata$gis_area[secondary_block_ids])
     feas <- check_parcel_feasibility(
       state        = state,
       library      = libraries$secondary_library,
@@ -2924,6 +2961,7 @@ generate_initial_states_from_lccs <- function(
 
       lcc_indices <- lcc_library$blocks[[bid]]
       lcc_parcels <- all_parcels[lcc_indices]
+      lcc_gis_area <- lcc_library$metadata$gis_area[bid]
       # Precomputed external neighbors of this library LCC (names), passed to the
       # secondary selector so it skips a per-attempt graph neighbor scan.
       lcc_nbr_names <- all_parcels[lcc_library$neighbor_indices[[bid]]]
@@ -2957,6 +2995,11 @@ generate_initial_states_from_lccs <- function(
           library             = libraries$secondary_library,
           parcel_graph        = parcel_graph
         )
+        # Per-block denominator: both the LCC and the secondaries are library
+        # blocks here, so the totals come straight from library metadata.
+        candidate_state$lcc_gis_area <- lcc_gis_area
+        candidate_state$total_gis_area <- lcc_gis_area +
+          sum(libraries$secondary_library$metadata$gis_area[secondary_block_ids])
 
         feas <- check_parcel_feasibility(
           state        = candidate_state,

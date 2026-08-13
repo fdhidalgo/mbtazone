@@ -88,6 +88,10 @@ find_feasible_lcc_ids <- function(
   for (i in seq_len(lcc_library$n_blocks)) {
     lcc_parcels <- library_block_parcels(lcc_library, i)
     state <- create_lcc_only_state(lcc_parcels, secondary_library, parcel_graph)
+    # LCC-only state: its denominator is the block's precomputed area, so no
+    # geometry work is needed to scan the whole library.
+    state$lcc_gis_area <- lcc_library$metadata$gis_area[i]
+    state$total_gis_area <- state$lcc_gis_area
     feasibility <- check_parcel_feasibility(
       state,
       secondary_library,
@@ -120,7 +124,9 @@ diagnose_lcc_feasibility <- function(lcc_library, parcel_graph, constraints) {
   for (i in seq_len(lcc_library$n_blocks)) {
     lcc <- library_block_parcels(lcc_library, i)
     cap <- sum(igraph::V(parcel_graph)[lcc]$capacity)
-    area <- sum(igraph::V(parcel_graph)[lcc]$area)
+    # Area and density are reported on the GIS denominator, the basis the
+    # feasibility checks use; the attribute area sum would understate both.
+    area <- lcc_library$metadata$gis_area[i]
     density <- cap / area
     station_area <- sum(igraph::V(parcel_graph)[lcc]$area_in_station)
     station_capacity <- sum(igraph::V(parcel_graph)[lcc]$capacity_in_station)
@@ -202,7 +208,7 @@ update_move_stats <- function(counts, mt, result) {
 # grown) library, the (possibly updated) state, and whether a new entry was added.
 enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_graph,
                                          secondary_library, max_online_entries,
-                                         neighbor_cache, constraints = NULL) {
+                                         neighbor_cache, constraints) {
   enrich_result <- add_lcc_to_library(
     lcc_library,
     current_state$lcc_parcels,
@@ -213,22 +219,12 @@ enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_grap
       which(current_state$lcc_logical)
     } else {
       NULL
-    }
+    },
+    constraints = constraints
   )
   lcc_library <- enrich_result$lcc_library
   if (enrich_result$added) {
     nid <- enrich_result$new_block_id
-    # Compute gis_area for the new block so replace-LCC can use O(1) arithmetic
-    if (!is.null(constraints) && "gis_area" %in% names(lcc_library$metadata)) {
-      block_unit_ids <- lcc_library$parcel_names[lcc_library$blocks[[nid]]]
-      gis_area_val <- tryCatch(
-        compute_gis_density_denom(block_unit_ids, constraints),
-        error = function(e) NA_real_
-      )
-      data.table::set(lcc_library$metadata,
-                      which(lcc_library$metadata$block_id == nid),
-                      "gis_area", gis_area_val)
-    }
     if (!is.null(current_state$compatible_lccs_cache)) {
       if (is_lcc_compatible_with_secondaries(
             lcc_library$blocks[[nid]],
@@ -286,6 +282,17 @@ run_parcel_mcmc <- function(
   capacity_prior_lambda <- target_spec$priors$capacity_prior_lambda
   k_prior_lambda <- target_spec$priors$k_prior_lambda
   birth_tilt_lambda <- config$birth_tilt_lambda
+
+  # The capacity-tilted birth proposal cancels against the capacity prior in the
+  # birth/death MH ratio only when the two rates are equal. A different tilt is a
+  # legitimate tuning choice but changes the sampled k-marginal, so say so.
+  if (!isTRUE(all.equal(birth_tilt_lambda, capacity_prior_lambda))) {
+    cli::cli_warn(c(
+      "birth_tilt_lambda ({birth_tilt_lambda}) differs from capacity_prior_lambda ({capacity_prior_lambda}).",
+      i = "The birth/death cancellation documented in the kernel config holds only when they are equal; with different rates the capacity tilt leaves a residual in the MH ratio."
+    ))
+  }
+
   swap_cap_tolerance <- config$swap_cap_tolerance
   debug_invariant_checks <- config$debug_invariant_checks
   enable_online_enrichment <- config$enable_online_enrichment
@@ -380,18 +387,24 @@ run_parcel_mcmc <- function(
     secondary_library$centroid_y_vec   <- igraph::V(parcel_graph)[sl_names]$centroid_y
   }
 
-  # Precompute GIS density-denominator area for every library block (one
-  # st_union per block, amortised over all MCMC proposals). Non-local kernels
-  # (birth/death, swap, replace-LCC) update state$total_gis_area with O(1)
-  # arithmetic; local moves still call compute_gis_density_denom() directly.
-  if (!"gis_area" %in% names(secondary_library$metadata) ||
-      anyNA(secondary_library$metadata$gis_area)) {
-    secondary_library <- enrich_library_with_gis_areas(secondary_library, constraints)
+  # Every library block must carry its GIS denominator: the kernels add and
+  # subtract these areas to keep state$total_gis_area exact. Library builders
+  # populate the column; a library cached before the column existed is filled in
+  # here, but an NA in an existing column is a data bug, not a gap to paper over.
+  require_gis_areas <- function(library, label) {
+    if (!"gis_area" %in% names(library$metadata)) {
+      return(enrich_library_with_gis_areas(library, constraints))
+    }
+    if (anyNA(library$metadata$gis_area)) {
+      bad <- library$metadata$block_id[is.na(library$metadata$gis_area)]
+      cli::cli_abort(
+        "{label}: gis_area is NA for block{?s} {bad}."
+      )
+    }
+    library
   }
-  if (!"gis_area" %in% names(lcc_library$metadata) ||
-      anyNA(lcc_library$metadata$gis_area)) {
-    lcc_library <- enrich_library_with_gis_areas(lcc_library, constraints)
-  }
+  secondary_library <- require_gis_areas(secondary_library, "secondary_library")
+  lcc_library       <- require_gis_areas(lcc_library, "lcc_library")
 
   # Augment initial_state with incremental boundary tracking fields
   # These enable O(d) boundary updates instead of O(N) full scans
@@ -464,14 +477,15 @@ run_parcel_mcmc <- function(
   )
   names(initial_state$X_neighbor_counts) <- parcel_names
 
-  # Seed total_gis_area so the first non-local kernel can update it with O(1)
-  # arithmetic. Local kernels recompute via compute_gis_density_denom anyway.
-  if (is.null(initial_state$total_gis_area)) {
-    initial_state$total_gis_area <- tryCatch(
-      compute_gis_density_denom(initial_state$X, constraints),
-      error = function(e) NULL
-    )
-  }
+  # Seed the GIS denominator on the per-block definition every kernel maintains:
+  # the LCC block closed on its own plus each secondary block's library area.
+  # Recomputed here rather than trusted from the seeder so the invariant
+  # total_gis_area = lcc_gis_area + sum(secondary gis_area) holds from step 1.
+  initial_state$lcc_gis_area <- compute_gis_density_denom(
+    initial_state$lcc_parcels, constraints
+  )
+  initial_state$total_gis_area <- initial_state$lcc_gis_area +
+    sum(secondary_library$metadata$gis_area[initial_state$secondary_blocks])
 
   # Initialize storage with adaptive thinning
 

@@ -12,7 +12,8 @@ compute_gis_density_denom(unit_ids, constraints)
 \item{constraints}{Constraints list from \code{\link[=define_constraints]{define_constraints()}}}
 }
 \value{
-Numeric scalar: density denominator in acres
+Numeric scalar: density denominator in acres (0 when the union lies
+entirely inside the deductions)
 }
 \description{
 Unions the parcel geometries for the given unit IDs, applies a morphological
@@ -30,5 +31,10 @@ Without \code{row_sfc}, falls back to an unconstrained morphological close that
 fills all gaps narrower than \code{2 * row_fill_m} (e.g. 18.29 m fills gaps up
 to 36.58 m ≈ 120 ft). Set \code{row_fill_m = 0} in \code{\link[=define_constraints]{define_constraints()}} to
 disable filling entirely.
+
+Callers apply this ONE BLOCK AT A TIME: an MCMC state's denominator is the
+closed area of its LCC block plus the closed area of each secondary block,
+each closed independently. Road fill between two different blocks is excluded
+by definition, which makes block areas exactly additive.
 }
 \keyword{internal}
