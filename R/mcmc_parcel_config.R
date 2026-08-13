@@ -13,10 +13,12 @@
 #'
 #' Base constructor for the four-kernel mix (Local Boundary, Birth/Death,
 #' Swap, Replace-LCC) plus the proposal tuning, online-enrichment, and
-#' burn-in settings that go with running a chain. `birth_tilt_lambda`
-#' defaults to `capacity_prior_lambda` (pass in
-#' `target_spec$priors$capacity_prior_lambda`), which makes the tilt's effect
-#' on the acceptance ratio cancel exactly.
+#' burn-in settings that go with running a chain. `birth_tilt_lambda` is
+#' required. Setting it equal to `target_spec$priors$capacity_prior_lambda`
+#' makes the tilt cancel exactly in the birth/death acceptance ratio, so the
+#' tilt only steers proposals — the recommended configuration. A differing
+#' value both tilts proposals and shifts the stationary distribution away from
+#' the target spec; the runner warns when the two differ.
 #'
 #' Callers needing a one-off deviation from a preset (e.g. disabling online
 #' enrichment for a discovery-only run) construct the preset, then mutate the

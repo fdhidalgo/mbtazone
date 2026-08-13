@@ -38,6 +38,21 @@ get_district_paths <- function(
   )
 }
 
+# Abort unless an sf/sfc object is in EPSG:26986 (NAD83 Massachusetts State
+# Plane), the CRS every area and distance calculation in the package assumes.
+# `what` is plain text naming the offending object (cli does not interpret
+# inline markup coming from substituted values).
+assert_crs_26986 <- function(x, what) {
+  x_crs <- sf::st_crs(x)
+  if (is.na(x_crs) || x_crs$epsg != 26986) {
+    cli::cli_abort(c(
+      "{what} must use EPSG:26986 (NAD83 Massachusetts State Plane)",
+      "i" = "Current CRS: EPSG:{x_crs$epsg}"
+    ))
+  }
+  invisible(TRUE)
+}
+
 # Clip statewide deductions to a bounding box and dissolve overlapping source
 # layers into a single polygon. Returns a one-row sf (or zero-row if no
 # deductions overlap the bbox).
@@ -108,11 +123,18 @@ load_district_data <- function(
     right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp",
     density_deductions
 ) {
+  assert_crs_26986(density_deductions, "`density_deductions`")
+
   # Step 1: Read both layers from GeoPackage
   parcels_sf <- sf::st_read(gpkg, layer = "parcels", quiet = TRUE)
   if (is.na(sf::st_crs(parcels_sf)$epsg) || sf::st_crs(parcels_sf)$epsg != 26986) {
     parcels_sf <- sf::st_transform(parcels_sf, 26986)
   }
+  assert_crs_26986(parcels_sf, "The `parcels` layer of the GeoPackage")
+
+  # Repair geometry before any overlay: self-intersecting parcel polygons are
+  # routine in MassGIS L3 data and make GEOS throw on st_intersection.
+  parcels_sf <- sf::st_make_valid(parcels_sf)
 
   # Drop rows with no LOC_ID — incomplete records that carry no usable
   # geometry or attributes and would cause NA vertex names in igraph.
@@ -122,10 +144,21 @@ load_district_data <- function(
     parcels_sf <- parcels_sf[!is.na(parcels_sf$LOC_ID), ]
   }
 
+  # Per-parcel deduction areas are keyed by LOC_ID, so duplicates would silently
+  # mis-assign area between parcels sharing an id.
+  dup_loc_ids <- unique(parcels_sf$LOC_ID[duplicated(parcels_sf$LOC_ID)])
+  if (length(dup_loc_ids) > 0) {
+    cli::cli_abort(c(
+      "Duplicate {.field LOC_ID} values in the {.field parcels} layer for {district_name}.",
+      "x" = "Duplicated: {.val {dup_loc_ids}}"
+    ))
+  }
+
   districts_sf <- sf::st_read(gpkg, layer = "districts", quiet = TRUE)
   if (is.na(sf::st_crs(districts_sf)$epsg) || sf::st_crs(districts_sf)$epsg != 26986) {
     districts_sf <- sf::st_transform(districts_sf, 26986)
   }
+  assert_crs_26986(districts_sf, "The `districts` layer of the GeoPackage")
 
   # Step 2: Load community requirements
   district_requirements <- get_community_requirements(
@@ -212,6 +245,7 @@ load_district_data <- function(
   if (is.na(sf::st_crs(right_of_way_sf)$epsg) || sf::st_crs(right_of_way_sf)$epsg != 26986) {
     right_of_way_sf <- sf::st_transform(right_of_way_sf, 26986)
   }
+  assert_crs_26986(right_of_way_sf, "The right-of-way layer")
 
   district_right_of_way <- sf::st_make_valid(
     sf::st_intersection(right_of_way_sf, bbox_poly)

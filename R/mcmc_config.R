@@ -36,16 +36,23 @@ define_constraints <- function(district_data, parcel_graph_result,
 
   # Named sfc keyed by LOC_ID for geometry lookup in the GIS density
   # denominator. Stored as sfc rather than sf to survive qs serialization.
-  dg       <- district_data$district_geometry
+  dg <- district_data$district_geometry
+  assert_crs_26986(dg, "`district_data$district_geometry`")
+
   geom_sfc <- sf::st_geometry(dg)
   names(geom_sfc) <- dg$LOC_ID
 
+  assert_crs_26986(
+    district_data$local_deductions_dissolved,
+    "`district_data$local_deductions_dissolved`"
+  )
   ded_sfc <- sf::st_geometry(district_data$local_deductions_dissolved)
 
   # Dissolve ROW geometry clipped to the district bounding box.
   # Stored as a single sfc for use in ROW-constrained fill.
   row_sfc <- NULL
   if (!is.null(right_of_way_sf) && nrow(right_of_way_sf) > 0) {
+    assert_crs_26986(right_of_way_sf, "`right_of_way_sf`")
     bbox_geom <- sf::st_as_sfc(sf::st_bbox(dg))
     local_row <- suppressWarnings(
       sf::st_intersection(right_of_way_sf, sf::st_sf(geometry = bbox_geom))
