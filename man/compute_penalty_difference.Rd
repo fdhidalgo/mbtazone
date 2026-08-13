@@ -4,12 +4,7 @@
 \alias{compute_penalty_difference}
 \title{Compute penalty difference for MH acceptance}
 \usage{
-compute_penalty_difference(
-  current_cap,
-  proposed_cap,
-  constraints,
-  lambda = NULL
-)
+compute_penalty_difference(current_cap, proposed_cap, constraints, lambda)
 }
 \arguments{
 \item{current_cap}{Current state capacity}
@@ -18,7 +13,7 @@ compute_penalty_difference(
 
 \item{constraints}{Constraint list with min_capacity}
 
-\item{lambda}{Capacity prior strength (default: CAPACITY_PRIOR_LAMBDA from config)}
+\item{lambda}{Capacity prior strength (\code{target_spec$priors$capacity_prior_lambda})}
 }
 \value{
 Log penalty difference to add to MH ratio

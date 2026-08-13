@@ -9,9 +9,83 @@
 #
 # The penalty enters the MH acceptance ratio as:
 #   log_accept += penalty(current_state) - penalty(proposed_state)
-#   penalty = CAPACITY_PRIOR_LAMBDA * (capacity - min_capacity)
+#   penalty = capacity_prior_lambda * (capacity - min_capacity)
 #
 # This preserves detailed balance while favoring lower-capacity configurations.
+
+#' GIS-based density denominator for a set of MCMC units
+#'
+#' Unions the parcel geometries for the given unit IDs, applies a morphological
+#' close (buffer out then back by `constraints$row_fill_m`) to fill road
+#' right-of-way gaps between adjacent parcels, then subtracts the pre-dissolved
+#' local density deductions to get the district area in acres.
+#'
+#' When `constraints$row_sfc` is set (by passing `right_of_way_sf` to
+#' [define_constraints()]), the fill is ROW-constrained: only the portion of
+#' the morphological close that overlaps the right-of-way polygon is added to
+#' the parcel union.
+#'
+#' Without `row_sfc`, falls back to an unconstrained morphological close that
+#' fills all gaps narrower than `2 * row_fill_m` (e.g. 18.29 m fills gaps up
+#' to 36.58 m ≈ 120 ft). Set `row_fill_m = 0` in [define_constraints()] to
+#' disable filling entirely.
+#'
+#' Callers apply this ONE BLOCK AT A TIME: an MCMC state's denominator is the
+#' closed area of its LCC block plus the closed area of each secondary block,
+#' each closed independently. Road fill between two different blocks is excluded
+#' by definition, which makes block areas exactly additive.
+#'
+#' @param unit_ids Character vector of unit IDs (from parcel graph vertices)
+#' @param constraints Constraints list from [define_constraints()]
+#' @return Numeric scalar: density denominator in acres (0 when the union lies
+#'   entirely inside the deductions)
+#' @keywords internal
+compute_gis_density_denom <- function(unit_ids, constraints) {
+  loc_ids     <- unique(unlist(constraints$unit_to_loc_ids[unit_ids], use.names = FALSE))
+  geom_subset <- constraints$geom_sfc[intersect(loc_ids, names(constraints$geom_sfc))]
+  if (length(geom_subset) == 0) {
+    cli::cli_abort("No geometries found for unit_ids: {paste(unit_ids, collapse = ', ')}")
+  }
+  union_geom <- sf::st_union(geom_subset)
+
+  row_fill_m <- constraints$row_fill_m
+  if (is.null(row_fill_m) || !is.finite(row_fill_m)) {
+    cli::cli_abort(
+      "constraints$row_fill_m must be a finite number; it is set by define_constraints()."
+    )
+  }
+  if (row_fill_m > 0) {
+    closed_geom <- union_geom |>
+      sf::st_buffer(row_fill_m,  endCapStyle = "SQUARE") |>
+      sf::st_buffer(-row_fill_m, endCapStyle = "SQUARE")
+
+    if (!is.null(constraints$row_sfc) && length(constraints$row_sfc) > 0) {
+      # result = union ∪ (closed ∩ ROW) — only right-of-way fill is kept.
+      row_in_closed <- suppressWarnings(
+        sf::st_intersection(
+          sf::st_sf(geometry = closed_geom),
+          sf::st_sf(geometry = constraints$row_sfc)
+        )
+      )
+      if (nrow(row_in_closed) > 0) {
+        union_geom <- sf::st_union(c(union_geom, sf::st_geometry(row_in_closed)))
+      }
+    } else {
+      union_geom <- closed_geom
+    }
+  }
+
+  if (length(constraints$ded_sfc) > 0) {
+    remainder <- sf::st_difference(
+      sf::st_sf(geometry = union_geom),
+      sf::st_sf(geometry = constraints$ded_sfc)
+    )
+    # st_difference returns zero rows when the union lies entirely inside the
+    # deductions; sum() over the empty area vector gives the correct 0 acres.
+    return(sum(as.numeric(sf::st_area(remainder))) / 4047)
+  }
+  sum(as.numeric(sf::st_area(union_geom))) / 4047
+}
 
 # ============================================================================
 # PENALTY FUNCTIONS
@@ -32,14 +106,9 @@
 #'
 #' @param capacity Current total capacity
 #' @param min_cap Minimum capacity constraint
-#' @param lambda Penalty strength (default: CAPACITY_PRIOR_LAMBDA from config)
+#' @param lambda Penalty strength (`target_spec$priors$capacity_prior_lambda`)
 #' @return Numeric penalty value (>= 0, where 0 means at minimum)
-compute_capacity_penalty <- function(capacity, min_cap,
-                                     lambda = NULL) {
-  if (is.null(lambda)) {
-    lambda <- CAPACITY_PRIOR_LAMBDA
-  }
-
+compute_capacity_penalty <- function(capacity, min_cap, lambda) {
   # Penalize capacity above min_capacity (prior favoring near-minimum)
   # min_capacity itself is a hard constraint checked elsewhere
 
@@ -58,13 +127,9 @@ compute_capacity_penalty <- function(capacity, min_cap,
 #' @param current_cap Current state capacity
 #' @param proposed_cap Proposed state capacity
 #' @param constraints Constraint list with min_capacity
-#' @param lambda Capacity prior strength (default: CAPACITY_PRIOR_LAMBDA from config)
+#' @param lambda Capacity prior strength (`target_spec$priors$capacity_prior_lambda`)
 #' @return Log penalty difference to add to MH ratio
-compute_penalty_difference <- function(current_cap, proposed_cap, constraints,
-                                       lambda = NULL) {
-  if (is.null(lambda)) {
-    lambda <- CAPACITY_PRIOR_LAMBDA
-  }
+compute_penalty_difference <- function(current_cap, proposed_cap, constraints, lambda) {
   pen_current <- compute_capacity_penalty(
     current_cap, constraints$min_capacity, lambda
   )
@@ -181,13 +246,29 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
     return(list(feasible = FALSE, constraint_failed = "max_capacity"))
   }
 
-  # Area
-  if (state$total_area < constraints$min_area) {
+  # Area and density use the GIS denominator, defined per block: the closed area
+  # of the LCC block plus the closed area of each secondary block, each closed
+  # independently. It is therefore a pure function of the state, and every kernel
+  # maintains it exactly (state$total_gis_area = state$lcc_gis_area + sum of the
+  # library gis_area of the current secondaries). Recomputing a whole-state union
+  # here would give a different, kernel-path-dependent number and break detailed
+  # balance, so a missing cache is a caller bug, not something to work around.
+  gis_denom <- state$total_gis_area
+  if (is.null(gis_denom) || !is.finite(gis_denom)) {
+    cli::cli_abort(c(
+      "state$total_gis_area is missing or non-finite.",
+      i = "Every kernel must set total_gis_area (and lcc_gis_area) on the state it proposes."
+    ))
+  }
+
+  if (gis_denom <= 0) {
+    return(list(feasible = FALSE, constraint_failed = "invalid_area"))
+  }
+  if (gis_denom < constraints$min_area) {
     return(list(feasible = FALSE, constraint_failed = "min_area"))
   }
 
-  # Density (safe division - total_area guaranteed > 0 above)
-  density <- state$total_capacity / state$total_area
+  density <- state$total_capacity / gis_denom
   if (!is.finite(density) || density < constraints$min_density) {
     return(list(feasible = FALSE, constraint_failed = "min_density"))
   }
@@ -225,4 +306,32 @@ check_hard_constraints_only <- function(state, library, parcel_graph, constraint
   }
 
   list(feasible = TRUE, constraint_failed = NULL)
+}
+
+#' Precompute GIS density-denominator area for every block in a library
+#'
+#' Called once before the MCMC loop for both the LCC and secondary libraries.
+#' Kernels then update \code{state$total_gis_area} via O(1) arithmetic instead of
+#' calling \code{st_union()} at every proposal.
+#'
+#' The arithmetic is exact because the denominator is defined per block: each
+#' block is closed independently and cross-block road fill is excluded, so a
+#' state's denominator is the sum of its blocks' areas.
+#'
+#' @param library LCC or secondary library list.
+#' @param constraints Constraints list from \code{\link{define_constraints}}.
+#' @return The library with \code{metadata$gis_area} populated.
+#' @keywords internal
+enrich_library_with_gis_areas <- function(library, constraints) {
+  n <- library$n_blocks
+  if (n == 0L) {
+    library$metadata[, gis_area := numeric(0)]
+    return(library)
+  }
+  gis_areas <- vapply(seq_len(n), function(i) {
+    block_unit_ids <- library$parcel_names[library$blocks[[i]]]
+    compute_gis_density_denom(block_unit_ids, constraints)
+  }, numeric(1))
+  library$metadata[, gis_area := gis_areas]
+  library
 }

@@ -8,8 +8,10 @@ add_lcc_to_library(
   lcc_library,
   lcc_parcels,
   parcel_graph,
-  max_online = ONLINE_MAX_ENTRIES,
-  neighbor_cache = NULL
+  max_online,
+  neighbor_cache = NULL,
+  lcc_indices = NULL,
+  constraints
 )
 }
 \arguments{
@@ -22,6 +24,12 @@ add_lcc_to_library(
 \item{max_online}{Maximum online entries before FIFO eviction}
 
 \item{neighbor_cache}{Optional precomputed neighbor cache for speed}
+
+\item{lcc_indices}{Optional library indices of the LCC parcels}
+
+\item{constraints}{Constraints list from \code{\link{define_constraints}};
+required because every library block must carry its GIS denominator, which
+the replace-LCC kernel reads directly.}
 }
 \value{
 List with updated lcc_library and added (logical)

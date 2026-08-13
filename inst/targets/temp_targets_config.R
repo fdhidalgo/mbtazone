@@ -16,6 +16,10 @@ MAX_DIST_FEET <- 120
 # Maximum boundary-to-boundary distance (ft) for any two parcels to be considered
 # for adjacency.
 
+TOUCH_THRESHOLD_FEET <- 2
+# Boundary-to-boundary distance (ft) at or below which two parcels are treated
+# as directly touching (no ROW crossing needed).
+
 MIN_COVERAGE_RATIO <- 0.9
 # Minimum fraction of the nearest-points line that must lie within ROW for a
 # cross-ROW connection to be accepted. At 0.9, 90% of the line must be ROW.
@@ -108,3 +112,8 @@ MCMC_STEPS_MACRO <- 20000L
 # Chains start from different regions and need time to reach stationary distribution
 # Set to 0 to disable burn-in
 MCMC_BURN_IN <- 1000L
+
+# Buffer distance (metres) for the morphological close in
+# compute_gis_density_denom(); fills road right-of-way gaps narrower than
+# 2*d between adjacent parcels. Set to 0 to disable.
+ROW_FILL_M <- 18.29

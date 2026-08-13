@@ -7,7 +7,9 @@
 check_parcel_feasibility(state, library, parcel_graph, constraints)
 }
 \arguments{
-\item{state}{Parcel MCMC state}
+\item{state}{Parcel MCMC state. When \code{state$total_gis_area} is set the
+denominator is taken from it (seeding paths fill it from library block
+metadata); otherwise it is computed from the state's own blocks.}
 
 \item{library}{Secondary library}
 
@@ -19,5 +21,6 @@ check_parcel_feasibility(state, library, parcel_graph, constraints)
 List with feasible (logical) and constraint_failed (character or NULL)
 }
 \description{
-Verifies that the state satisfies MBTA constraints.
+Verifies that the state satisfies MBTA constraints. Used on seed candidates,
+where the state is assembled outside the kernels.
 }

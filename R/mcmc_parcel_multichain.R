@@ -73,16 +73,17 @@ compute_gelman_rubin <- function(chain_values) {
 #' Region IDs should come from partition_parcels_by_station_feasibility(), which
 #' identifies viable station components. Regions are named "R1", "R2", etc.
 #'
-#' @param base_config Base kernel configuration (from define_parcel_kernel_configs())
+#' @param base_config Base sampler spec (from `parcel_sampler_spec()`/presets)
 #' @param n_chains Number of chains to run (default 4)
-#' @param n_steps Number of MCMC steps per chain (default MCMC_STEPS_MACRO)
+#' @param n_steps Number of MCMC steps per chain. Defaults to the sampler
+#'   spec's own `n_steps`, which is the authoritative step count.
 #' @param region_ids Character vector of region identifiers for labelling chains.
 #'   Defaults to "chain_1", "chain_2", etc.
 #' @return List of chain configurations with unique seeds and region assignments
 #' @export
 define_parcel_multichain_configs <- function(base_config,
-                                             n_chains = DEFAULT_N_CHAINS,
-                                             n_steps = MCMC_STEPS_MACRO,
+                                             n_chains = 4L,
+                                             n_steps = base_config$n_steps,
                                              region_ids = paste0("chain_", seq_len(n_chains))) {
   if (n_chains > length(region_ids)) {
     cli::cli_alert_warning(
@@ -116,21 +117,17 @@ define_parcel_multichain_configs <- function(base_config,
 #'
 #' @param config Chain configuration from define_parcel_multichain_configs()
 #' @param parcel_graph_result Result from build_parcel_graph_target()
-#' @param constraints MBTA constraints
+#' @param target_spec Target spec from `parcel_target_spec()`
 #' @param secondary_library Secondary block library
 #' @param lcc_library Discovered LCC library (shared across all chains)
-#' @param region_assignments Ignored, currently kept for backward compatibility only.
 #' @param initial_state Pre-generated initial parcel state from
-#'   generate_initial_states_from_lccs(). Replaces region-based BFS seeding.
+#'   generate_initial_states_from_lccs()
 #' @return List with parcel_samples, samples, stats, diagnostics, chain_id,
 #'         initialization_failed, failure_reason
 #' @export
-#' @param initial_state Pre-generated initial parcel state from
-#'   generate_initial_states_from_lccs(). Replaces region-based BFS seeding.
-#' @param region_assignments Ignored, kept for backward compatibility only.
 run_parcel_chain_from_region <- function(config,
                                          parcel_graph_result,
-                                         constraints,
+                                         target_spec,
                                          secondary_library,
                                          lcc_library,
                                          initial_state,
@@ -161,17 +158,17 @@ run_parcel_chain_from_region <- function(config,
     initial_state <- initial_state[[1]]
   }
 
-  # Run parcel MCMC
+  # Run parcel MCMC. enable_online_enrichment comes from the sampler_spec
+  # presets, which default it to TRUE.
   result <- run_parcel_mcmc(
     parcel_graph          = parcel_graph,
     initial_state         = initial_state,
-    constraints           = constraints,
+    target_spec           = target_spec,
     secondary_library     = secondary_library,
     lcc_library           = lcc_library,
-    config                = config,
+    sampler_spec          = config,
     parcel_assignments    = parcel_graph_result$parcel_assignments,
     neighbor_cache        = parcel_graph_result$neighbor_cache,
-    enable_online_enrichment = TRUE,
     verbose               = verbose
   )
 
@@ -203,9 +200,11 @@ run_parcel_chain_from_region <- function(config,
 #' multiple chains: capacity, n_components, lcc_capacity, centroid_x, centroid_y.
 #'
 #' @param chain_results List of parcel chain results from run_parcel_chain_from_region()
+#' @param mcmc_burn_in Number of leading samples to discard from each chain's
+#'   trajectory before computing R-hat (typically `sampler_spec$mcmc_burn_in`)
 #' @return data.table with columns: metric, rhat, rhat_upper, n_eff
 #' @export
-compute_parcel_multichain_rhat <- function(chain_results) {
+compute_parcel_multichain_rhat <- function(chain_results, mcmc_burn_in) {
   # Filter out failed chains
   valid_chains <- Filter(function(x) !isTRUE(x$initialization_failed), chain_results)
 
@@ -235,10 +234,10 @@ compute_parcel_multichain_rhat <- function(chain_results) {
     chain_values <- lapply(valid_chains, function(r) {
       if (is.null(r$diagnostics)) return(NULL)
       traj <- r$diagnostics[[traj_name]]
-      # Apply burn-in: discard first MCMC_BURN_IN samples
-      if (MCMC_BURN_IN > 0) {
-        if (length(traj) <= MCMC_BURN_IN) return(NULL)  # Not enough samples after burn-in
-        traj <- traj[(MCMC_BURN_IN + 1):length(traj)]
+      # Apply burn-in: discard first mcmc_burn_in samples
+      if (mcmc_burn_in > 0) {
+        if (length(traj) <= mcmc_burn_in) return(NULL)  # Not enough samples after burn-in
+        traj <- traj[(mcmc_burn_in + 1):length(traj)]
       }
       traj
     })
@@ -360,12 +359,15 @@ summarize_parcel_geographic_coverage <- function(chain_results,
 #' @param chain_results List of parcel chain results
 #' @param parcel_graph igraph object
 #' @param visit_threshold Fraction for "frequently visited" (default 0.05)
+#' @param overlap_threshold Minimum pairwise Jaccard overlap for chains to count
+#'   as mixing; below it the chains are flagged as separated (default 0.1)
 #' @return List with separated, overlap_matrix, min_overlap, centroid_ranges,
 #'         separation_evidence
 #' @export
 detect_parcel_chain_separation <- function(chain_results,
                                            parcel_graph,
-                                           visit_threshold = 0.05) {
+                                           visit_threshold = 0.05,
+                                           overlap_threshold = 0.1) {
   valid_chains <- Filter(function(x) !isTRUE(x$initialization_failed), chain_results)
 
   if (length(valid_chains) < 2) {
@@ -429,16 +431,16 @@ detect_parcel_chain_separation <- function(chain_results,
   }
 
   # Determine separation status
-  separated <- !is.na(min_overlap) && min_overlap < CHAIN_OVERLAP_THRESHOLD
+  separated <- !is.na(min_overlap) && min_overlap < overlap_threshold
 
   separation_evidence <- if (is.na(min_overlap)) {
     "Unable to compute overlap"
   } else if (separated) {
     sprintf("SEPARATED: Min pairwise Jaccard overlap = %.3f < %.2f threshold",
-            min_overlap, CHAIN_OVERLAP_THRESHOLD)
+            min_overlap, overlap_threshold)
   } else {
     sprintf("Mixing OK: Min pairwise Jaccard overlap = %.3f >= %.2f threshold",
-            min_overlap, CHAIN_OVERLAP_THRESHOLD)
+            min_overlap, overlap_threshold)
   }
 
   list(
@@ -520,9 +522,11 @@ compare_parcel_chain_distributions <- function(chain_results, burn_in_frac = 0.1
 #' Convergence is assessed using the upper CI (more conservative).
 #'
 #' @param rhat_table Output from compute_parcel_multichain_rhat()
+#' @param rhat_threshold R-hat below which a metric counts as converged
+#'   (default 1.1)
 #' @return ggplot object
 #' @export
-plot_parcel_rhat_summary <- function(rhat_table) {
+plot_parcel_rhat_summary <- function(rhat_table, rhat_threshold = 1.1) {
   if (nrow(rhat_table) == 0) {
     return(ggplot2::ggplot() +
              ggplot2::annotate("text", x = 0.5, y = 0.5,
@@ -532,7 +536,7 @@ plot_parcel_rhat_summary <- function(rhat_table) {
 
   # Add convergence status (use upper CI for conservative check)
   rhat_table <- data.table::copy(rhat_table)
-  rhat_table[, converged := rhat_upper < RHAT_CONVERGENCE_THRESHOLD]
+  rhat_table[, converged := rhat_upper < rhat_threshold]
 
   p <- ggplot2::ggplot(rhat_table, ggplot2::aes(x = metric, y = rhat, fill = converged)) +
     ggplot2::geom_col(width = 0.7) +
@@ -541,14 +545,14 @@ plot_parcel_rhat_summary <- function(rhat_table) {
       ggplot2::aes(ymin = rhat, ymax = rhat_upper),
       width = 0.2, linewidth = 0.6, color = "gray30"
     ) +
-    ggplot2::geom_hline(yintercept = RHAT_CONVERGENCE_THRESHOLD,
+    ggplot2::geom_hline(yintercept = rhat_threshold,
                         linetype = "dashed", color = "red", linewidth = 0.8) +
     ggplot2::scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick"),
                                name = "Converged\n(Upper CI)",
                                labels = c("TRUE" = "Yes", "FALSE" = "No")) +
     ggplot2::labs(
       title = "Parcel Multi-Chain R-hat Convergence",
-      subtitle = sprintf("Threshold = %.1f (error bars show 97.5%% CI)", RHAT_CONVERGENCE_THRESHOLD),
+      subtitle = sprintf("Threshold = %.1f (error bars show 97.5%% CI)", rhat_threshold),
       x = "Metric",
       y = "R-hat"
     ) +
@@ -569,19 +573,25 @@ plot_parcel_rhat_summary <- function(rhat_table) {
 #'
 #' @param chain_results List of parcel chain results
 #' @param parcel_graph igraph object
+#' @param mcmc_burn_in Number of leading samples to discard from each chain's
+#'   trajectory before computing R-hat (typically `sampler_spec$mcmc_burn_in`)
 #' @param region_assignments Region partition
+#' @param rhat_threshold R-hat (upper CI) at or above which a metric is flagged
+#'   as not converged (default 1.1)
 #' @return List with all diagnostics and summary
 #' @export
 create_parcel_irreducibility_report <- function(chain_results,
                                                 parcel_graph,
-                                                region_assignments = NULL) {
+                                                mcmc_burn_in,
+                                                region_assignments = NULL,
+                                                rhat_threshold = 1.1) {
   # Count chains
   n_attempted <- length(chain_results)
   n_valid <- sum(sapply(chain_results, function(x) !isTRUE(x$initialization_failed)))
   n_failed <- n_attempted - n_valid
 
   # Compute diagnostics
-  rhat <- compute_parcel_multichain_rhat(chain_results)
+  rhat <- compute_parcel_multichain_rhat(chain_results, mcmc_burn_in)
   coverage <- summarize_parcel_geographic_coverage(chain_results, parcel_graph, region_assignments)
   separation <- detect_parcel_chain_separation(chain_results, parcel_graph)
   ks_tests <- compare_parcel_chain_distributions(chain_results)
@@ -595,7 +605,7 @@ create_parcel_irreducibility_report <- function(chain_results,
 
   if (nrow(rhat) > 0) {
     # Use upper CI for conservative convergence check
-    high_rhat <- rhat[rhat_upper >= RHAT_CONVERGENCE_THRESHOLD, metric]
+    high_rhat <- rhat[rhat_upper >= rhat_threshold, metric]
     if (length(high_rhat) > 0) {
       concerns <- c(concerns, sprintf("High R-hat (upper CI) for: %s", paste(high_rhat, collapse = ", ")))
     }

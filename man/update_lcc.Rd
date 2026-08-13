@@ -26,3 +26,8 @@ Updated state
 Adds or removes a single parcel from the LCC. Throws an error if invariants
 are violated (adding a parcel already in X, or removing one not in X).
 }
+\details{
+The returned state carries no GIS denominator: the LCC changed, so both
+\code{lcc_gis_area} and \code{total_gis_area} must be refreshed by the caller
+via \code{\link{update_lcc_gis_area}} before any feasibility check.
+}

@@ -15,9 +15,9 @@ compute_tree_dfs_metadata(tree, root)
 List with:
 \itemize{
 \item dfs_order: integer vector of vertices in DFS order
-\item entry: entry\link{v} = position in dfs_order where v's subtree starts
-\item subtree_size: subtree_size\link{v} = number of vertices in v's subtree
-\item parent: parent\link{v} = parent vertex (root has parent = root)
+\item entry: \code{entry[v]} = position in dfs_order where v's subtree starts
+\item subtree_size: \code{subtree_size[v]} = number of vertices in v's subtree
+\item parent: \code{parent[v]} = parent vertex (root has parent = root)
 }
 }
 \description{

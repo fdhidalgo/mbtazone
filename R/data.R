@@ -16,8 +16,8 @@
 #'   \item{additional_lot_SF}{Numeric. Additional square footage required per dwelling unit beyond base (NA if not used)}
 #'   \item{building_height}{Numeric. Maximum building height in stories}
 #'   \item{FAR}{Numeric. Floor Area Ratio limit as decimal (e.g., 2.0 means building floor area can be 2x lot area)}
-#'   \item{max_lot_coverage}{Numeric. Maximum lot coverage as decimal (e.g., 0.5 = 50\% coverage)}
-#'   \item{min_required_open_space}{Numeric. Minimum open space percentage as decimal (typically 0.2 = 20\%)}
+#'   \item{max_lot_coverage}{Numeric. Maximum lot coverage as decimal (e.g., 0.5 = 50% coverage)}
+#'   \item{min_required_open_space}{Numeric. Minimum open space percentage as decimal (typically 0.2 = 20%)}
 #'   \item{parking_spaces_per_dwelling_unit}{Numeric. Required parking spaces per dwelling unit}
 #'   \item{lot_area_per_dwelling_unit}{Numeric. Minimum lot area required per dwelling unit in square feet}
 #'   \item{max_dwelling_units_per_acre}{Numeric. Maximum density limit in units per acre}

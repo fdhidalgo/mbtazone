@@ -21,10 +21,13 @@
 #' @param lcc_library Discovered LCC library
 #' @param secondary_library Discovered secondary library
 #' @param constraints MBTA constraints
+#' @param secondary_area_threshold Minimum area (acres) a secondary component
+#'   must reach; used only to label why a parcel is unreachable (default 5)
 #' @return data.table with parcel-level feasibility classification
 #' @export
 analyze_parcel_feasibility <- function(parcel_graph, lcc_library, secondary_library,
-                                        constraints) {
+                                        constraints,
+                                        secondary_area_threshold = 5) {
   cli::cli_h2("Parcel Feasibility Analysis")
 
   all_parcels <- igraph::V(parcel_graph)$name
@@ -102,7 +105,7 @@ capacity_vec <- igraph::V(parcel_graph)$capacity
 
   # Step 4: Determine reason for unreachable parcels
   min_density <- constraints$min_density
-  min_area_sec <- SECONDARY_AREA_THRESHOLD # 5 acres from config.R
+  min_area_sec <- secondary_area_threshold
 
   unreachable_idx <- which(result$classification == "unreachable")
   if (length(unreachable_idx) > 0) {

@@ -8,7 +8,8 @@ analyze_parcel_feasibility(
   parcel_graph,
   lcc_library,
   secondary_library,
-  constraints
+  constraints,
+  secondary_area_threshold = 5
 )
 }
 \arguments{
@@ -19,6 +20,9 @@ analyze_parcel_feasibility(
 \item{secondary_library}{Discovered secondary library}
 
 \item{constraints}{MBTA constraints}
+
+\item{secondary_area_threshold}{Minimum area (acres) a secondary component
+must reach; used only to label why a parcel is unreachable (default 5)}
 }
 \value{
 data.table with parcel-level feasibility classification

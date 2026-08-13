@@ -105,9 +105,9 @@ compute_subtree_aggregates <- function(
 #' @param root Integer vertex index to use as root
 #' @return List with:
 #'   - dfs_order: integer vector of vertices in DFS order
-#'   - entry: entry[v] = position in dfs_order where v's subtree starts
-#'   - subtree_size: subtree_size[v] = number of vertices in v's subtree
-#'   - parent: parent[v] = parent vertex (root has parent = root)
+#'   - entry: `entry[v]` = position in dfs_order where v's subtree starts
+#'   - subtree_size: `subtree_size[v]` = number of vertices in v's subtree
+#'   - parent: `parent[v]` = parent vertex (root has parent = root)
 compute_tree_dfs_metadata <- function(tree, root) {
   n <- igraph::vcount(tree)
 
@@ -181,7 +181,7 @@ extract_cut_parcels <- function(tree_names, cut_vertex, cut_side, dfs_metadata) 
 
 #' Find all valid LCC cuts of a spanning tree
 #'
-#' Each non-root vertex v defines a potential cut: removing edge (v, parent[v])
+#' Each non-root vertex v defines a potential cut: removing edge (v, `parent[v]`)
 #' splits the tree into the subtree rooted at v and its complement.
 #' A cut is valid if the resulting component can serve as an LCC candidate
 #' (density >= min_density, and capacity >= min_capacity * min_lcc_fraction).
@@ -317,7 +317,8 @@ find_valid_cuts <- function(tree, root, aggregates, constraints,
 #' @param n_trees Number of spanning trees to sample (default 500)
 #' @param forbidden_parcels Optional character vector of parcels to exclude from LCCs
 #' @param max_discovery_capacity Optional upper bound on LCC capacity for discovery.
-#'   LCCs above this are skipped. Default: min_capacity * DISCOVERY_CAPACITY_MULTIPLIER.
+#'   LCCs above this are skipped. NULL disables the bound. Callers typically pass
+#'   `constraints$min_capacity * discovery_spec$discovery_capacity_multiplier`.
 #' @param verbose Print progress (default TRUE)
 #' @return List with:
 #'   - discovered_lccs: data.table with lcc_key, parcel_ids (list col), capacity, area, tree_count
@@ -371,11 +372,7 @@ discover_lccs_from_trees <- function(
   min_cap <- constraints$min_capacity
   feasible_comp_ids <- which(comp_capacities >= min_cap)
 
-  # Compute discovery upper bound if not provided
-  if (is.null(max_discovery_capacity)) {
-    max_discovery_capacity <- min_cap * DISCOVERY_CAPACITY_MULTIPLIER
-  }
-  if (verbose) {
+  if (verbose && !is.null(max_discovery_capacity)) {
     cli::cli_alert_info("Discovery capacity bound: {round(max_discovery_capacity)}")
   }
 
@@ -731,7 +728,7 @@ strip_graph_attributes <- function(graph) {
 
 #' Find all valid secondary block cuts of a spanning tree
 #'
-#' Each non-root vertex v defines a potential cut: removing edge (v, parent[v])
+#' Each non-root vertex v defines a potential cut: removing edge (v, `parent[v]`)
 #' splits the tree into the subtree rooted at v and its complement.
 #' A cut is valid if the resulting component satisfies secondary block constraints
 #' (area within band, density >= threshold).

@@ -38,6 +38,57 @@ get_district_paths <- function(
   )
 }
 
+# Abort unless an sf/sfc object is in EPSG:26986 (NAD83 Massachusetts State
+# Plane), the CRS every area and distance calculation in the package assumes.
+# `what` is plain text naming the offending object (cli does not interpret
+# inline markup coming from substituted values).
+assert_crs_26986 <- function(x, what) {
+  x_crs <- sf::st_crs(x)
+  if (is.na(x_crs) || x_crs$epsg != 26986) {
+    cli::cli_abort(c(
+      "{what} must use EPSG:26986 (NAD83 Massachusetts State Plane)",
+      "i" = "Current CRS: EPSG:{x_crs$epsg}"
+    ))
+  }
+  invisible(TRUE)
+}
+
+# Clip statewide deductions to a bounding box and dissolve overlapping source
+# layers into a single polygon. Returns a one-row sf (or zero-row if no
+# deductions overlap the bbox).
+clip_dissolve_deductions <- function(deductions, bbox_sf) {
+  local_ded <- sf::st_make_valid(sf::st_intersection(deductions, bbox_sf))
+  if (nrow(local_ded) == 0) {
+    return(sf::st_sf(geometry = sf::st_sfc(crs = sf::st_crs(deductions))))
+  }
+  sf::st_sf(geometry = sf::st_union(local_ded))
+}
+
+# Compute per-parcel GIS area (parcel polygon area minus deduction overlap),
+# returned in acres. Takes a pre-dissolved local deductions sf.
+compute_gis_area_acres <- function(parcels_sf, local_deductions_dissolved) {
+  parcel_sqm <- as.numeric(sf::st_area(parcels_sf))
+
+  if (nrow(local_deductions_dissolved) == 0) {
+    return(pmax(parcel_sqm, 0) / 4047)
+  }
+
+  ded_parts <- sf::st_intersection(parcels_sf["LOC_ID"], local_deductions_dissolved)
+
+  ded_sqm <- rep(0, nrow(parcels_sf))
+  if (nrow(ded_parts) > 0) {
+    ded_area_by_id <- tapply(
+      as.numeric(sf::st_area(ded_parts)),
+      sf::st_drop_geometry(ded_parts)$LOC_ID,
+      sum
+    )
+    matched <- ded_area_by_id[parcels_sf$LOC_ID]
+    ded_sqm[!is.na(matched)] <- matched[!is.na(matched)]
+  }
+
+  pmax(parcel_sqm - ded_sqm, 0) / 4047
+}
+
 #' Load data for a single community from its GeoPackage
 #'
 #' Reads the `parcels` and `districts` layers from the pre-built GeoPackage
@@ -53,6 +104,9 @@ get_district_paths <- function(
 #'   "adjacent", or "adjacent_small_town"
 #' @param gpkg Path to the community's .gpkg file
 #' @param right_of_way Path to the statewide right-of-way shapefile
+#' @param density_deductions sf object of the statewide Density Denominator
+#'   Deductions layer (already in EPSG:26986). Used to compute per-parcel GIS
+#'   area (polygon area minus deduction overlap) for the density denominator.
 #' @return Named list with:
 #'   - district_parcels: data.table with LOC_ID, capacity, area_acres, etc.
 #'   - district_geometry: sf object with LOC_ID, geometry, capacity, area, etc.
@@ -66,13 +120,21 @@ load_district_data <- function(
     district_name,
     district_type,
     gpkg,
-    right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp"
+    right_of_way = "data/Right_of_Way/Excluded_Land_Right_of_Way.shp",
+    density_deductions
 ) {
+  assert_crs_26986(density_deductions, "`density_deductions`")
+
   # Step 1: Read both layers from GeoPackage
   parcels_sf <- sf::st_read(gpkg, layer = "parcels", quiet = TRUE)
   if (is.na(sf::st_crs(parcels_sf)$epsg) || sf::st_crs(parcels_sf)$epsg != 26986) {
     parcels_sf <- sf::st_transform(parcels_sf, 26986)
   }
+  assert_crs_26986(parcels_sf, "The `parcels` layer of the GeoPackage")
+
+  # Repair geometry before any overlay: self-intersecting parcel polygons are
+  # routine in MassGIS L3 data and make GEOS throw on st_intersection.
+  parcels_sf <- sf::st_make_valid(parcels_sf)
 
   # Drop rows with no LOC_ID — incomplete records that carry no usable
   # geometry or attributes and would cause NA vertex names in igraph.
@@ -82,10 +144,21 @@ load_district_data <- function(
     parcels_sf <- parcels_sf[!is.na(parcels_sf$LOC_ID), ]
   }
 
+  # Per-parcel deduction areas are keyed by LOC_ID, so duplicates would silently
+  # mis-assign area between parcels sharing an id.
+  dup_loc_ids <- unique(parcels_sf$LOC_ID[duplicated(parcels_sf$LOC_ID)])
+  if (length(dup_loc_ids) > 0) {
+    cli::cli_abort(c(
+      "Duplicate {.field LOC_ID} values in the {.field parcels} layer for {district_name}.",
+      "x" = "Duplicated: {.val {dup_loc_ids}}"
+    ))
+  }
+
   districts_sf <- sf::st_read(gpkg, layer = "districts", quiet = TRUE)
   if (is.na(sf::st_crs(districts_sf)$epsg) || sf::st_crs(districts_sf)$epsg != 26986) {
     districts_sf <- sf::st_transform(districts_sf, 26986)
   }
+  assert_crs_26986(districts_sf, "The `districts` layer of the GeoPackage")
 
   # Step 2: Load community requirements
   district_requirements <- get_community_requirements(
@@ -116,11 +189,22 @@ load_district_data <- function(
 
   in_station <- parcels_sf$in_station_area
 
+  # Dissolve deductions once for this community's bbox, then use for both
+  # per-parcel area and per-step GIS density denominator computation.
+  bbox_poly_parcels <- sf::st_as_sfc(sf::st_bbox(parcels_sf))
+  sf::st_crs(bbox_poly_parcels) <- sf::st_crs(parcels_sf)
+  local_deductions_dissolved <- clip_dissolve_deductions(
+    density_deductions, bbox_poly_parcels
+  )
+
+  # GIS-based area: polygon area minus statewide deduction overlap, in acres.
+  area_acres <- compute_gis_area_acres(parcels_sf, local_deductions_dissolved)
+
   # Step 4: MCMC-ready data.table (all parcels; in_district flag preserved)
   district_parcels <- data.table::data.table(
     LOC_ID            = parcels_sf$LOC_ID,
     capacity          = capacity,
-    area_acres        = parcels_sf$ACRES,
+    area_acres        = area_acres,
     in_district       = parcels_sf$in_district,
     in_station_bounds = in_station,
     lot_area_sqft     = parcels_sf$SQFT,
@@ -131,9 +215,9 @@ load_district_data <- function(
   # Step 5: Geometry sf for adjacency graph (all parcels)
   district_geometry <- parcels_sf["LOC_ID"]
   district_geometry$capacity            <- capacity
-  district_geometry$area                <- parcels_sf$ACRES
+  district_geometry$area                <- area_acres
   district_geometry$in_station_bounds   <- in_station
-  district_geometry$area_in_station     <- ifelse(in_station, parcels_sf$ACRES, 0)
+  district_geometry$area_in_station     <- ifelse(in_station, area_acres, 0)
   district_geometry$capacity_in_station <- ifelse(in_station, capacity, 0)
 
   centroids <- sf::st_centroid(sf::st_geometry(district_geometry))
@@ -161,6 +245,7 @@ load_district_data <- function(
   if (is.na(sf::st_crs(right_of_way_sf)$epsg) || sf::st_crs(right_of_way_sf)$epsg != 26986) {
     right_of_way_sf <- sf::st_transform(right_of_way_sf, 26986)
   }
+  assert_crs_26986(right_of_way_sf, "The right-of-way layer")
 
   district_right_of_way <- sf::st_make_valid(
     sf::st_intersection(right_of_way_sf, bbox_poly)
@@ -173,12 +258,13 @@ load_district_data <- function(
   district_boundary <- sf::st_union(districts_sf)
 
   list(
-    district_parcels      = district_parcels,
-    district_geometry     = district_geometry,
-    district_right_of_way = district_right_of_way,
-    zoning_params         = sf::st_drop_geometry(districts_sf),
-    district_requirements = district_requirements,
-    transit_stations      = district_station_areas,
-    district_boundary     = district_boundary
+    district_parcels           = district_parcels,
+    district_geometry          = district_geometry,
+    district_right_of_way      = district_right_of_way,
+    zoning_params              = sf::st_drop_geometry(districts_sf),
+    district_requirements      = district_requirements,
+    transit_stations           = district_station_areas,
+    district_boundary          = district_boundary,
+    local_deductions_dissolved = local_deductions_dissolved
   )
 }

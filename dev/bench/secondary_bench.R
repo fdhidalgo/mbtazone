@@ -63,14 +63,12 @@ BASELINE <- file.path(PKG_ROOT, "dev", "bench", "secondary_baseline.txt")
 setwd(PKG_ROOT)
 suppressMessages(pkgload::load_all(PKG_ROOT, quiet = TRUE,
                                    helpers = FALSE, attach_testthat = FALSE))
-# Secondary-discovery size constants are plain top-level objects in these config
-# files (size bands, n_trees, BFS quota, density threshold, library cap). Sourcing
-# them here mirrors the pipeline; they are FROZEN inputs to the measurement.
-source(file.path(PKG_ROOT, "inst/targets/temp_targets_config.R"))
-source(file.path(PKG_ROOT, "inst/targets/temp_targets_parcel_config.R"))
+# Secondary-discovery size constants (size bands, n_trees, BFS quota, density
+# threshold, library cap) arrive via the `discovery_spec` target loaded below —
+# FROZEN inputs to the measurement, not rebuilt here.
 
 stopifnot("warm store missing" = dir.exists(STORE))
-tar_load(parcel_graph_result, store = STORE)
+tar_load(c(parcel_graph_result, discovery_spec, target_spec), store = STORE)
 
 # --- one full secondary discovery (Tier 3B of inst/targets/_targets.R) -------
 # Reproduces the target chain tree_discovered_secondaries ->
@@ -83,9 +81,9 @@ run_once <- function() {
   # Stage 1: tree enumeration (Wilson's algorithm) — RNG
   tree_secs <- discover_secondaries_from_trees(
     parcel_graph      = pg,
-    size_bands        = SEC_SIZE_BANDS,
-    density_threshold = LIBRARY_DENSITY_THRESHOLD,
-    n_trees           = TREE_SEC_N_TREES,
+    size_bands        = discovery_spec$sec_size_bands,
+    density_threshold = discovery_spec$library_density_threshold,
+    n_trees           = discovery_spec$tree_sec_n_trees,
     verbose           = FALSE
   )
 
@@ -94,9 +92,9 @@ run_once <- function() {
   bfs_secs <- run_bfs_secondary_supplement(
     tree_discovered_secondaries = tree_secs,
     parcel_graph                = pg,
-    size_bands                  = SEC_SIZE_BANDS,
-    quota_per_band              = BFS_SEC_QUOTA_PER_BAND,
-    density_threshold           = LIBRARY_DENSITY_THRESHOLD,
+    size_bands                  = discovery_spec$sec_size_bands,
+    quota_per_band              = discovery_spec$bfs_sec_quota_per_band,
+    density_threshold           = discovery_spec$library_density_threshold,
     verbose                     = FALSE
   )
 
@@ -113,8 +111,9 @@ run_once <- function() {
   build_secondary_library_from_discovery(
     combined_discovered = combined,
     parcel_graph        = pg,
-    max_library_size    = SEC_LIBRARY_MAX_SIZE,
-    bfs_reservation     = BFS_RESERVATION_SEC
+    max_library_size    = discovery_spec$sec_library_max_size,
+    bfs_reservation     = discovery_spec$bfs_reservation_sec,
+    constraints         = target_spec$constraints
   )
 }
 

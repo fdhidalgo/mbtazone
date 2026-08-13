@@ -19,5 +19,10 @@ Useful links:
 \author{
 \strong{Maintainer}: Fernando Hidalgo \email{dhidalgo@mit.edu}
 
+Authors:
+\itemize{
+  \item Fernando Hidalgo \email{dhidalgo@mit.edu}
+}
+
 }
 \keyword{internal}

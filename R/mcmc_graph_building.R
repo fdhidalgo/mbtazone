@@ -210,20 +210,20 @@ find_row_edges <- function(parcels_sf, candidate_from, candidate_to,
 #' @param geometry_sf      sf with LOC_ID, geometry, capacity, area
 #' @param right_of_way_sf  Optional sf with ROW polygons
 #' @param max_dist_ft      Maximum boundary-to-boundary distance (ft) for any
-#'   connection — controls both candidate generation and the nearest-points cap.
-#'   Default 120 ft.
+#'   connection — controls both candidate generation and the nearest-points
+#'   cap (typically `graph_spec$max_dist_ft`)
 #' @param touch_threshold_ft Distance (ft) below which parcels are considered
-#'   directly touching (default 2 ft)
+#'   directly touching (typically `graph_spec$touch_threshold_ft`)
 #' @param min_coverage_ratio Minimum fraction of nearest-points line within ROW
-#'   to accept a cross-ROW connection (default 0.9)
+#'   to accept a cross-ROW connection (typically `graph_spec$min_coverage_ratio`)
 #' @param verbose          Print progress messages
 #' @return igraph with edge attribute is_row_crossing
 #' @export
 build_adjacency_graph <- function(geometry_sf,
                                   right_of_way_sf    = NULL,
-                                  max_dist_ft        = 120,
-                                  touch_threshold_ft = 2,
-                                  min_coverage_ratio = 0.9,
+                                  max_dist_ft,
+                                  touch_threshold_ft,
+                                  min_coverage_ratio,
                                   verbose            = TRUE) {
   FEET_TO_METERS <- 0.3048
   max_dist_m        <- max_dist_ft        * FEET_TO_METERS

@@ -7,7 +7,7 @@
 run_parcel_chain_from_region(
   config,
   parcel_graph_result,
-  constraints,
+  target_spec,
   secondary_library,
   lcc_library,
   initial_state,
@@ -19,16 +19,14 @@ run_parcel_chain_from_region(
 
 \item{parcel_graph_result}{Result from build_parcel_graph_target()}
 
-\item{constraints}{MBTA constraints}
+\item{target_spec}{Target spec from \code{parcel_target_spec()}}
 
 \item{secondary_library}{Secondary block library}
 
 \item{lcc_library}{Discovered LCC library (shared across all chains)}
 
 \item{initial_state}{Pre-generated initial parcel state from
-generate_initial_states_from_lccs(). Replaces region-based BFS seeding.}
-
-\item{region_assignments}{Ignored, kept for backward compatibility only.}
+generate_initial_states_from_lccs()}
 }
 \value{
 List with parcel_samples, samples, stats, diagnostics, chain_id,

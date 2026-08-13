@@ -51,13 +51,8 @@ source(
   local = config_env
 )
 
-CAPACITY_PRIOR_LAMBDA <- config_env$CAPACITY_PRIOR_LAMBDA
-K_PRIOR_LAMBDA <- config_env$K_PRIOR_LAMBDA
 SECONDARY_AREA_THRESHOLD <- config_env$SECONDARY_AREA_THRESHOLD
-DISCOVERY_CAPACITY_MULTIPLIER <- config_env$DISCOVERY_CAPACITY_MULTIPLIER
 MCMC_STEPS_MACRO <- config_env$MCMC_STEPS_MACRO
-MCMC_BURN_IN <- config_env$MCMC_BURN_IN
-SWAP_CAP_TOLERANCE <- config_env$SWAP_CAP_TOLERANCE
 
 # Find targets store
 store_path <- if (dir.exists(params$temp_store_path)) params$temp_store_path else paste0("../../", params$temp_store_path)
@@ -68,11 +63,21 @@ tar_config_set(store = store_path)
 district_paths <- tar_read(district_paths)
 district_data <- tar_read(district_data)
 adjacency_graph <- tar_read(adjacency_graph)
+
+# Tuning values actually used by this run, read from the constructed specs.
+target_spec <- tar_read(target_spec)
+sampler_spec <- tar_read(sampler_spec)
+discovery_spec <- tar_read(discovery_spec)
+MCMC_BURN_IN <- sampler_spec$mcmc_burn_in
+CAPACITY_PRIOR_LAMBDA <- target_spec$priors$capacity_prior_lambda
+K_PRIOR_LAMBDA <- target_spec$priors$k_prior_lambda
+DISCOVERY_CAPACITY_MULTIPLIER <- discovery_spec$discovery_capacity_multiplier
+SWAP_CAP_TOLERANCE <- sampler_spec$swap_cap_tolerance
 parcel_graph_result <- tar_read(parcel_graph_result)
 discovered_lcc_library <- tar_read(discovered_lcc_library)
 discovered_secondary_library <- tar_read(discovered_secondary_library)
 parcel_metrics <- tar_read(parcel_metrics)
-constraints <- tar_read(constraints)
+constraints <- target_spec$constraints
 parcel_rhat_table <- tar_read(parcel_rhat_table)
 parcel_chain_results <- tar_read(all_parcel_chain_results)
 parcel_separation <- tar_read(parcel_chain_separation)
@@ -379,25 +384,27 @@ caption <- paste0(
 )
 
 
-# Create a data table with constraint descriptions
-constraints_dt <- data.table::data.table(
-  Constraint = c("Minimum capacity", "Minimum area", "Minimum density", "LCC fraction", "Station Capacity %", "Station Area %"),
-  Value = constraints,
-  Description = c(
-    "Total housing units the district must support",
-    "Total land area in the overlay district",
-    "Gross density across the district",
-    "At least half of capacity in the largest connected component",
-    "Percentage of total capacity that must be within half mile radius of a station",
-    "Percentage of total area that must be within half mile radius of a station"
-  )
+scalar_constraints <- list(
+  min_capacity         = constraints$min_capacity,
+  min_area             = constraints$min_area,
+  min_density          = constraints$min_density,
+  min_lcc_fraction     = constraints$min_lcc_fraction,
+  station_capacity_pct = constraints$station_capacity_pct,
+  station_area_pct     = constraints$station_area_pct
 )
 
 knitr::kable(
   data.table::data.table(
-    Constraint = names(constraints),
-    Value = constraints_dt$Value,
-    Description = constraints_dt$Description
+    Constraint = c("Minimum capacity", "Minimum area", "Minimum density", "LCC fraction", "Station Capacity %", "Station Area %"),
+    Value = unlist(scalar_constraints),
+    Description = c(
+      "Total housing units the district must support",
+      "Total land area in the overlay district",
+      "Gross density across the district",
+      "At least half of capacity in the largest connected component",
+      "Percentage of total capacity that must be within half mile radius of a station",
+      "Percentage of total area that must be within half mile radius of a station"
+    )
   ),
   caption = caption,
   booktabs = TRUE,

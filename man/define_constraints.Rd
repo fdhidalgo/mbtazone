@@ -4,10 +4,30 @@
 \alias{define_constraints}
 \title{Define constraints from district requirements}
 \usage{
-define_constraints(district_data)
+define_constraints(
+  district_data,
+  parcel_graph_result,
+  row_fill_m = 18.29,
+  right_of_way_sf = NULL
+)
 }
 \arguments{
-\item{district_data}{List containing district_requirements from data loading}
+\item{district_data}{List from \code{\link[=load_district_data]{load_district_data()}}}
+
+\item{parcel_graph_result}{List from \code{\link[=build_parcel_graph_target]{build_parcel_graph_target()}} or
+\code{\link[=build_identity_parcel_graph]{build_identity_parcel_graph()}}}
+
+\item{row_fill_m}{Buffer distance (metres) for the morphological close in
+\code{\link[=compute_gis_density_denom]{compute_gis_density_denom()}}; fills road right-of-way gaps narrower than
+\code{2*d} between adjacent parcels (e.g. 18.29 m fills gaps up to
+36.58 m ≈ 120 ft). Set to 0 to disable.}
+
+\item{right_of_way_sf}{Optional sf object of right-of-way polygons (e.g.
+\code{district_data$district_right_of_way}). When supplied, the morphological
+close in \code{\link[=compute_gis_density_denom]{compute_gis_density_denom()}} is ROW-constrained: fill area is
+only kept where it overlaps the ROW polygon, preventing excluded-parcel
+voids and non-ROW gaps from being counted. When \code{NULL} (default), falls
+back to the unconstrained morphological close.}
 }
 \value{
 List of constraints for MCMC

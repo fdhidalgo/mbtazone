@@ -1,89 +1,115 @@
 # density_denominator_comparison.R
 #
-# Compares four approaches to computing the density denominator for each
-# adopted single-zone district, validated against EOHLC Excel compliance
-# models (ground truth).
+# Single-pass computation of all density denominator methods for every
+# single-zone community, plus summary comparisons and plots.
 #
-# The four approaches:
-#   1. parcel_sum   — sum of parcel ACRES fields (current MCMC approach; wrong)
-#   2. gis          — district polygon area minus GIS intersection with the
-#                     state Density Denominator Deductions shapefile (Hydrology,
-#                     Wetlands, TitleV, SurfWatBC, Wellhead1 merged statewide)
-#   3. per_parcel   — district polygon area minus sum of the per-parcel
-#                     deduction fields stored in the GeoPackage parcels layer
-#                     (Hydrology + Wetlands + TitleV + SurfWatBC + Wellhead1)
-#   4. excel        — "District Density Denominator" row from the EOHLC Excel
-#                     compliance model Summary sheet (ground truth; consistent
-#                     with EOHLC determination letters)
+# Nomenclature (consistent throughout this file and all dependent scripts):
 #
-# Key finding: GIS matches Excel within 0.10 ac for 28/48 communities.
-# Large outliers (Salem +37 ac, Essex +26 ac, North_Reading +10 ac, Sherborn
-# +9 ac) are coastal/estuarine communities where the district polygon contains
-# tidal water not captured in the statewide deductions shapefile.
+#   pipeline  — morphological_close(st_union(in-district parcel polygons), ROW_FILL_M)
+#               − GIS deductions clipped to that closed polygon.
+#               Matches compute_gis_density_denom() in the live MCMC: fills road
+#               right-of-way gaps (width ≤ 2*ROW_FILL_M) between adjacent parcels.
+#               Requires only parcel data; works during MCMC search.
+#
+#   district  — st_union(adopted district polygons) − GIS deductions clipped to that polygon
+#               Closest to the Excel model calculation. Only available for adopted zones.
+#
+#   per_parcel — district polygon area − sum of per-parcel deduction fields in .gpkg
+#               (Hydrology + Wetlands + TitleV + SurfWatBC + Wellhead1, stored in sq ft)
+#               Sanity check; can show corrupted values where field sums exceed parcel area.
+#
+#   parcel_sum — sum(in_d$ACRES): the pre-branch old approach. Retained for reference only.
+#
+#   excel      — "District Density Denominator" from the EOHLC Excel compliance model
+#               Summary sheet. Ground truth for adopted boundaries.
+#
+#   atlas      — MA Zoning Atlas gross density (Summary__2 field in districts layer).
+#               denom_atlas_implied = capacity / atlas_density: back-calculated from
+#               Atlas density using pipeline capacity; mixes two sources.
+#
+# Output CSV columns follow the same prefix scheme:
+#   denom_*          — denominator in acres
+#   gross_density_*  — gross density in du/ac
+#   ded_*_acres      — GIS deductions clipped to that method's base polygon
+#
+# Replaces: adopted_density_accuracy.R (merged here)
 #
 # Run from the mbtazone package root. Requires env vars:
 #   MBTAZONE_PIPELINE_DATA       — directory of per-community .gpkg files
 #   MBTAZONE_DENSITY_DEDUCTIONS  — path to Density_Denominator_Deductions.shp
 #   MBTAZONE_EXCEL_MODELS        — path to mbta_district_models/ directory
+#   MBTAZONE_RIGHT_OF_WAY        — path to Excluded_Land_Right_of_Way.shp
+#                                  (optional; enables ROW-constrained fill)
 
 library(sf)
+library(ggplot2)
 library(data.table)
+
+ROW_FILL_M <- 18.29  # matches constraints$row_fill_m default in define_constraints()
 
 # ---- Inputs -----------------------------------------------------------------
 
 pipeline_data_dir <- Sys.getenv("MBTAZONE_PIPELINE_DATA")
+density_ded_path  <- Sys.getenv("MBTAZONE_DENSITY_DEDUCTIONS")
+excel_models_dir  <- Sys.getenv("MBTAZONE_EXCEL_MODELS")
+row_path          <- Sys.getenv("MBTAZONE_RIGHT_OF_WAY")
+
 if (!nzchar(pipeline_data_dir)) stop("MBTAZONE_PIPELINE_DATA env var not set.")
 
 single_zone_csv <- "inst/extdata/single_zone_communities.csv"
-if (!file.exists(single_zone_csv)) {
-  stop(
-    "Single-zone community list not found at ", single_zone_csv, ".\n",
-    "Generate it first: Rscript inst/targets/check_single_zone_districts.R"
-  )
-}
+if (!file.exists(single_zone_csv))
+  stop("Single-zone community list not found at ", single_zone_csv,
+       ".\nGenerate it first: Rscript inst/targets/check_single_zone_districts.R")
 single_zone <- data.table::fread(single_zone_csv)
-cat("Loaded", nrow(single_zone), "single-zone communities\n\n")
+cat(sprintf("Loaded %d single-zone communities\n\n", nrow(single_zone)))
 
-all_gpkg_files <- list.files(pipeline_data_dir, pattern = "\\.gpkg$", full.names = TRUE)
-gpkg_files <- all_gpkg_files[
-  tools::file_path_sans_ext(basename(all_gpkg_files)) %in%
+all_gpkg <- list.files(pipeline_data_dir, pattern = "\\.gpkg$", full.names = TRUE)
+gpkg_files <- all_gpkg[
+  tools::file_path_sans_ext(basename(all_gpkg)) %in%
     gsub(" ", "_", single_zone$community_name)
 ]
-cat("Matched", length(gpkg_files), "GeoPackage files\n\n")
+cat(sprintf("Matched %d GeoPackage files\n\n", length(gpkg_files)))
 
-# ---- Load statewide deductions shapefile ------------------------------------
+# ---- Load statewide deductions ----------------------------------------------
 
-density_ded_path <- Sys.getenv("MBTAZONE_DENSITY_DEDUCTIONS")
 deductions <- NULL
 if (nzchar(density_ded_path) && file.exists(density_ded_path)) {
-  cat("Loading density denominator deductions shapefile...\n")
+  cat("Loading density denominator deductions...\n")
   deductions <- sf::st_read(density_ded_path, quiet = TRUE)
   deductions <- sf::st_transform(deductions, 26986)
   deductions <- sf::st_make_valid(deductions)
-  cat(sprintf("  Loaded: %d features\n\n", nrow(deductions)))
+  cat(sprintf("  %d deduction features\n\n", nrow(deductions)))
 } else {
-  cat("MBTAZONE_DENSITY_DEDUCTIONS not set — GIS columns will be NA.\n\n")
+  cat("MBTAZONE_DENSITY_DEDUCTIONS not set — GIS deduction columns will be NA.\n\n")
 }
 
-# ---- Helper: read density denominator from Excel Summary sheet --------------
-
-excel_models_dir <- Sys.getenv("MBTAZONE_EXCEL_MODELS")
-if (!nzchar(excel_models_dir)) {
+if (!nzchar(excel_models_dir))
   cat("MBTAZONE_EXCEL_MODELS not set — Excel columns will be NA.\n\n")
+
+# ---- Load statewide ROW (optional) ------------------------------------------
+
+row_sf <- NULL
+if (nzchar(row_path) && file.exists(row_path)) {
+  cat("Loading right-of-way shapefile...\n")
+  row_sf <- sf::st_read(row_path, quiet = TRUE)
+  row_sf <- sf::st_transform(row_sf, 26986)
+  row_sf <- sf::st_make_valid(row_sf)
+  cat(sprintf("  %d ROW features — ROW-constrained fill enabled\n\n", nrow(row_sf)))
+} else {
+  cat("MBTAZONE_RIGHT_OF_WAY not set — using unconstrained morphological close.\n\n")
 }
+
+# ---- Helper: read Excel density denominator ---------------------------------
 
 extract_excel_summary <- function(community_name, models_dir) {
   if (!nzchar(models_dir)) return(NULL)
   community_clean <- gsub("_", " ", community_name)
-
-  # Layout A: subdirectory per community  (models_dir/Groveland/Groveland - CM.xlsx)
-  dirs <- list.dirs(models_dir, full.names = TRUE, recursive = FALSE)
+  dirs      <- list.dirs(models_dir, full.names = TRUE, recursive = FALSE)
   match_idx <- which(tolower(basename(dirs)) == tolower(community_clean))
   if (length(match_idx) > 0) {
     xlsx_files <- list.files(dirs[match_idx[1]], pattern = "\\.xlsx$",
                              full.names = TRUE, ignore.case = TRUE)
   } else {
-    # Layout B: flat directory  (models_dir/Groveland - CM.xlsx)
     all_xlsx <- list.files(models_dir, pattern = "\\.xlsx$",
                            full.names = TRUE, ignore.case = TRUE)
     xlsx_files <- all_xlsx[
@@ -91,10 +117,8 @@ extract_excel_summary <- function(community_name, models_dir) {
                    "\\s*-\\s*CM"), basename(all_xlsx), ignore.case = TRUE)
     ]
   }
-
   xlsx_files <- xlsx_files[!grepl("^~\\$", basename(xlsx_files))]
   if (length(xlsx_files) == 0) return(NULL)
-
   for (xlsx in xlsx_files) {
     tryCatch({
       if (!"Summary" %in% readxl::excel_sheets(xlsx)) next
@@ -115,81 +139,171 @@ extract_excel_summary <- function(community_name, models_dir) {
   NULL
 }
 
-# ---- Per-community computation ----------------------------------------------
+# ---- Per-community single-pass computation ----------------------------------
 
-results <- lapply(gpkg_files, function(gpkg) {
+cat("Computing denominators for each community...\n")
+
+results <- lapply(seq_along(gpkg_files), function(i) {
+  gpkg      <- gpkg_files[[i]]
   community <- tools::file_path_sans_ext(basename(gpkg))
+  cat(sprintf("  [%d/%d] %s\n", i, length(gpkg_files), community))
+
   tryCatch({
-    parcels   <- sf::st_read(gpkg, layer = "parcels",   quiet = TRUE)
-    districts <- sf::st_read(gpkg, layer = "districts", quiet = TRUE)
-    in_d      <- parcels[parcels$in_district == TRUE, ]
+    parcels   <- sf::st_make_valid(sf::st_read(gpkg, layer = "parcels",   quiet = TRUE))
+    districts <- sf::st_make_valid(sf::st_read(gpkg, layer = "districts", quiet = TRUE))
+    if (is.na(sf::st_crs(parcels)$epsg) || sf::st_crs(parcels)$epsg != 26986) {
+      parcels   <- sf::st_transform(parcels,   26986)
+      districts <- sf::st_transform(districts, 26986)
+    }
+    in_d <- parcels[parcels$in_district == TRUE, ]
     if (nrow(in_d) == 0) return(NULL)
 
-    capacity         <- sum(in_d$final_lot_multi_family_unit_capacity, na.rm = TRUE)
-    district_poly    <- sf::st_union(districts)
-    polygon_acres    <- as.numeric(sf::st_area(district_poly)) / 4047
+    capacity <- sum(in_d$final_lot_multi_family_unit_capacity, na.rm = TRUE)
+
+    # --- Geometry: district boundary and parcel union -------------------------
+    district_poly <- sf::st_union(districts)
+    district_sf   <- sf::st_sf(geometry = district_poly)
+    polygon_acres <- as.numeric(sf::st_area(district_poly)) / 4047
+
+    # Raw parcel union — used for gap/overhang diagnostics only.
+    parcel_union  <- sf::st_union(in_d)
+    union_sf      <- sf::st_sf(geometry = parcel_union)
+    union_acres   <- as.numeric(sf::st_area(parcel_union)) / 4047
+
+    # Morphological close, ROW-constrained when row_sf is available.
+    closed_geom <- parcel_union |>
+      sf::st_buffer(ROW_FILL_M,  endCapStyle = "SQUARE") |>
+      sf::st_buffer(-ROW_FILL_M, endCapStyle = "SQUARE")
+
+    if (!is.null(row_sf)) {
+      comm_bbox <- sf::st_as_sfc(sf::st_bbox(parcels))
+      local_row <- suppressWarnings(
+        sf::st_intersection(row_sf, sf::st_sf(geometry = comm_bbox))
+      )
+      if (nrow(local_row) > 0) {
+        row_in_closed <- suppressWarnings(
+          sf::st_intersection(
+            sf::st_sf(geometry = closed_geom),
+            sf::st_sf(geometry = sf::st_union(sf::st_geometry(local_row)))
+          )
+        )
+        pipeline_geom <- if (nrow(row_in_closed) > 0)
+          sf::st_union(c(parcel_union, sf::st_geometry(row_in_closed)))
+        else parcel_union
+      } else {
+        pipeline_geom <- parcel_union
+      }
+    } else {
+      pipeline_geom <- closed_geom
+    }
+    pipeline_sf    <- sf::st_sf(geometry = pipeline_geom)
+    pipeline_acres <- as.numeric(sf::st_area(pipeline_geom)) / 4047
+
     parcel_sum_acres <- sum(in_d$ACRES, na.rm = TRUE)
 
-    # Approach 2: GIS — clip deductions to district, dissolve the small local subset,
-    # then subtract. Dissolving after clipping (not globally) avoids double-counting
-    # where source layers overlap, without the cost of a statewide union.
-    gis_deductions_acres <- NA_real_
-    denom_gis            <- NA_real_
+    # Gap: inside district boundary but no parcel polygon covers it.
+    # district method counts this; raw parcel union does not (undercount).
+    gap_sf <- tryCatch(
+      sf::st_make_valid(suppressWarnings(sf::st_difference(district_sf, union_sf))),
+      error = function(e) NULL
+    )
+    gap_acres <- if (!is.null(gap_sf)) max(0, as.numeric(sf::st_area(gap_sf)) / 4047) else 0
+
+    # Overhang: parcel polygon extends beyond district boundary.
+    # raw parcel union counts this; district method does not (overcount).
+    overhang_sf <- tryCatch(
+      sf::st_make_valid(suppressWarnings(sf::st_difference(union_sf, district_sf))),
+      error = function(e) NULL
+    )
+    overhang_acres <- if (!is.null(overhang_sf)) max(0, as.numeric(sf::st_area(overhang_sf)) / 4047) else 0
+
+    # --- GIS deductions -------------------------------------------------------
+    ded_district_acres <- NA_real_
+    ded_pipeline_acres <- NA_real_
+    denom_district     <- NA_real_
+    denom_pipeline     <- NA_real_
+
     if (!is.null(deductions)) {
-      district_sf <- sf::st_sf(geometry = sf::st_make_valid(district_poly))
-      clipped     <- sf::st_intersection(district_sf, deductions)
-      if (nrow(clipped) > 0) {
-        gis_deductions_acres <- as.numeric(sf::st_area(sf::st_union(clipped))) / 4047
+      bbox_sfc <- sf::st_as_sfc(sf::st_bbox(parcels))
+      sf::st_crs(bbox_sfc) <- 26986
+      local_ded <- sf::st_make_valid(
+        sf::st_intersection(deductions, sf::st_sf(geometry = bbox_sfc))
+      )
+
+      if (nrow(local_ded) > 0) {
+        clipped_district <- suppressWarnings(sf::st_intersection(district_sf, local_ded))
+        ded_district_acres <- if (nrow(clipped_district) > 0)
+          as.numeric(sf::st_area(sf::st_union(clipped_district))) / 4047 else 0
+
+        clipped_pipeline <- suppressWarnings(sf::st_intersection(pipeline_sf, local_ded))
+        ded_pipeline_acres <- if (nrow(clipped_pipeline) > 0)
+          as.numeric(sf::st_area(sf::st_union(clipped_pipeline))) / 4047 else 0
       } else {
-        gis_deductions_acres <- 0
+        ded_district_acres <- 0
+        ded_pipeline_acres <- 0
       }
-      denom_gis <- polygon_acres - gis_deductions_acres
+
+      denom_district <- polygon_acres - ded_district_acres
+      denom_pipeline <- pipeline_acres - ded_pipeline_acres
     }
 
-    # Approach 3: per-parcel deduction fields stored in the GeoPackage
+    # --- Per-parcel deduction fields from .gpkg -------------------------------
     dd_cols <- intersect(c("Hydrology", "Wetlands", "TitleV", "SurfWatBC", "Wellhead1"),
                          names(in_d))
-    if (length(dd_cols) > 0) {
-      per_parcel_dd_acres <- sum(
-        rowSums(sf::st_drop_geometry(in_d)[, dd_cols, drop = FALSE], na.rm = TRUE)
-      ) / 43560
-      denom_per_parcel    <- polygon_acres - per_parcel_dd_acres
-    } else {
-      per_parcel_dd_acres <- NA_real_
-      denom_per_parcel    <- NA_real_
-    }
+    per_parcel_dd_acres <- if (length(dd_cols) > 0) {
+      sum(rowSums(sf::st_drop_geometry(in_d)[, dd_cols, drop = FALSE], na.rm = TRUE)) / 43560
+    } else NA_real_
+    denom_per_parcel <- if (!is.na(per_parcel_dd_acres))
+      polygon_acres - per_parcel_dd_acres else NA_real_
 
-    # Approach 4: Excel compliance model (ground truth)
+    # --- Excel ground truth ---------------------------------------------------
     excel         <- extract_excel_summary(community, excel_models_dir)
     denom_excel   <- if (!is.null(excel)) excel$denom_excel   else NA_real_
     density_excel <- if (!is.null(excel)) excel$density_excel else NA_real_
 
+    # --- MA Zoning Atlas (back-calculated implied denominator) ----------------
+    atlas_density       <- suppressWarnings(as.numeric(districts$Summary__2[1]))
+    denom_atlas_implied <- if (!is.na(atlas_density) && atlas_density > 0)
+      capacity / atlas_density else NA_real_
+
     data.frame(
-      community                        = community,
-      district_polygon_acres           = round(polygon_acres,           3),
-      parcel_sum_acres                 = round(parcel_sum_acres,        3),
-      gis_deductions_acres             = round(gis_deductions_acres,    3),
-      per_parcel_dd_acres              = round(per_parcel_dd_acres,     3),
-      unit_capacity                    = capacity,
-      # Density denominators (acres) — four approaches
-      denom_parcel_sum                 = round(parcel_sum_acres,        3),
-      denom_gis                        = round(denom_gis,               3),
-      denom_per_parcel                 = round(denom_per_parcel,        3),
-      denom_excel                      = round(denom_excel,             3),
-      # Gross density (units/acre) — four approaches
-      gross_density_parcel_sum         = round(capacity / parcel_sum_acres, 2),
-      gross_density_gis                = round(capacity / denom_gis,        2),
-      gross_density_per_parcel         = round(capacity / denom_per_parcel, 2),
-      gross_density_excel              = round(density_excel,               2),
-      # Validation: GIS vs Excel denominator difference (key diagnostic)
-      gis_minus_excel_denom_acres      = round(denom_gis - denom_excel,     3),
-      per_parcel_minus_excel_denom_acres = round(denom_per_parcel - denom_excel, 3),
-      # Flag corrupted per-parcel fields (deductions exceed parcel area)
-      per_parcel_fields_corrupted      = !is.na(denom_per_parcel) & denom_per_parcel < 0,
+      community              = community,
+      # Geometry components
+      district_polygon_acres = round(polygon_acres,     3),
+      union_acres            = round(union_acres,       3),  # raw parcel union
+      pipeline_acres         = round(pipeline_acres,    3),  # after morphological close
+      parcel_sum_acres       = round(parcel_sum_acres,  3),
+      gap_acres              = round(gap_acres,         3),
+      overhang_acres         = round(overhang_acres,    3),
+      ded_district_acres     = round(ded_district_acres,  3),
+      ded_pipeline_acres     = round(ded_pipeline_acres,  3),
+      per_parcel_dd_acres    = round(per_parcel_dd_acres, 3),
+      capacity               = capacity,
+      atlas_density          = round(atlas_density, 2),
+      # Density denominators (acres)
+      denom_pipeline      = round(denom_pipeline,     3),
+      denom_district      = round(denom_district,     3),
+      denom_per_parcel    = round(denom_per_parcel,   3),
+      denom_parcel_sum    = round(parcel_sum_acres,   3),
+      denom_excel         = round(denom_excel,        3),
+      denom_atlas_implied = round(denom_atlas_implied, 3),
+      # Gross densities (du/ac)
+      gross_density_pipeline   = round(capacity / denom_pipeline,   2),
+      gross_density_district   = round(capacity / denom_district,   2),
+      gross_density_per_parcel = round(capacity / denom_per_parcel, 2),
+      gross_density_parcel_sum = round(capacity / parcel_sum_acres, 2),
+      gross_density_excel      = round(density_excel, 2),
+      gross_density_atlas      = round(atlas_density, 2),
+      # Diagnostic: difference vs Excel
+      pipeline_minus_excel_acres = round(denom_pipeline - denom_excel, 3),
+      district_minus_excel_acres = round(denom_district - denom_excel, 3),
+      # Diagnostic: difference vs district boundary calculation
+      pipeline_minus_district_acres = round(denom_pipeline - denom_district, 3),
+      per_parcel_fields_corrupted = !is.na(denom_per_parcel) & denom_per_parcel < 0,
       stringsAsFactors = FALSE
     )
   }, error = function(e) {
-    message("  Skipping ", community, ": ", conditionMessage(e))
+    message("  ERROR in ", community, ": ", conditionMessage(e))
     NULL
   })
 })
@@ -197,62 +311,137 @@ results <- lapply(gpkg_files, function(gpkg) {
 dt <- data.table::rbindlist(Filter(Negate(is.null), results))
 data.table::setorder(dt, community)
 
-# ---- Console output ---------------------------------------------------------
+# ---- Console summary --------------------------------------------------------
 
-cat("==========================================================================\n")
-cat("DENSITY DENOMINATOR COMPARISON —", nrow(dt), "single-zone communities\n")
+cat("\n==========================================================================\n")
+cat(sprintf("DENSITY DENOMINATOR ANALYSIS — %d single-zone communities\n", nrow(dt)))
 cat("==========================================================================\n\n")
 
-print(dt[, .(community,
-             district_polygon_acres, parcel_sum_acres,
-             denom_parcel_sum, denom_gis, denom_per_parcel, denom_excel,
-             gross_density_parcel_sum, gross_density_gis,
-             gross_density_per_parcel, gross_density_excel,
-             gis_minus_excel_denom_acres)], nrow = 200)
+has_excel <- dt[!is.na(denom_excel)]
 
-cat("\n--- GIS vs Excel validation ---\n")
-has_both <- dt[!is.na(denom_excel) & !is.na(denom_gis)]
-if (nrow(has_both) > 0) {
-  cat(sprintf("Communities with both GIS and Excel data: %d\n", nrow(has_both)))
-  cat(sprintf("Mean  |GIS denom - Excel denom|: %.4f acres\n",
-              mean(abs(has_both$gis_minus_excel_denom_acres), na.rm = TRUE)))
-  cat(sprintf("Max   |GIS denom - Excel denom|: %.4f acres\n",
-              max(abs(has_both$gis_minus_excel_denom_acres), na.rm = TRUE)))
-  cat(sprintf("Within 0.05 ac of Excel: %d / %d\n",
-              sum(abs(has_both$gis_minus_excel_denom_acres) < 0.05, na.rm = TRUE), nrow(has_both)))
-  cat(sprintf("Within 0.10 ac of Excel: %d / %d\n",
-              sum(abs(has_both$gis_minus_excel_denom_acres) < 0.10, na.rm = TRUE), nrow(has_both)))
-  cat("\nLargest GIS-vs-Excel discrepancies:\n")
-  print(has_both[order(-abs(gis_minus_excel_denom_acres))][1:min(5, .N),
-                                                           .(community, denom_gis, denom_excel, gis_minus_excel_denom_acres,
-                                                             gross_density_gis, gross_density_excel)])
+if (nrow(has_excel) > 0) {
+  has_both <- has_excel[!is.na(denom_district)]
+
+  cat("--- Pipeline (parcel union) vs Excel ---\n")
+  cat(sprintf("Communities with Excel data:         %d\n", nrow(has_excel)))
+  cat(sprintf("Mean |pipeline − excel|:              %.3f ac\n",
+              mean(abs(has_excel$pipeline_minus_excel_acres), na.rm = TRUE)))
+  cat(sprintf("Max  |pipeline − excel|:              %.3f ac (%s)\n",
+              max(abs(has_excel$pipeline_minus_excel_acres), na.rm = TRUE),
+              has_excel$community[which.max(abs(has_excel$pipeline_minus_excel_acres))]))
+  cat(sprintf("Within 1 ac of Excel:                %d / %d\n\n",
+              sum(abs(has_excel$pipeline_minus_excel_acres) < 1, na.rm = TRUE),
+              nrow(has_excel)))
+
+  cat("--- District (boundary polygon) vs Excel ---\n")
+  cat(sprintf("Mean |district − excel|:              %.3f ac\n",
+              mean(abs(has_both$district_minus_excel_acres), na.rm = TRUE)))
+  cat(sprintf("Max  |district − excel|:              %.3f ac (%s)\n",
+              max(abs(has_both$district_minus_excel_acres), na.rm = TRUE),
+              has_both$community[which.max(abs(has_both$district_minus_excel_acres))]))
+  cat(sprintf("Within 1 ac of Excel:                %d / %d\n\n",
+              sum(abs(has_both$district_minus_excel_acres) < 1, na.rm = TRUE),
+              nrow(has_both)))
+
+  n_pipeline_wins <- sum(
+    abs(has_both$pipeline_minus_excel_acres) < abs(has_both$district_minus_excel_acres),
+    na.rm = TRUE
+  )
+  cat(sprintf("Pipeline closer to Excel than district: %d / %d\n",
+              n_pipeline_wins, nrow(has_both)))
+  cat(sprintf("District closer to Excel than pipeline: %d / %d\n\n",
+              nrow(has_both) - n_pipeline_wins, nrow(has_both)))
+
+  cat("All communities sorted by |pipeline − excel|:\n")
+  print(has_excel[order(-abs(pipeline_minus_excel_acres)),
+                  .(community, district_polygon_acres, union_acres,
+                    gap_acres, overhang_acres,
+                    denom_pipeline, denom_district, denom_excel,
+                    pipeline_minus_excel_acres, district_minus_excel_acres)],
+        nrow = 100)
 }
 
-cat("\n--- Communities where parcel-sum density < 15 but Excel density >= 15 ---\n")
-fixed <- dt[!is.na(gross_density_excel) &
-              gross_density_parcel_sum < 15 & gross_density_excel >= 15]
-if (nrow(fixed) > 0) {
-  print(fixed[, .(community, unit_capacity,
-                  denom_parcel_sum, denom_gis, denom_per_parcel, denom_excel,
-                  gross_density_parcel_sum, gross_density_gis,
-                  gross_density_per_parcel, gross_density_excel)])
-} else {
-  cat("None found.\n")
-}
+# ---- Plots ------------------------------------------------------------------
 
-cat("\n--- Communities where GIS density < 15 but Excel density >= 15 ---\n")
-gis_miss <- dt[!is.na(gross_density_excel) & !is.na(gross_density_gis) &
-                 gross_density_gis < 15 & gross_density_excel >= 15]
-if (nrow(gis_miss) > 0) {
-  print(gis_miss[, .(community, denom_gis, denom_per_parcel, denom_excel,
-                     gross_density_gis, gross_density_per_parcel, gross_density_excel,
-                     gis_minus_excel_denom_acres)])
-} else {
-  cat("None.\n")
-}
+LABEL_THRESHOLD <- 2.0
+has_district <- dt[!is.na(denom_district)]
+p1_data <- has_district[!is.na(gross_density_district) & !is.na(gross_density_pipeline)]
+has_ggrepel <- requireNamespace("ggrepel", quietly = TRUE)
+
+p1 <- ggplot(p1_data, aes(x = gross_density_district, y = gross_density_pipeline)) +
+  geom_abline(slope = 1, intercept = 0, colour = "grey50", linetype = "dashed",
+              linewidth = 0.8) +
+  geom_point(aes(colour = pipeline_minus_district_acres), size = 2.5, alpha = 0.85) +
+  (if (has_ggrepel) {
+    ggrepel::geom_text_repel(
+      data = p1_data[abs(gross_density_pipeline - gross_density_district) > LABEL_THRESHOLD],
+      aes(label = community), size = 2.8, max.overlaps = 30, segment.colour = "grey60"
+    )
+  } else {
+    geom_text(
+      data = p1_data[abs(gross_density_pipeline - gross_density_district) > LABEL_THRESHOLD],
+      aes(label = community), size = 2.5, vjust = -0.6
+    )
+  }) +
+  scale_colour_gradient2(
+    name     = "Pipeline − District\ndenominator (ac)",
+    low      = "#4575b4", mid = "white", high = "#d73027", midpoint = 0
+  ) +
+  labs(
+    title    = "Pipeline vs district boundary gross density for adopted boundaries",
+    subtitle = paste0(
+      "Pipeline = st_union(in-district parcel polygons) → morphological close − GIS deductions.\n",
+      "District = st_union(adopted district polygons) − GIS deductions.\n",
+      "Red: pipeline denominator > district (parcel overhang); blue: < district (gap/water)."
+    ),
+    x = "District boundary density (du/ac)",
+    y = "Pipeline density (du/ac)"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(legend.position = "right")
+
+ggsave("dev/mcmc_testing/density_pipeline_vs_district_scatter.png",
+       p1, width = 8, height = 7, dpi = 150)
+cat("Saved: dev/mcmc_testing/density_pipeline_vs_district_scatter.png\n")
+
+bar_data <- copy(has_district)[!is.na(pipeline_minus_district_acres)]
+bar_data <- bar_data[order(pipeline_minus_district_acres)]
+bar_data[, community_f := factor(community, levels = community)]
+bar_data[, overcount   := pipeline_minus_district_acres > 0]
+
+p2 <- ggplot(bar_data, aes(x = community_f, y = pipeline_minus_district_acres,
+                            fill = overcount)) +
+  geom_col(width = 0.75) +
+  geom_hline(yintercept = c(-1, 1), colour = "grey70", linetype = "dotted") +
+  geom_hline(yintercept = 0, colour = "black", linewidth = 0.5) +
+  scale_fill_manual(
+    values = c(`FALSE` = "#4575b4", `TRUE` = "#d73027"),
+    labels = c(`FALSE` = "Pipeline underestimates area (density overestimated — conservative)",
+               `TRUE`  = "Pipeline overestimates area  (density underestimated — permissive)"),
+    name = NULL
+  ) +
+  labs(
+    title    = "Density denominator error: pipeline − district boundary (acres)",
+    subtitle = paste0(
+      "Positive (red): parcel polygons extend beyond district boundary (overhang).\n",
+      "Negative (blue): district boundary includes water/gaps not covered by parcels (gap)."
+    ),
+    x = NULL,
+    y = "Pipeline − district denominator (acres)"
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    axis.text.x  = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7),
+    legend.position = "bottom",
+    legend.text  = element_text(size = 8)
+  )
+
+ggsave("dev/mcmc_testing/density_pipeline_vs_district_denom_error.png",
+       p2, width = 13, height = 6, dpi = 150)
+cat("Saved: dev/mcmc_testing/density_pipeline_vs_district_denom_error.png\n")
 
 # ---- CSV output -------------------------------------------------------------
 
-out_csv <- "dev/mcmc_testing/density_denominator_comparison.csv"
+out_csv <- "dev/mcmc_testing/density_denominator_all.csv"
 data.table::fwrite(dt, out_csv)
-cat(sprintf("\nWrote %d rows to %s\n", nrow(dt), out_csv))
+cat(sprintf("\nSaved: %s (%d communities, %d columns)\n", out_csv, nrow(dt), ncol(dt)))

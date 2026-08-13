@@ -88,6 +88,10 @@ find_feasible_lcc_ids <- function(
   for (i in seq_len(lcc_library$n_blocks)) {
     lcc_parcels <- library_block_parcels(lcc_library, i)
     state <- create_lcc_only_state(lcc_parcels, secondary_library, parcel_graph)
+    # LCC-only state: its denominator is the block's precomputed area, so no
+    # geometry work is needed to scan the whole library.
+    state$lcc_gis_area <- lcc_library$metadata$gis_area[i]
+    state$total_gis_area <- state$lcc_gis_area
     feasibility <- check_parcel_feasibility(
       state,
       secondary_library,
@@ -120,7 +124,9 @@ diagnose_lcc_feasibility <- function(lcc_library, parcel_graph, constraints) {
   for (i in seq_len(lcc_library$n_blocks)) {
     lcc <- library_block_parcels(lcc_library, i)
     cap <- sum(igraph::V(parcel_graph)[lcc]$capacity)
-    area <- sum(igraph::V(parcel_graph)[lcc]$area)
+    # Area and density are reported on the GIS denominator, the basis the
+    # feasibility checks use; the attribute area sum would understate both.
+    area <- lcc_library$metadata$gis_area[i]
     density <- cap / area
     station_area <- sum(igraph::V(parcel_graph)[lcc]$area_in_station)
     station_capacity <- sum(igraph::V(parcel_graph)[lcc]$capacity_in_station)
@@ -202,7 +208,7 @@ update_move_stats <- function(counts, mt, result) {
 # grown) library, the (possibly updated) state, and whether a new entry was added.
 enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_graph,
                                          secondary_library, max_online_entries,
-                                         neighbor_cache) {
+                                         neighbor_cache, constraints) {
   enrich_result <- add_lcc_to_library(
     lcc_library,
     current_state$lcc_parcels,
@@ -213,18 +219,21 @@ enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_grap
       which(current_state$lcc_logical)
     } else {
       NULL
-    }
+    },
+    constraints = constraints
   )
   lcc_library <- enrich_result$lcc_library
-  if (enrich_result$added && !is.null(current_state$compatible_lccs_cache)) {
+  if (enrich_result$added) {
     nid <- enrich_result$new_block_id
-    if (is_lcc_compatible_with_secondaries(
-          lcc_library$blocks[[nid]],
-          lcc_library$neighbor_indices[[nid]],
-          current_state$secondary_blocks,
-          secondary_library)) {
-      current_state$compatible_lccs_cache <-
-        c(current_state$compatible_lccs_cache, nid)
+    if (!is.null(current_state$compatible_lccs_cache)) {
+      if (is_lcc_compatible_with_secondaries(
+            lcc_library$blocks[[nid]],
+            lcc_library$neighbor_indices[[nid]],
+            current_state$secondary_blocks,
+            secondary_library)) {
+        current_state$compatible_lccs_cache <-
+          c(current_state$compatible_lccs_cache, nid)
+      }
     }
   }
   list(
@@ -244,39 +253,54 @@ enrich_lcc_library_and_cache <- function(lcc_library, current_state, parcel_grap
 #'
 #' @param parcel_graph igraph object (parcel graph)
 #' @param initial_state Initial parcel state
-#' @param constraints MBTA constraints
+#' @param target_spec Target spec from `parcel_target_spec()` (hard
+#'   constraints + capacity/k priors)
 #' @param secondary_library Secondary library
 #' @param lcc_library LCC library
-#' @param config Kernel configuration
+#' @param sampler_spec Sampler spec from `parcel_sampler_spec()` (kernel mix,
+#'   proposal tuning, debug flag)
 #' @param parcel_assignments data.table for parcel conversion
 #' @param neighbor_cache Optional named list of precomputed neighbors
-#' @param enable_online_enrichment Enable online LCC library enrichment
-#' @param enrichment_interval Add current LCC to library every N steps
-#' @param max_online_entries Maximum online entries (FIFO eviction)
-#' @param enrichment_burn_in If set, freeze library after this many steps
-#' @param max_stored_samples Max thinned samples to store (adaptive thinning)
-#' @param store_lcc_signatures Store LCC signatures for discovery deduplication
 #' @param verbose Print progress
 #' @return List with parcel_samples (thinned), lcc_signatures, stats, lcc_library, diagnostics
 run_parcel_mcmc <- function(
   parcel_graph,
   initial_state,
-  constraints,
+  target_spec,
   secondary_library,
   lcc_library,
-  config,
+  sampler_spec,
   parcel_assignments,
   neighbor_cache = NULL,
-  enable_online_enrichment = ENABLE_ONLINE_ENRICHMENT,
-  enrichment_interval = ONLINE_ENRICHMENT_INTERVAL,
-  max_online_entries = ONLINE_MAX_ENTRIES,
-  enrichment_burn_in = ENRICHMENT_BURN_IN,
-  max_stored_samples = SAMPLE_MAX_STORED,
-  store_lcc_signatures = STORE_LCC_SIGNATURES,
   verbose = TRUE
 ) {
   # Validate config
+  config <- sampler_spec
   validate_kernel_config(config)
+
+  constraints <- target_spec$constraints
+  capacity_prior_lambda <- target_spec$priors$capacity_prior_lambda
+  k_prior_lambda <- target_spec$priors$k_prior_lambda
+  birth_tilt_lambda <- config$birth_tilt_lambda
+
+  # The capacity-tilted birth proposal cancels against the capacity prior in the
+  # birth/death MH ratio only when the two rates are equal. A different tilt is a
+  # legitimate tuning choice but changes the sampled k-marginal, so say so.
+  if (!isTRUE(all.equal(birth_tilt_lambda, capacity_prior_lambda))) {
+    cli::cli_warn(c(
+      "birth_tilt_lambda ({birth_tilt_lambda}) differs from capacity_prior_lambda ({capacity_prior_lambda}).",
+      i = "The birth/death cancellation documented in the kernel config holds only when they are equal; with different rates the capacity tilt leaves a residual in the MH ratio."
+    ))
+  }
+
+  swap_cap_tolerance <- config$swap_cap_tolerance
+  debug_invariant_checks <- config$debug_invariant_checks
+  enable_online_enrichment <- config$enable_online_enrichment
+  enrichment_interval <- config$enrichment_interval
+  max_online_entries <- config$max_online_entries
+  enrichment_burn_in <- config$enrichment_burn_in
+  max_stored_samples <- config$max_stored_samples
+  store_lcc_signatures <- config$store_lcc_signatures
 
   n_steps <- config$n_steps
   p_lcc_local <- config$p_lcc_local
@@ -363,6 +387,25 @@ run_parcel_mcmc <- function(
     secondary_library$centroid_y_vec   <- igraph::V(parcel_graph)[sl_names]$centroid_y
   }
 
+  # Every library block must carry its GIS denominator: the kernels add and
+  # subtract these areas to keep state$total_gis_area exact. Library builders
+  # populate the column; a library cached before the column existed is filled in
+  # here, but an NA in an existing column is a data bug, not a gap to paper over.
+  require_gis_areas <- function(library, label) {
+    if (!"gis_area" %in% names(library$metadata)) {
+      return(enrich_library_with_gis_areas(library, constraints))
+    }
+    if (anyNA(library$metadata$gis_area)) {
+      bad <- library$metadata$block_id[is.na(library$metadata$gis_area)]
+      cli::cli_abort(
+        "{label}: gis_area is NA for block{?s} {bad}."
+      )
+    }
+    library
+  }
+  secondary_library <- require_gis_areas(secondary_library, "secondary_library")
+  lcc_library       <- require_gis_areas(lcc_library, "lcc_library")
+
   # Augment initial_state with incremental boundary tracking fields
   # These enable O(d) boundary updates instead of O(N) full scans
   if (is.null(initial_state$secondary_union_indices) ||
@@ -434,6 +477,15 @@ run_parcel_mcmc <- function(
   )
   names(initial_state$X_neighbor_counts) <- parcel_names
 
+  # Seed the GIS denominator on the per-block definition every kernel maintains:
+  # the LCC block closed on its own plus each secondary block's library area.
+  # Recomputed here rather than trusted from the seeder so the invariant
+  # total_gis_area = lcc_gis_area + sum(secondary gis_area) holds from step 1.
+  initial_state$lcc_gis_area <- compute_gis_density_denom(
+    initial_state$lcc_parcels, constraints
+  )
+  initial_state$total_gis_area <- initial_state$lcc_gis_area +
+    sum(secondary_library$metadata$gis_area[initial_state$secondary_blocks])
 
   # Initialize storage with adaptive thinning
 
@@ -580,14 +632,6 @@ run_parcel_mcmc <- function(
   bd_accept_prob <- numeric(n_steps)
   birth_death_attempt_idx <- 0L
 
-  # Multi-move r-value tracking (legacy birth/death - kept for compatibility)
-  # Use named vectors so report can extract r-values via names()
-  r_names <- as.character(seq_len(MULTI_MOVE_MAX_R))
-  multi_birth_r_counts <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-  multi_death_r_counts <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-  multi_birth_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-  multi_death_r_accepted <- setNames(integer(MULTI_MOVE_MAX_R), r_names)
-
   # Swap move tracking (capacity-balanced swap)
   swap_delta_caps <- numeric(n_steps); n_swap_deltas <- 0L # Capacity change for accepted swaps
   swap_n_similar_fwd <- integer(n_steps); n_swap_sim_fwd <- 0L # Forward similar-capacity set sizes
@@ -722,6 +766,7 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda,
           neighbor_cache,
           neighbor_indices,
           degrees,
@@ -738,6 +783,9 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda = capacity_prior_lambda,
+          k_prior_lambda = k_prior_lambda,
+          birth_tilt_lambda = birth_tilt_lambda,
           neighbor_idx = neighbor_idx
         )
         update_move_stats(move_counts, "symmetric_birth_death", r)
@@ -800,6 +848,9 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda = capacity_prior_lambda,
+          k_prior_lambda = k_prior_lambda,
+          birth_tilt_lambda = birth_tilt_lambda,
           neighbor_idx = neighbor_idx
         )
         update_move_stats(move_counts, "lifted_birth_death", r)
@@ -862,7 +913,8 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
-          cap_tolerance = SWAP_CAP_TOLERANCE,
+          capacity_prior_lambda = capacity_prior_lambda,
+          cap_tolerance = swap_cap_tolerance,
           neighbor_idx = neighbor_idx
         )
         update_move_stats(move_counts, "secondary_swap", r)
@@ -933,7 +985,7 @@ run_parcel_mcmc <- function(
         if (enable_online_enrichment) {
           enrich_result <- enrich_lcc_library_and_cache(
             lcc_library, current_state, parcel_graph,
-            secondary_library, max_online_entries, neighbor_cache
+            secondary_library, max_online_entries, neighbor_cache, constraints
           )
           lcc_library <- enrich_result$lcc_library
           current_state <- enrich_result$current_state
@@ -946,6 +998,8 @@ run_parcel_mcmc <- function(
           secondary_library,
           parcel_graph,
           constraints,
+          capacity_prior_lambda = capacity_prior_lambda,
+          debug_invariant_checks = debug_invariant_checks,
           neighbor_idx = neighbor_idx,
           parcel_names = parcel_names,
           nbr_from = nbr_from,
@@ -1048,9 +1102,9 @@ run_parcel_mcmc <- function(
     current_state <- result$new_state
 
     # DEBUG: Check X_logical consistency after EVERY move. Gated behind
-    # DEBUG_INVARIANT_CHECKS and placed first so the O(N) sum(X_logical) is
+    # debug_invariant_checks and placed first so the O(N) sum(X_logical) is
     # short-circuited (not computed) in production runs.
-    if (DEBUG_INVARIANT_CHECKS &&
+    if (debug_invariant_checks &&
         length(current_state$X_indices) != sum(current_state$X_logical)) {
       # Compute expected X_logical from lcc and secondary union
       expected_from_components <- sum(current_state$lcc_logical) +
@@ -1070,7 +1124,7 @@ run_parcel_mcmc <- function(
     }
 
     # DEBUG: Validate state invariants after accepted moves
-    if (DEBUG_INVARIANT_CHECKS && isTRUE(result$accepted)) {
+    if (debug_invariant_checks && isTRUE(result$accepted)) {
       validate_state_invariants(
         current_state,
         parcel_graph,
@@ -1100,7 +1154,7 @@ run_parcel_mcmc <- function(
     if (should_enrich) {
       enrich_result <- enrich_lcc_library_and_cache(
         lcc_library, current_state, parcel_graph,
-        secondary_library, max_online_entries, neighbor_cache
+        secondary_library, max_online_entries, neighbor_cache, constraints
       )
       lcc_library <- enrich_result$lcc_library
       current_state <- enrich_result$current_state
@@ -1123,7 +1177,8 @@ run_parcel_mcmc <- function(
     # Capacity prior diagnostics
     penalty_trajectory[step] <- compute_capacity_penalty(
       current_state$total_capacity,
-      constraints$min_capacity
+      constraints$min_capacity,
+      capacity_prior_lambda
     )
 
     # Centroid tracking for multi-chain analysis. Use precomputed integer-indexed
@@ -1249,28 +1304,6 @@ run_parcel_mcmc <- function(
       cli::cli_alert_info("Final library size: {lcc_library$n_blocks}")
     }
 
-    # Multi-move r-distribution summary
-    if (sum(multi_birth_r_counts) > 0 || sum(multi_death_r_counts) > 0) {
-      cli::cli_h3("Multi-Birth r Distribution")
-      for (r_val in seq_along(multi_birth_r_counts)) {
-        att <- multi_birth_r_counts[r_val]
-        acc <- multi_birth_r_accepted[r_val]
-        rate <- if (att > 0) round(100 * acc / att, 1) else 0
-        if (att > 0) {
-          cli::cli_alert_info("r={r_val}: {acc}/{att} accepted ({rate}%)")
-        }
-      }
-      cli::cli_h3("Multi-Death r Distribution")
-      for (r_val in seq_along(multi_death_r_counts)) {
-        att <- multi_death_r_counts[r_val]
-        acc <- multi_death_r_accepted[r_val]
-        rate <- if (att > 0) round(100 * acc / att, 1) else 0
-        if (att > 0) {
-          cli::cli_alert_info("r={r_val}: {acc}/{att} accepted ({rate}%)")
-        }
-      }
-    }
-
     # Swap diagnostics summary
     if (length(swap_delta_caps) > 0) {
       cli::cli_h3("Capacity-Balanced Swap Diagnostics")
@@ -1362,11 +1395,6 @@ run_parcel_mcmc <- function(
       direction_trajectory = direction_trajectory,
       direction_flips = direction_flips,
       use_lifted = use_lifted,
-      # Birth/death r-value tracking (legacy asymmetric kernels - kept for compatibility)
-      multi_birth_r_counts = multi_birth_r_counts,
-      multi_death_r_counts = multi_death_r_counts,
-      multi_birth_r_accepted = multi_birth_r_accepted,
-      multi_death_r_accepted = multi_death_r_accepted,
       # Swap move diagnostics (capacity-balanced swap)
       swap_delta_caps = swap_delta_caps,
       swap_n_similar_fwd = swap_n_similar_fwd,
@@ -1406,7 +1434,7 @@ run_parcel_mcmc <- function(
 #'
 #' @param tree_discovered_lccs Output from discover_lccs_from_trees()
 #' @param parcel_graph_result Result from build_parcel_graph_target()
-#' @param constraints MBTA constraints
+#' @param target_spec Target spec from `parcel_target_spec()`
 #' @param secondary_library Secondary block library (hydrated)
 #' @param n_chains Number of MCMC chains (default 4)
 #' @param n_steps Steps per chain (default 2000)
@@ -1421,7 +1449,7 @@ run_parcel_mcmc <- function(
 run_mcmc_discovery_supplement <- function(
     tree_discovered_lccs,
     parcel_graph_result,
-    constraints,
+    target_spec,
     secondary_library,
     n_chains = 4L,
     n_steps = 2000L,
@@ -1433,6 +1461,7 @@ run_mcmc_discovery_supplement <- function(
   # Get tree-discovered LCCs data.table
 
   tree_lccs <- tree_discovered_lccs$discovered_lccs
+  constraints <- target_spec$constraints
 
   if (nrow(tree_lccs) == 0) {
     cli::cli_alert_warning("No tree-discovered LCCs to seed from")
@@ -1469,8 +1498,14 @@ run_mcmc_discovery_supplement <- function(
     cli::cli_alert_info("Steps per chain: {n_steps}")
   }
 
-  # Get discovery config (100% lcc_local)
-  discovery_config <- define_parcel_kernel_configs()[["discovery"]]
+  # Get discovery config (100% lcc_local). swap/birth-tilt tolerances are
+  # inert here (p_swap = p_symmetric_birth_death = p_replace_lcc = 0), so 0
+  # is an honest placeholder rather than a meaningful tuning choice.
+  discovery_config <- parcel_sampler_spec_discovery(
+    swap_cap_tolerance = 0,
+    birth_tilt_lambda = 0,
+    debug_invariant_checks = FALSE
+  )
   discovery_config$n_steps <- n_steps
 
   # Hydrate secondary library if needed
@@ -1517,19 +1552,21 @@ run_mcmc_discovery_supplement <- function(
     # Offset seed for each chain
     chain_config <- discovery_config
     chain_config$seed <- discovery_config$seed + chain_idx * 1000L
+    # This discovery supplement wants enrichment off and LCC signatures on —
+    # the opposite of a production chain's defaults.
+    chain_config$enable_online_enrichment <- FALSE
+    chain_config$store_lcc_signatures <- TRUE
 
     # Run MCMC with lcc_local only
     result <- run_parcel_mcmc(
       parcel_graph = parcel_graph,
       initial_state = initial_state,
-      constraints = constraints,
+      target_spec = target_spec,
       secondary_library = secondary_library,
       lcc_library = dummy_lcc_library,
-      config = chain_config,
+      sampler_spec = chain_config,
       parcel_assignments = parcel_graph_result$parcel_assignments,
       neighbor_cache = parcel_graph_result$neighbor_cache,
-      enable_online_enrichment = FALSE,
-      store_lcc_signatures = TRUE,
       verbose = FALSE
     )
 

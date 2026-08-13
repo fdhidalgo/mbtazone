@@ -12,9 +12,12 @@
 
 #' Check feasibility of a parcel state
 #'
-#' Verifies that the state satisfies MBTA constraints.
+#' Verifies that the state satisfies MBTA constraints. Used on seed candidates,
+#' where the state is assembled outside the kernels.
 #'
-#' @param state Parcel MCMC state
+#' @param state Parcel MCMC state. When \code{state$total_gis_area} is set the
+#'   denominator is taken from it (seeding paths fill it from library block
+#'   metadata); otherwise it is computed from the state's own blocks.
 #' @param library Secondary library
 #' @param parcel_graph igraph object
 #' @param constraints MBTA constraints
@@ -31,14 +34,22 @@ check_parcel_feasibility <- function(
   }
   # Note: No max_capacity check - using capacity prior instead (soft constraint)
 
-  # Area
-  if (state$total_area < constraints$min_area) {
+  # min_area and min_density are judged on the GIS denominator alone, the same
+  # basis check_hard_constraints_only() uses. The attribute area sum is a
+  # strictly smaller quantity (it excludes the road fill), so testing it too
+  # would reject seeds the sampler itself considers feasible.
+  gis_denom <- if (!is.null(state$total_gis_area)) {
+    state$total_gis_area
+  } else {
+    stopifnot(!is.null(library$metadata$gis_area))
+    compute_gis_density_denom(state$lcc_parcels, constraints) +
+      sum(library$metadata$gis_area[state$secondary_blocks])
+  }
+  if (!is.finite(gis_denom) || gis_denom < constraints$min_area) {
     return(list(feasible = FALSE, constraint_failed = "min_area"))
   }
-
-  # Density
-  density <- state$total_capacity / state$total_area
-  if (density < constraints$min_density) {
+  density <- state$total_capacity / gis_denom
+  if (!is.finite(density) || density < constraints$min_density) {
     return(list(feasible = FALSE, constraint_failed = "min_density"))
   }
 
@@ -210,14 +221,9 @@ compute_lcc_capacity_weights <- function(lcc_ids, lcc_library) {
 #'
 #' @param block_ids Integer vector of addable block IDs
 #' @param library Secondary library with $metadata$capacity
-#' @param tilt_lambda Tilt strength (default: BIRTH_TILT_LAMBDA)
+#' @param tilt_lambda Tilt strength (`sampler_spec$birth_tilt_lambda`)
 #' @return List with weights, log_weights, log_sum_w, valid
-compute_birth_tilt_weights <- function(block_ids, library,
-                                       tilt_lambda = NULL) {
-  if (is.null(tilt_lambda)) {
-    tilt_lambda <- BIRTH_TILT_LAMBDA
-  }
-
+compute_birth_tilt_weights <- function(block_ids, library, tilt_lambda) {
   n <- length(block_ids)
   if (n == 0) {
     return(list(
@@ -331,6 +337,7 @@ lcc_local_move <- function(
     library,
     parcel_graph,
     constraints,
+    capacity_prior_lambda,
     neighbor_cache = NULL,
     neighbor_indices = NULL,
     degrees = NULL,
@@ -456,6 +463,11 @@ lcc_local_move <- function(
       ))
     }
 
+    # The LCC parcel set changed, so its closed area is recomputed; the
+    # secondaries are untouched, so their contribution carries over as
+    # (old total - old LCC). Only the LCC block is unioned, never the state.
+    new_state <- update_lcc_gis_area(new_state, state, constraints)
+
     # Check feasibility (hard constraints only - capacity handled by prior)
     feasibility <- check_hard_constraints_only(
       new_state,
@@ -565,6 +577,8 @@ lcc_local_move <- function(
     n_in_new  <- length(B_in_new)
     n_out_new <- length(B_out_new)
 
+    new_state <- update_lcc_gis_area(new_state, state, constraints)
+
     # Check feasibility (hard constraints only - capacity handled by prior)
     feasibility <- check_hard_constraints_only(
       new_state,
@@ -647,7 +661,8 @@ lcc_local_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     new_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_accept_ratio <- log_accept_ratio + penalty_diff
 
@@ -693,6 +708,9 @@ symmetric_birth_death_move <- function(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
+  k_prior_lambda,
+  birth_tilt_lambda,
   neighbor_idx = NULL
 ) {
   k_current <- length(state$secondary_blocks)
@@ -724,7 +742,7 @@ symmetric_birth_death_move <- function(
   n_rem <- length(removable)
 
   # Compute capacity-tilted birth weights
-  birth_weights <- compute_birth_tilt_weights(addable, library)
+  birth_weights <- compute_birth_tilt_weights(addable, library, birth_tilt_lambda)
   W_add <- exp(birth_weights$log_sum_w)  # sum of birth weights (= n_add when tilt=0)
 
   # Total universe size: weighted births + uniform deaths
@@ -781,6 +799,16 @@ symmetric_birth_death_move <- function(
     )
   }
 
+  # The denominator is per block by definition (each block closed on its own,
+  # cross-block road fill excluded), so a secondary birth/death shifts the total
+  # by exactly that block's library area. The LCC block is untouched.
+  block_gis <- library$metadata$gis_area[block_id]
+  stopifnot(is.finite(block_gis))
+  proposed_state$lcc_gis_area <- state$lcc_gis_area
+  proposed_state$total_gis_area <-
+    if (is_birth) state$total_gis_area + block_gis
+    else          state$total_gis_area - block_gis
+
   # Step 3: Check Feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(
     proposed_state,
@@ -836,7 +864,7 @@ symmetric_birth_death_move <- function(
   n_add_new <- length(addable_rev)
 
   # Universe size in proposed state (weighted births + uniform deaths)
-  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library)
+  rev_birth_weights <- compute_birth_tilt_weights(addable_rev, library, birth_tilt_lambda)
   W_add_new <- exp(rev_birth_weights$log_sum_w)
   Z_new <- W_add_new + n_rem_new
 
@@ -847,7 +875,7 @@ symmetric_birth_death_move <- function(
     log_q_ratio <- log(Z_old) - log(Z_new) - log_w_selected
   } else {
     removed_cap <- library$metadata$capacity[block_id]
-    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_w_removed <- -birth_tilt_lambda * removed_cap
     log_q_ratio <- log_w_removed + log(Z_old) - log(Z_new)
   }
 
@@ -855,14 +883,15 @@ symmetric_birth_death_move <- function(
   log_pi_ratio <- compute_penalty_difference(
     state$total_capacity,
     proposed_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
 
   # K prior penalty difference (linear: penalizes birth, favors death)
   # Birth: k_proposed = k+1, so (k - (k+1)) = -1, log_k_ratio = -lambda
   # Death: k_proposed = k-1, so (k - (k-1)) = +1, log_k_ratio = +lambda
   k_proposed <- length(proposed_state$secondary_blocks)
-  log_k_ratio <- K_PRIOR_LAMBDA * (k_current - k_proposed)
+  log_k_ratio <- k_prior_lambda * (k_current - k_proposed)
 
   # Reference measure correction: cancel combinatorial volume C(n_pool, k)
   # so the marginal on k matches the intended geometric prior
@@ -946,6 +975,9 @@ lifted_birth_death_move <- function(
     library,
     parcel_graph,
     constraints,
+    capacity_prior_lambda,
+    k_prior_lambda,
+    birth_tilt_lambda,
     neighbor_idx = NULL
 ) {
   k <- length(state$secondary_blocks)
@@ -1015,7 +1047,7 @@ lifted_birth_death_move <- function(
   # Propose move in current direction only
   if (direction == "birth") {
     # Capacity-tilted birth proposal
-    birth_weights <- compute_birth_tilt_weights(addable, library)
+    birth_weights <- compute_birth_tilt_weights(addable, library, birth_tilt_lambda)
     idx <- sample.int(n_add, 1, prob = birth_weights$weights)
     block_id <- addable[idx]
     log_w_selected <- birth_weights$log_weights[idx]
@@ -1024,6 +1056,11 @@ lifted_birth_death_move <- function(
     proposed_state <- add_secondary_block(
       state, block_id, library, parcel_graph, neighbor_idx
     )
+    # Per-block denominator: adding a secondary adds exactly its library area.
+    block_gis <- library$metadata$gis_area[block_id]
+    stopifnot(is.finite(block_gis))
+    proposed_state$lcc_gis_area <- state$lcc_gis_area
+    proposed_state$total_gis_area <- state$total_gis_area + block_gis
 
     # Compute reverse proposal size
     removable_new <- get_removable_blocks(proposed_state)
@@ -1065,6 +1102,11 @@ lifted_birth_death_move <- function(
     proposed_state <- remove_secondary_block(
       state, block_id, library, parcel_graph, neighbor_idx
     )
+    # Per-block denominator: removing a secondary drops exactly its library area.
+    block_gis <- library$metadata$gis_area[block_id]
+    stopifnot(is.finite(block_gis))
+    proposed_state$lcc_gis_area <- state$lcc_gis_area
+    proposed_state$total_gis_area <- state$total_gis_area - block_gis
 
     # Compute reverse proposal size
     addable_new <- get_addable_blocks_unconstrained(proposed_state, library)
@@ -1108,9 +1150,9 @@ lifted_birth_death_move <- function(
     # Forward: q(y|x) = 1 / n_rem                      [uniform death]
     # Reverse: q(x|y) = w_removed / W(addable_new)      [weighted birth]
     # log(q(x|y)/q(y|x)) = log(w_removed) - log(W(addable_new)) + log(n_rem)
-    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library)
+    rev_birth_weights <- compute_birth_tilt_weights(addable_new, library, birth_tilt_lambda)
     removed_cap <- library$metadata$capacity[block_id]
-    log_w_removed <- -BIRTH_TILT_LAMBDA * removed_cap
+    log_w_removed <- -birth_tilt_lambda * removed_cap
     log_W_addable_new <- rev_birth_weights$log_sum_w
     log_q_ratio <- log_w_removed - log_W_addable_new + log(n_rem)
   }
@@ -1147,12 +1189,13 @@ lifted_birth_death_move <- function(
   # Compute MH acceptance
   # Capacity prior penalty difference
   log_cap_ratio <- compute_penalty_difference(
-    state$total_capacity, proposed_state$total_capacity, constraints
+    state$total_capacity, proposed_state$total_capacity, constraints,
+    capacity_prior_lambda
   )
 
   # K prior penalty difference
   k_new <- length(proposed_state$secondary_blocks)
-  log_k_ratio <- K_PRIOR_LAMBDA * (k - k_new)
+  log_k_ratio <- k_prior_lambda * (k - k_new)
 
   # Reference measure correction: cancel combinatorial volume C(n_pool, k)
   n_pool <- library$n_blocks
@@ -1239,6 +1282,7 @@ secondary_swap_move <- function(
   library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
   cap_tolerance = 50,
   neighbor_idx = NULL
 ) {
@@ -1312,6 +1356,13 @@ secondary_swap_move <- function(
     parcel_graph,
     neighbor_idx
   )
+  # Per-block denominator: the swap exchanges the two blocks' library areas and
+  # leaves the LCC block untouched.
+  old_gis <- library$metadata$gis_area[old_id]
+  new_gis <- library$metadata$gis_area[new_id]
+  stopifnot(is.finite(old_gis), is.finite(new_gis))
+  proposed_state$lcc_gis_area <- state$lcc_gis_area
+  proposed_state$total_gis_area <- state$total_gis_area - old_gis + new_gis
 
   # Step 8: Check feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(
@@ -1366,7 +1417,8 @@ secondary_swap_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     proposed_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_accept <- log_accept + penalty_diff
   accept_prob <- min(1, exp(log_accept))
@@ -1602,6 +1654,8 @@ replace_lcc_move <- function(
   secondary_library,
   parcel_graph,
   constraints,
+  capacity_prior_lambda,
+  debug_invariant_checks = FALSE,
   neighbor_idx = NULL,
   parcel_names = NULL,
   nbr_from = NULL,
@@ -1679,7 +1733,7 @@ replace_lcc_move <- function(
     # change. It may retain evicted ids — harmless, every consumer intersects
     # with active-derived sets.
     all_compatible_lccs <- state$compatible_lccs_cache
-    if (isTRUE(DEBUG_INVARIANT_CHECKS) && k_current > 0) {
+    if (isTRUE(debug_invariant_checks) && k_current > 0) {
       fresh_compatible <- filter_compatible_lccs(
         all_active_ids, lcc_library, secondary_library, current_secondary_ids,
         secondary_union_indices = state$secondary_union_indices,
@@ -1850,6 +1904,15 @@ replace_lcc_move <- function(
     neighbor_idx = neighbor_idx
   )
 
+  # Per-block denominator: the new LCC block's library area plus the retained
+  # secondaries' library areas (each block closed on its own, cross-block road
+  # fill excluded), so no state-wide union is needed.
+  lcc_gis <- lcc_library$metadata$gis_area[new_lcc_id]
+  sec_gis <- secondary_library$metadata$gis_area[current_secondary_ids]
+  stopifnot(is.finite(lcc_gis), all(is.finite(sec_gis)))
+  new_state$lcc_gis_area <- lcc_gis
+  new_state$total_gis_area <- lcc_gis + sum(sec_gis)
+
   # Step 5: Check feasibility (hard constraints only - capacity handled by prior)
   feasibility <- check_hard_constraints_only(
     new_state,
@@ -1961,7 +2024,8 @@ replace_lcc_move <- function(
   penalty_diff <- compute_penalty_difference(
     state$total_capacity,
     new_state$total_capacity,
-    constraints
+    constraints,
+    capacity_prior_lambda
   )
   log_q_ratio <- log_q_ratio + penalty_diff
 
@@ -2047,6 +2111,9 @@ purge_diagnostic_move <- function(state, library, parcel_graph, constraints) {
 
   # Propose k=0 state (LCC only)
   new_state <- reset_to_lcc(state$lcc_parcels, library, parcel_graph)
+  # Same LCC, no secondaries: the denominator is the LCC block's area alone.
+  new_state$lcc_gis_area <- state$lcc_gis_area
+  new_state$total_gis_area <- state$lcc_gis_area
 
   # Get LCC capacity for diagnostics
   lcc_capacity <- sum(igraph::V(parcel_graph)[state$lcc_parcels]$capacity)

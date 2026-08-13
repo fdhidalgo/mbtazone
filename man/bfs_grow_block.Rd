@@ -13,7 +13,11 @@ bfs_grow_block(
   target_max = Inf,
   target_exact = NULL,
   check_max_before_add = FALSE,
-  ctx = NULL
+  ctx = NULL,
+  density_aware = FALSE,
+  min_density = NULL,
+  beta = 8,
+  doom_min_density = NULL
 )
 }
 \arguments{
@@ -36,6 +40,19 @@ bfs_grow_block(
 \item{ctx}{Optional precomputed \code{\link{bfs_build_context}} object. When
 supplied, \code{graph}, \code{metric_lookup} and \code{eligible_pool} are
 ignored (they are baked into the context).}
+
+\item{density_aware}{Logical: use the density-preserving frontier strategy of
+\code{\link{bfs_grow_block_ctx}}. Requires \code{ctx} (built with
+\code{metric2_lookup} = area) and \code{min_density}. Default FALSE.}
+
+\item{min_density}{Minimum aggregate density to maintain when
+\code{density_aware = TRUE}.}
+
+\item{beta}{Softmax temperature for density-aware frontier selection.}
+
+\item{doom_min_density}{Optional density floor enabling the exact
+doomed-attempt prune of \code{\link{bfs_grow_block_ctx}}. Requires
+\code{ctx}. Default NULL (no pruning).}
 }
 \value{
 List with:
@@ -44,6 +61,7 @@ List with:
 \item metric_total: final metric sum
 \item success: logical (TRUE if target_min reached)
 \item seed: the seed node used
+\item doomed: logical (ctx path only; TRUE if the doom prune abandoned the grow)
 }
 }
 \description{

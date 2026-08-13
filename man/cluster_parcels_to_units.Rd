@@ -7,8 +7,8 @@
 cluster_parcels_to_units(
   g,
   atomic_parcels,
-  target_area_min = MACRO_TARGET_AREA_MIN,
-  target_area_max = MACRO_TARGET_AREA_MAX,
+  target_area_min,
+  target_area_max,
   seed = 123
 )
 }
@@ -28,7 +28,7 @@ data.table with columns: parcel_id, unit_id
 }
 \description{
 Uses BFS-based region growing to aggregate small parcels into units
-with target area in \link{area_min, area_max}. Atomic parcels (large parcels)
+with target area in \verb{[area_min, area_max]}. Atomic parcels (large parcels)
 are excluded from clustering and become singleton units.
 }
 \details{

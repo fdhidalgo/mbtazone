@@ -26,17 +26,15 @@ stopifnot(mode %in% c("save", "check", "profile"))
 suppressMessages(pkgload::load_all(".", quiet = TRUE))
 suppressMessages(library(targets))
 
-# run_parcel_mcmc reads config globals (SAMPLE_MAX_STORED, DEBUG_INVARIANT_CHECKS,
-# ONLINE_* ...) that the pipeline defines by sourcing these files before running
-# (same order as inst/targets/_targets.R).
-source("inst/targets/temp_targets_config.R")
-source("inst/targets/temp_targets_parcel_config.R")
+# run_parcel_mcmc reads its tuning (SAMPLE_MAX_STORED, DEBUG_INVARIANT_CHECKS,
+# ONLINE_* ...) from the `sampler_spec`-derived `config` object read from the
+# store below — nothing needs sourcing here.
 
 store <- file.path("ext", paste0("_targets_", town))
 stopifnot(dir.exists(store))
 
 parcel_graph_result <- tar_read_raw("parcel_graph_result", store = store)
-constraints         <- tar_read_raw("constraints", store = store)
+target_spec         <- tar_read_raw("target_spec", store = store)
 secondary_library   <- hydrate_library(tar_read_raw("discovered_secondary_library", store = store))
 lcc_library         <- hydrate_library(tar_read_raw("discovered_lcc_library", store = store))
 configs             <- tar_read_raw("parcel_multichain_config", store = store)
@@ -54,13 +52,12 @@ run_once <- function() {
   run_parcel_mcmc(
     parcel_graph          = parcel_graph_result$parcel_graph,
     initial_state         = initial_state,
-    constraints           = constraints,
+    target_spec           = target_spec,
     secondary_library     = secondary_library,
     lcc_library           = lcc_library,
-    config                = config,
+    sampler_spec          = config,
     parcel_assignments    = parcel_graph_result$parcel_assignments,
     neighbor_cache        = parcel_graph_result$neighbor_cache,
-    enable_online_enrichment = TRUE,
     verbose               = FALSE
   )
 }

@@ -4,7 +4,12 @@
 \alias{bfs_build_context}
 \title{Build a reusable integer-indexed BFS context for a parcel graph}
 \usage{
-bfs_build_context(graph, metric_lookup, eligible_pool = NULL)
+bfs_build_context(
+  graph,
+  metric_lookup,
+  eligible_pool = NULL,
+  metric2_lookup = NULL
+)
 }
 \arguments{
 \item{graph}{igraph object with named vertices}
@@ -13,12 +18,16 @@ bfs_build_context(graph, metric_lookup, eligible_pool = NULL)
 
 \item{eligible_pool}{Character vector of nodes eligible for expansion
 (NULL = all vertices)}
+
+\item{metric2_lookup}{Optional named numeric vector of a second per-node metric
+(e.g. area when \code{metric_lookup} is capacity). Required for density-aware
+growth; NULL otherwise.}
 }
 \value{
 List with \code{node_names}, \code{id_of} (named integer name->id),
 \code{adj_int} (list of integer neighbor-id vectors), \code{n},
-\code{metric_by_id} (numeric, id-ordered), \code{eligible_mask} (logical,
-id-ordered).
+\code{metric_by_id} (numeric, id-ordered), \code{metric2_by_id} (numeric,
+id-ordered, or NULL), \code{eligible_mask} (logical, id-ordered).
 }
 \description{
 Precomputes, once per graph, the integer adjacency list (\code{adj_int}, via
@@ -28,5 +37,12 @@ ops instead of repeating igraph C-calls and character \code{intersect}/
 \code{setdiff}/\code{unique} on every BFS step. Because \code{adj_int}
 reproduces \code{neighbors()} order exactly, the frontier order — and every
 \code{sample.int()} draw — is unchanged from the character path.
+}
+\details{
+\code{metric2_lookup} is optional and only used by the density-aware frontier
+strategy in \code{\link{bfs_grow_block_ctx}}: it lets one context carry both
+capacity (\code{metric_lookup}) and area (\code{metric2_lookup}) so the grower
+can evaluate per-step density. Leaving it NULL (the default) is the standard
+single-metric context and changes nothing for existing callers.
 }
 \keyword{internal}

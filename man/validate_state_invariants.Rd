@@ -29,7 +29,7 @@ TRUE invisibly if all invariants hold, stops otherwise
 \description{
 Checks critical invariants that should hold after every accepted move.
 Stops with an informative error if any invariant is violated.
-Called only when DEBUG_INVARIANT_CHECKS is TRUE.
+Called only when sampler_spec$debug_invariant_checks is TRUE.
 }
 \details{
 Invariants checked:
@@ -41,6 +41,7 @@ Invariants checked:
 \item X_indices matches X exactly
 \item total_capacity equals sum over X
 \item total_area equals sum over X
+\item total_gis_area equals lcc_gis_area plus the secondaries' library gis_area
 }
 }
 \keyword{internal}
