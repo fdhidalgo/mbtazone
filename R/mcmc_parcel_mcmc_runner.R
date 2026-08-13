@@ -593,6 +593,14 @@ run_parcel_mcmc <- function(
 
   # Online enrichment tracking
   online_adds <- 0L
+  # Per-step enrichment trajectories (preallocated like the other diagnostics).
+  # library_size records lcc_library$n_blocks at each step; adds records the
+  # per-step count of LCCs added by enrichment (cumsum recovers the running
+  # total). Both enrichment sites (interval + pre-Replace-LCC) update online_adds
+  # before the record block runs, so online_adds_prev diffs capture both.
+  library_size_trajectory <- integer(n_steps)
+  enrichment_adds_trajectory <- integer(n_steps)
+  online_adds_prev <- 0L
 
   # Birth move capacity tracking (for calibration)
   birth_accepted_caps <- numeric(n_steps); n_birth_caps <- 0L
@@ -1154,6 +1162,9 @@ run_parcel_mcmc <- function(
     }
 
     # Record diagnostics
+    library_size_trajectory[step] <- lcc_library$n_blocks
+    enrichment_adds_trajectory[step] <- online_adds - online_adds_prev
+    online_adds_prev <- online_adds
     capacity_trajectory[step] <- current_state$total_capacity
     n_secondaries_trajectory[step] <- length(current_state$secondary_blocks)
     n_components_trajectory[step] <- 1L + n_secondaries_trajectory[step] # LCC + secondaries
@@ -1368,6 +1379,9 @@ run_parcel_mcmc <- function(
       n_steps = n_steps,
       online_adds = online_adds,
       final_library_size = lcc_library$n_blocks,
+      # Per-step online enrichment trajectories
+      library_size_trajectory = library_size_trajectory,
+      enrichment_adds_trajectory = enrichment_adds_trajectory,
       purge_results = purge_results,
       birth_accepted_caps = birth_accepted_caps,
       birth_death_attempts = birth_death_attempts,
